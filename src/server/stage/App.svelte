@@ -1,195 +1,205 @@
 <script lang="ts">
-    import Button from "../common/components/Button.svelte"
-    import Center from "../common/components/Center.svelte"
-    import Icon from "../common/components/Icon.svelte"
-    import Slide from "./components/Slide.svelte"
-    import { openLayout } from "./util/helpers"
-    import { initSocket } from "./util/socket"
-    import { _set, dictionary, errors, layouts, selectedLayout, stageLayout } from "./util/stores"
+  import Button from "../common/components/Button.svelte"
+  import Center from "../common/components/Center.svelte"
+  import Icon from "../common/components/Icon.svelte"
+  import Slide from "./components/Slide.svelte"
+  import { openLayout } from "./util/helpers"
+  import { initSocket } from "./util/socket"
+  import {
+    _set,
+    dictionary,
+    errors,
+    layouts,
+    selectedLayout,
+    stageLayout,
+  } from "./util/stores"
 
-    initSocket()
+  initSocket()
 
-    let clicked: boolean = false
-    const click = (e: any) => {
-        if (e.target.closest(".clicked")) return
+  let clicked: boolean = false
+  const click = (e: any) => {
+    if (e.target.closest(".clicked")) return
 
-        // wait for actions to maybe open
-        setTimeout(() => {
-            if (document.querySelector(".actions")?.children?.length) return
+    // wait for actions to maybe open
+    setTimeout(() => {
+      if (document.querySelector(".actions")?.children?.length) return
 
-            clicked = !clicked
-        })
+      clicked = !clicked
+    })
+  }
+
+  let timeout: NodeJS.Timeout | null = null
+  $: {
+    if (clicked) {
+      if (timeout !== null) clearTimeout(timeout)
+      timeout = setTimeout(() => {
+        clicked = false
+        timeout = null
+      }, 3000)
     }
+  }
 
-    let timeout: NodeJS.Timeout | null = null
-    $: {
-        if (clicked) {
-            if (timeout !== null) clearTimeout(timeout)
-            timeout = setTimeout(() => {
-                clicked = false
-                timeout = null
-            }, 3000)
-        }
+  function goHome() {
+    if (($layouts?.length || 0) < 2) return
+
+    _set("selectedLayout", "")
+
+    localStorage.removeItem("selectedLayout")
+    localStorage.removeItem("show")
+    localStorage.removeItem("password")
+  }
+
+  let isFullscreen: boolean = false
+  function toggleFullscreen() {
+    var doc = window.document
+    var docElem = doc.documentElement
+
+    if (!doc.fullscreenElement) {
+      docElem.requestFullscreen.call(docElem)
+      isFullscreen = true
+    } else {
+      doc.exitFullscreen.call(doc)
+      isFullscreen = false
     }
-
-    function goHome() {
-        if (($layouts?.length || 0) < 2) return
-
-        _set("selectedLayout", "")
-
-        localStorage.removeItem("selectedLayout")
-        localStorage.removeItem("show")
-        localStorage.removeItem("password")
-    }
-
-    let isFullscreen: boolean = false
-    function toggleFullscreen() {
-        var doc = window.document
-        var docElem = doc.documentElement
-
-        if (!doc.fullscreenElement) {
-            docElem.requestFullscreen.call(docElem)
-            isFullscreen = true
-        } else {
-            doc.exitFullscreen.call(doc)
-            isFullscreen = false
-        }
-    }
+  }
 </script>
 
 <svelte:window on:click={click} />
 
 {#if $errors.length}
-    <div class="error">
-        {#each $errors as error}
-            <span>{error}</span>
-        {/each}
-    </div>
+  <div class="error">
+    {#each $errors as error}
+      <span>{error}</span>
+    {/each}
+  </div>
 {/if}
 
 {#if $layouts === null}
-    <Center>{$dictionary.remote?.loading}</Center>
+  <Center>{$dictionary.remote?.loading}</Center>
 {:else if !$selectedLayout}
-    {#if $layouts.length}
-        <div class="center" style="padding: 20px;flex-direction: column;">
-            <h1>StageShow</h1>
-            <span style="overflow: auto;width: 100%;">
-                {#each $layouts as layout}
-                    <Button style="width: 100%;justify-content: center;" on:click={() => openLayout(layout.id)}>
-                        {layout.name || "—"}
-                        <!-- {#if layout.password}
+  {#if $layouts.length}
+    <div class="center" style="padding: 20px;flex-direction: column;">
+      <h1>StageShow</h1>
+      <span style="overflow: auto;width: 100%;">
+        {#each $layouts as layout}
+          <Button
+            style="width: 100%;justify-content: center;"
+            on:click={() => openLayout(layout.id)}
+          >
+            {layout.name || "—"}
+            <!-- {#if layout.password}
                             <Icon id="locked" style="padding-left: 10px;" />
                         {/if} -->
-                    </Button>
-                {/each}
-            </span>
-        </div>
-    {:else}
-        <Center faded>
-            {$dictionary.empty?.shows}
-        </Center>
-    {/if}
+          </Button>
+        {/each}
+      </span>
+    </div>
+  {:else}
+    <Center faded>
+      {$dictionary.empty?.shows}
+    </Center>
+  {/if}
 {:else if $stageLayout}
-    <Slide />
+  <Slide />
 
-    {#if clicked}
-        <div class="clicked">
-            <h5 style="text-align: center;">{$stageLayout.name || "—"}</h5>
-            <div style="display: flex;gap: 10px;">
-                <Button on:click={goHome} style="flex: 1;" center>
-                    <Icon id="home" />
-                </Button>
-                <Button on:click={toggleFullscreen} center>
-                    <Icon id={isFullscreen ? "exitFullscreen" : "fullscreen"} />
-                </Button>
-            </div>
-        </div>
-    {/if}
+  {#if clicked}
+    <div class="clicked">
+      <h5 style="text-align: center;">{$stageLayout.name || "—"}</h5>
+      <div style="display: flex;gap: 10px;">
+        <Button on:click={goHome} style="flex: 1;" center>
+          <Icon id="home" />
+        </Button>
+        <Button on:click={toggleFullscreen} center>
+          <Icon id={isFullscreen ? "exitFullscreen" : "fullscreen"} />
+        </Button>
+      </div>
+    </div>
+  {/if}
 {/if}
 
 <style>
-    :global(*) {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-        user-select: none;
+  :global(*) {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    user-select: none;
 
-        outline-offset: -4px;
-        outline-color: var(--secondary);
-    }
+    outline-offset: -4px;
+    outline-color: var(--secondary);
+  }
 
-    :global(html) {
-        height: 100%;
-    }
+  :global(html) {
+    height: 100%;
+  }
 
-    :global(body) {
-        background-color: var(--primary);
-        color: var(--text);
-        /* transition: background-color 0.5s; */
+  :global(body) {
+    background-color: var(--primary);
+    color: var(--text);
+    /* transition: background-color 0.5s; */
 
-        font-family: system-ui;
-        font-size: 1.5em;
+    font-family: system-ui;
+    font-size: 1.5em;
 
-        height: 100%;
+    height: 100%;
 
-        /* width: 100vw;
+    /* width: 100vw;
   height: 100vh; */
-    }
+  }
 
-    :root {
-        --primary: #292c36;
-        --primary-lighter: #363945;
-        --primary-darker: #191923;
-        --primary-darkest: #12121c;
-        --text: #f0f0ff;
-        --textInvert: #131313;
-        --secondary: #f0008c;
-        --secondary-opacity: rgba(240, 0, 140, 0.5);
-        --secondary-text: #f0f0ff;
+  :root {
+    --primary: #292c36;
+    --primary-lighter: #363945;
+    --primary-darker: #191923;
+    --primary-darkest: #12121c;
+    --text: #f0f0ff;
+    --textInvert: #131313;
+    --secondary: #27a8f5;
+    --secondary-opacity: #27a9f55e;
+    --secondary-text: #f0f0ff;
 
-        --hover: rgb(255 255 255 / 0.05);
-        --focus: rgb(255 255 255 / 0.1);
-        /* --active: rgb(230 52 156 / .8); */
+    --hover: rgb(255 255 255 / 0.05);
+    --focus: rgb(255 255 255 / 0.1);
+    /* --active: rgb(230 52 156 / .8); */
 
-        /* --navigation-width: 18vw; */
-        --navigation-width: 300px;
-    }
+    /* --navigation-width: 18vw; */
+    --navigation-width: 300px;
+  }
 
-    .error {
-        color: red;
-        position: absolute;
-        margin: 10px;
-        padding: 10px;
-        width: calc(100% - 20px);
-        text-align: center;
-        background-color: var(--primary-darker);
-        display: flex;
-        flex-direction: column;
-    }
+  .error {
+    color: red;
+    position: absolute;
+    margin: 10px;
+    padding: 10px;
+    width: calc(100% - 20px);
+    text-align: center;
+    background-color: var(--primary-darker);
+    display: flex;
+    flex-direction: column;
+  }
 
-    .center {
-        height: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
+  .center {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 
-    h1 {
-        color: var(--secondary);
-        text-align: center;
-        padding-bottom: 20px;
-    }
+  h1 {
+    color: var(--secondary);
+    text-align: center;
+    padding-bottom: 20px;
+  }
 
-    .clicked {
-        position: absolute;
-        bottom: 0;
-        inset-inline-start: 0;
-        width: calc(100% - 20px);
-        margin: 10px;
-        padding: 10px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        background-color: var(--primary);
-    }
+  .clicked {
+    position: absolute;
+    bottom: 0;
+    inset-inline-start: 0;
+    width: calc(100% - 20px);
+    margin: 10px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background-color: var(--primary);
+  }
 </style>
