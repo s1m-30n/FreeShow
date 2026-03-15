@@ -1,16 +1,18 @@
 import { get } from "svelte/store"
 import { Main } from "../../types/IPC/Main"
 import type { Output } from "../../types/Output"
-import type { Themes } from "../../types/Settings"
+import type { Metadata, Themes } from "../../types/Settings"
 import { clone, keysToID } from "../components/helpers/array"
-import { checkWindowCapture, displayOutputs, setOutput } from "../components/helpers/output"
+import { checkWindowCapture, setOutput, toggleOutputs } from "../components/helpers/output"
 import { defaultThemes } from "../components/settings/tabs/defaultThemes"
 import { sendMain } from "../IPC/main"
 import {
     actionTags,
+    actions,
     activePopup,
     activeProject,
     alertUpdates,
+    audioChannelsData,
     audioFolders,
     audioPlaylists,
     audioStreams,
@@ -18,18 +20,23 @@ import {
     autosave,
     calendarAddShow,
     categories,
+    cloudSyncData,
     companion,
-    chumsSyncCategories,
+    contentProviderData,
     customMetadata,
     customizedIcons,
     dataPath,
+    deletedDefaults,
     disabledServers,
     drawSettings,
     drawer,
     drawerTabsData,
     driveData,
+    effects,
     effectsLibrary,
     emitters,
+    eqPresets,
+    equalizerConfig,
     formatNewShow,
     fullColors,
     gain,
@@ -45,13 +52,14 @@ import {
     mediaOptions,
     mediaTags,
     metronome,
-    actions,
     openedFolders,
+    os,
     outLocked,
     overlayCategories,
     overlays,
     playerVideos,
     ports,
+    profiles,
     projectView,
     remotePassword,
     resized,
@@ -66,6 +74,8 @@ import {
     theme,
     themes,
     timeFormat,
+    timecode,
+    timeline,
     timers,
     triggers,
     variableTags,
@@ -73,13 +83,13 @@ import {
     version,
     videoMarkers,
     videosData,
-    videosTime,
-    effects
+    videosTime
 } from "../stores"
 import { OUTPUT } from "./../../types/Channels"
 import type { SaveListSettings, SaveListSyncedSettings } from "./../../types/Save"
-import { currentWindow, maxConnections, outputs, scriptureSettings, scriptures, splitLines, transitionData, volume } from "./../stores"
+import { maxConnections, outputs, scriptureSettings, scriptures, splitLines, transitionData, volume } from "./../stores"
 import { checkForUpdates } from "./checkForUpdates"
+import { isMainWindow, startAutosave } from "./common"
 import { setLanguage } from "./language"
 import { send } from "./request"
 
@@ -102,36 +112,20 @@ export function updateSettings(data: any) {
         else console.info("RECEIVED UNKNOWN SETTINGS KEY:", key)
     })
 
-    if (get(currentWindow)) return
+    if (!isMainWindow()) return
 
     // output
     if (data.outputs) {
-        const outputsList: (Output & { id: string })[] = keysToID(data.outputs)
-
-        // get active "ghost" key outputs
-        const activeKeyOutputs: string[] = []
-        outputsList.forEach((output) => {
-            if (output.keyOutput && !output.isKeyOutput) activeKeyOutputs.push(output.id)
-        })
-
-        // remove "ghost" key outputs (they were not removed in versions pre 0.9.6)
-        const allOutputs = get(outputs)
-        let outputsUpdated = false
-        Object.keys(allOutputs).forEach((outputId) => {
-            const output = allOutputs[outputId]
-            if (!output.isKeyOutput || activeKeyOutputs.includes(outputId)) return
-
-            delete allOutputs[outputId]
-            outputsUpdated = true
-        })
-        if (outputsUpdated) outputs.set(allOutputs)
-
         // wait until content is loaded
-        setTimeout(() => {
-            restartOutputs()
-            if (get(autoOutput)) setTimeout(() => displayOutputs({}, true), 500)
-            setTimeout(() => checkWindowCapture(true), 1000)
-        }, 1500)
+        setTimeout(
+            () => {
+                restartOutputs()
+                const delay = 1200
+                if (get(autoOutput)) setTimeout(() => toggleOutputs(null, { autoStartup: true }), get(os).platform === "darwin" ? delay + 300 : delay)
+                setTimeout(() => checkWindowCapture(true), get(os).platform === "darwin" ? delay + 300 + 500 : delay + 500)
+            },
+            get(os).platform === "darwin" ? 3500 : 2500
+        )
     }
 
     // remote
@@ -142,12 +136,15 @@ export function updateSettings(data: any) {
     sendMain(Main.START, { ports: customPorts, max: data.maxConnections === undefined ? 10 : data.maxConnections, disabled, data: get(serverData) })
 
     // theme
-    const currentTheme = get(themes)[data.theme]
-    if (currentTheme) {
-        // update colors (upgrading from < v0.9.2)
-        if (data.theme === "default" && currentTheme.colors.secondary?.toLowerCase() === "#e6349c") {
+    let currentTheme = get(themes)[data.theme]
+    if (currentTheme?.colors) {
+        // update colors (pre 0.9.2 or 1.4.9)
+        const pre092 = currentTheme.colors.secondary?.toLowerCase() === "#e6349c"
+        const pre149 = currentTheme.colors.primary?.toLowerCase() === "#292c36"
+        if (data.theme === "default" && (pre092 || pre149)) {
             themes.update((a) => {
                 a.default = clone(defaultThemes.default)
+                currentTheme = a.default
                 return a
             })
         }
@@ -165,21 +162,15 @@ export function updateSettings(data: any) {
 
 let videoDataUpdating = false
 export function restartOutputs(specificId = "") {
-    const data = clone(videosData)
-    const time = clone(videosTime)
+    const data = clone(get(videosData))
+    const time = clone(get(videosTime))
 
     const allOutputs = keysToID(get(outputs))
     const outputIds = specificId ? [specificId] : allOutputs.filter((a) => a.enabled).map(({ id }) => id)
 
     outputIds.forEach((id: string) => {
-        let output: Output = get(outputs)[id]
+        const output: Output = get(outputs)[id]
         if (!output) return
-
-        // key output styling
-        if (output.isKeyOutput) {
-            const parentOutput = allOutputs.find((a) => a.keyOutput === id)
-            if (parentOutput) output = { ...parentOutput, ...output, id }
-        }
 
         // , rate: get(special).previewRate || "auto"
         send(OUTPUT, ["CREATE"], { ...output, id })
@@ -198,19 +189,19 @@ export function restartOutputs(specificId = "") {
 }
 
 export function updateThemeValues(themeValues: Themes) {
-    if (!themeValues) return
+    if (!themeValues?.colors) return
 
-    Object.entries(themeValues.colors).forEach(([key, value]) => document.documentElement.style.setProperty("--" + key, value))
-    Object.entries(themeValues.font).forEach(([key, value]) => {
+    Object.entries(themeValues.colors || {}).forEach(([key, value]) => document.documentElement.style.setProperty("--" + key, value))
+    Object.entries(themeValues.font || {}).forEach(([key, value]) => {
         if (key === "family" && (!value || value === "sans-serif")) value = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif'
         document.documentElement.style.setProperty("--font-" + key, value)
     })
 
-    // border radius
-    if (!themeValues.border) themeValues.border = {}
-    // set to 0 if nothing is set
-    if (themeValues.border?.radius === undefined) themeValues.border.radius = "0"
-    Object.entries(themeValues.border).forEach(([key, value]) => document.documentElement.style.setProperty("--border-" + key, value))
+    // // border radius
+    // if (!themeValues.border) themeValues.border = {}
+    // // set to 0 if nothing is set
+    // if (themeValues.border?.radius === undefined) themeValues.border.radius = "0"
+    // Object.entries(themeValues.border).forEach(([key, value]) => document.documentElement.style.setProperty("--border-" + key, value))
 }
 
 const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = {
@@ -225,16 +216,16 @@ const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = 
         if (v) projectView.set(false)
     },
     showsPath: (v: any) => {
-        if (!v) sendMain(Main.SHOWS_PATH)
-        else {
-            showsPath.set(v)
-            // LOAD SHOWS FROM FOLDER
-            sendMain(Main.SHOWS, { showsPath: v })
-        }
+        if (!v) return
+
+        // DEPRECATED (keep for backward compatibility)
+        showsPath.set(v)
     },
     dataPath: (v: any) => {
-        if (!v) sendMain(Main.DATA_PATH)
-        else dataPath.set(v)
+        if (!v) return
+
+        // DEPRECATED (keep for backward compatibility)
+        dataPath.set(v)
     },
     lockedOverlays: (v: any) => {
         // only get locked overlays
@@ -259,7 +250,10 @@ const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = 
     ports: (v: any) => ports.set(v),
     disabledServers: (v: any) => disabledServers.set(v),
     serverData: (v: any) => serverData.set(v),
-    autosave: (v: any) => autosave.set(v),
+    autosave: (v: any) => {
+        autosave.set(v)
+        startAutosave()
+    },
     timeFormat: (v: any) => timeFormat.set(v),
     outputs: (v: any) => {
         Object.keys(v).forEach((id: string) => {
@@ -268,7 +262,22 @@ const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = 
         outputs.set(v)
     },
     sorted: (v: any) => sorted.set(v),
-    styles: (v: any) => styles.set(v),
+    styles: (v: any) => {
+        // convert settings (<= v1.5.7)
+        Object.values(v).forEach((style: any) => {
+            const metadata: Metadata = {}
+            if (style.displayMetadata) metadata.display = style.displayMetadata
+            if (style.metadataTemplate) metadata.template = style.metadataTemplate
+            if (Object.keys(metadata).length) style.metadata = metadata
+            delete style.metadataDivider
+            delete style.displayMetadata
+            delete style.metadataTemplate
+            delete style.messageTemplate
+        })
+
+        styles.set(v)
+    },
+    profiles: (v: any) => profiles.set(v),
     remotePassword: (v: any) => remotePassword.set(v),
     audioFolders: (v: any) => audioFolders.set(v),
     categories: (v: any) => categories.set(v),
@@ -301,6 +310,7 @@ const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = 
     transitionData: (v: any) => transitionData.set(v),
     volume: (v: any) => volume.set(v),
     gain: (v: any) => gain.set(v),
+    audioChannelsData: (v: any) => audioChannelsData.set(v),
     emitters: (v: any) => emitters.set(v),
     midiIn: (v: any) => actions.set(v),
     videoMarkers: (v: any) => videoMarkers.set(v),
@@ -308,9 +318,12 @@ const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = 
     actionTags: (v: any) => actionTags.set(v),
     variableTags: (v: any) => variableTags.set(v),
     customizedIcons: (v: any) => customizedIcons.set(v),
+    cloudSyncData: (v: any) => cloudSyncData.set(v),
     driveData: (v: any) => driveData.set(v),
     calendarAddShow: (v: any) => calendarAddShow.set(v),
     metronome: (v: any) => metronome.set(v),
+    equalizerConfig: (v: any) => equalizerConfig.set(v),
+    eqPresets: (v: any) => eqPresets.set(v),
     effectsLibrary: (v: any) => effectsLibrary.set(v),
     globalTags: (v: any) => globalTags.set(v),
     customMetadata: (v: any) => customMetadata.set(v),
@@ -325,7 +338,7 @@ const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = 
     },
     special: (v: any) => {
         if (v.capitalize_words === undefined) v.capitalize_words = "Jesus, Lord" // God
-        if (v.autoUpdates !== false) sendMain(Main.AUTO_UPDATE)
+        if (v.autoUpdates) sendMain(Main.AUTO_UPDATE)
         // don't backup when just initialized (or reset)
         if (!v.autoBackupPrevious) v.autoBackupPrevious = Date.now()
         if (v.startupProjectsList) {
@@ -335,8 +348,40 @@ const updateList: { [key in SaveListSettings | SaveListSyncedSettings]: any } = 
             showRecentlyUsedProjects.set(false)
         }
 
+        // DEPRECATED (migrate)
+        if (v.pcoLocalAlways) {
+            contentProviderData.update((a) => ({ ...a, planningcenter: { localAlways: true } }))
+            delete v.pcoLocalAlways
+        }
+
+        // DEPRECATED (migrate)
+        v.customUserDataLocation = true
+
+        // DEPRECATED (migrate)
+        let deletedDefaultsValue = get(deletedDefaults)
+        if (v.deletedTemplates) {
+            deletedDefaultsValue.templates = v.deletedTemplates
+            delete v.deletedTemplates
+        }
+        if (v.deletedOverlays) {
+            deletedDefaultsValue.overlays = v.deletedOverlays
+            delete v.deletedOverlays
+        }
+        if (v.deletedEffects) {
+            deletedDefaultsValue.effects = v.deletedEffects
+            delete v.deletedEffects
+        }
+        if (Object.keys(deletedDefaultsValue).length) deletedDefaults.set(deletedDefaultsValue)
+
         special.set(v)
     },
-    chumsSyncCategories: (v: any) => chumsSyncCategories.set(v),
-    effects: (a: any) => effects.set(a)
+    timeline: (v: any) => timeline.set(v),
+    timecode: (v: any) => timecode.set(v),
+    // @ts-ignore - DEPERACTED (migrate)
+    chumsSyncCategories: (v: any) => {
+        if (v?.length > 1) contentProviderData.set({ ...get(contentProviderData), churchApps: { syncCategories: v } })
+    },
+    contentProviderData: (v: any) => contentProviderData.set(v),
+    effects: (a: any) => effects.set(a),
+    deletedDefaults: (a: any) => deletedDefaults.set({ ...get(deletedDefaults), ...a })
 }

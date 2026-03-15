@@ -1,7 +1,9 @@
 <script lang="ts">
     import type { Item } from "../../../../types/Show"
     import autosize, { AutosizeTypes } from "../../../common/util/autosize"
+    import { createVirtualBreaks } from "../../../common/util/show"
     import { getStyles } from "../../../common/util/style"
+    import { mediaCache } from "../../util/stores"
 
     export let item: Item
 
@@ -77,7 +79,7 @@
     {#if item.lines}
         <div class="align" style={item.align}>
             <div class="lines" style={lineStyleBox}>
-                {#each item.lines as line}
+                {#each createVirtualBreaks(item.lines) as line}
                     <div class="break" style="{lineStyle}{line.align}">
                         {#each line.text || [] as text}
                             <span style="{text.style};{fontSize ? `font-size: ${fontSize}px;` : ''}">{@html text.value?.replaceAll("\n", "<br>") || "<br>"}</span>
@@ -86,6 +88,10 @@
                 {/each}
             </div>
         </div>
+    {:else if item.type === "media" && item.src}
+        <img src={$mediaCache[item.src] || item.src} style="width:100%;height:100%;object-fit:{item.fit || 'contain'};" alt="" />
+    {:else if item.type === "icon" && item.customSvg}
+        <div class="customSvg">{@html item.customSvg}</div>
     {/if}
 </div>
 
@@ -116,6 +122,9 @@
         overflow-wrap: break-word;
         /* line-break: after-white-space;
     -webkit-line-break: after-white-space; */
+
+        /* balanced breaking, looks much cleaner */
+        text-wrap: balance;
     }
 
     /* span {
@@ -124,7 +133,12 @@
     color: white;
   } */
 
-    .break :global(span) {
-        font-size: 100px;
+    .customSvg {
+        width: 100%;
+        height: 100%;
+    }
+    .customSvg :global(svg) {
+        width: 100%;
+        height: 100%;
     }
 </style>

@@ -1,11 +1,12 @@
 import { get } from "svelte/store"
-import { activeDrawerTab, activePage, activePopup, activeProject, activeShow, dictionary, drawer, focusMode, outputCache, projects, projectView, showRecentlyUsedProjects, shows, showsCache } from "../../stores"
+import { activeDrawerTab, activePage, activePopup, activeProject, activeShow, drawer, focusMode, outputCache, projects, projectView, showRecentlyUsedProjects, shows, showsCache } from "../../stores"
 import { DEFAULT_DRAWER_HEIGHT } from "../../utils/common"
 import { createDefaultShow } from "../../utils/createData"
+import { translateText } from "../../utils/language"
+import { keysToID, removeDeleted } from "../helpers/array"
 import { loadShows } from "../helpers/setShow"
 import { nextSlide } from "../helpers/showActions"
 import { clearAll } from "../output/clear"
-import { keysToID, removeDeleted } from "../helpers/array"
 
 export const guideSteps = [
     {
@@ -19,7 +20,7 @@ export const guideSteps = [
             showRecentlyUsedProjects.set(false)
             if (get(shows).default) loadShows(["default"])
         },
-        timeout: 200,
+        timeout: 200
     },
     // projects
     {
@@ -30,7 +31,7 @@ export const guideSteps = [
             activeProject.set(null)
             projectView.set(true)
             closeDrawer()
-        },
+        }
     },
     {
         title: "guide_title.projects",
@@ -39,7 +40,7 @@ export const guideSteps = [
         pre: () => {
             activeProject.set(null)
             projectView.set(true)
-        },
+        }
     },
     // project
     {
@@ -53,10 +54,10 @@ export const guideSteps = [
                 else {
                     projects.update((a) => {
                         a.default = {
-                            name: get(dictionary).example?.example || "Example",
+                            name: translateText("example.example") || "Example",
                             created: Date.now(),
                             parent: "/",
-                            shows: [],
+                            shows: []
                         }
                         return a
                     })
@@ -66,7 +67,7 @@ export const guideSteps = [
             activeProject.set(projectId)
             projectView.set(false)
             closeDrawer()
-        },
+        }
     },
     // drawer
     {
@@ -76,18 +77,18 @@ export const guideSteps = [
         pre: () => {
             openDrawer()
             activeDrawerTab.set("shows")
-        },
+        }
     },
     {
         title: "guide_title.drawer",
         description: "guide_description.drawer_search",
-        query: ".drawer button.search",
+        query: ".drawer button.search"
     },
     // shows
     {
         title: "guide_title.categories",
         description: "guide_description.drawer_shows",
-        query: ".categories",
+        query: ".categories"
     },
     // show
     {
@@ -97,7 +98,7 @@ export const guideSteps = [
         pre: () => {
             activePopup.set(null)
             openDrawer()
-        },
+        }
     },
     {
         title: "guide_title.show_create",
@@ -106,7 +107,7 @@ export const guideSteps = [
         pre: () => {
             activePopup.set("show")
         },
-        timeout: 320,
+        timeout: 320
     },
     {
         title: "guide_title.show",
@@ -118,7 +119,7 @@ export const guideSteps = [
 
             if (!get(showsCache).default) createDefaultShow()
             activeShow.set({ id: "default" })
-        },
+        }
     },
     // drawer (media)
     {
@@ -128,7 +129,7 @@ export const guideSteps = [
         pre: () => {
             activeDrawerTab.set("media")
             openDrawer()
-        },
+        }
     },
     // output
     {
@@ -140,12 +141,12 @@ export const guideSteps = [
             nextSlide({}, true)
 
             closeDrawer()
-        },
+        }
     },
     {
         title: "guide_title.output",
         description: "guide_description.output_window",
-        query: "#output_window_button",
+        query: "#output_window_button"
     },
     {
         title: "guide_title.output",
@@ -154,7 +155,7 @@ export const guideSteps = [
         pre: () => {
             activePage.set("show")
             nextSlide({}, true)
-        },
+        }
     },
     // WIP groups / layouts
     // WIP media / overlays etc.
@@ -165,7 +166,7 @@ export const guideSteps = [
         query: ".row",
         pre: () => {
             activePage.set("edit")
-        },
+        }
     },
     // done
     {
@@ -179,8 +180,8 @@ export const guideSteps = [
             clearAll(true)
             outputCache.set(null)
             openDrawer()
-        },
-    },
+        }
+    }
 ]
 
 // drawer

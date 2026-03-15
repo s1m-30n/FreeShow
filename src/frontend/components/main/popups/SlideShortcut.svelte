@@ -1,17 +1,15 @@
 <script lang="ts">
     import { onMount } from "svelte"
-    import { actions, activePopup, dictionary, popupData } from "../../../stores"
+    import { activePopup, popupData } from "../../../stores"
     import { history } from "../../helpers/history"
-    import Icon from "../../helpers/Icon.svelte"
     import { getLayoutRef } from "../../helpers/show"
     import T from "../../helpers/T.svelte"
-    import Button from "../../inputs/Button.svelte"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
 
-    let id = $popupData.id
     let index = $popupData.index
     let mode = $popupData.mode
     let revert = $popupData.revert
-    let value = $popupData.value || ""
+    let value = $popupData.active || $popupData.value || ""
     let trigger = $popupData.trigger
     let existingShortcuts = $popupData.existingShortcuts || []
 
@@ -48,11 +46,6 @@
         if (mode === "slide_shortcut") {
             slideDataActions.slide_shortcut = { key }
             history({ id: "SHOW_LAYOUT", newData: { key: "actions", data: slideDataActions, indexes: [index] } })
-        } else if (mode === "action") {
-            actions.update((a) => {
-                if (a[id]) a[id].keypressActivate = key
-                return a
-            })
         } else if (trigger) {
             trigger(key)
         }
@@ -64,9 +57,7 @@
 <svelte:window on:keydown={keydown} />
 
 {#if revert}
-    <Button class="popup-back" title={$dictionary.actions?.back} on:click={() => activePopup.set(revert)}>
-        <Icon id="back" size={2} white />
-    </Button>
+    <MaterialButton class="popup-back" icon="back" iconSize={1.3} title="actions.back" on:click={() => activePopup.set(revert)} />
 {/if}
 
 <p style="text-align: center;opacity: 0.7;" class:existing>

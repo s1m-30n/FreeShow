@@ -5,17 +5,19 @@
     import { clearAudio } from "../../../audio/audioFading"
     import { AudioPlayer } from "../../../audio/audioPlayer"
     import { requestMain, sendMain } from "../../../IPC/main"
-    import { activePopup, activeProject, dictionary, focusMode, media, outLocked, outputs, playingAudio, popupData, projects, styles } from "../../../stores"
+    import { activePopup, activeProject, focusMode, media, outLocked, outputs, playingAudio, popupData, projects, styles } from "../../../stores"
+    import { translateText } from "../../../utils/language"
     import { audioExtensions, imageExtensions, videoExtensions } from "../../../values/extensions"
     import Card from "../../drawer/Card.svelte"
     import MediaLoader from "../../drawer/media/MediaLoader.svelte"
-    import { sortByName } from "../../helpers/array"
+    import { keysToID, sortByName } from "../../helpers/array"
     import Icon from "../../helpers/Icon.svelte"
-    import { getMediaStyle, getMediaType, getVideoDuration } from "../../helpers/media"
-    import { findMatchingOut, getActiveOutputs, setOutput, startFolderTimer } from "../../helpers/output"
+    import { getExtension, getMediaLayerType, getMediaStyle, getMediaType, getVideoDuration } from "../../helpers/media"
+    import { findMatchingOut, getFirstActiveOutput, setOutput, startFolderTimer } from "../../helpers/output"
     import T from "../../helpers/T.svelte"
     import { joinTime, secondsToTime } from "../../helpers/time"
-    import Button from "../../inputs/Button.svelte"
+    import FloatingInputs from "../../input/FloatingInputs.svelte"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
     import { clearBackground, clearSlide } from "../../output/clear"
     import Center from "../../system/Center.svelte"
 
@@ -23,14 +25,14 @@
     export let index: number
 
     let data: { timer?: number } | undefined
-    $: data = $projects[$activeProject || ""]?.shows[index]?.data
+    $: data = $projects[$activeProject || ""]?.shows?.[index]?.data
 
     type TFile = { path: string; name: string; type: ShowType; thumbnail?: string }
     let folderFiles: TFile[] = []
     const mediaExtensions = [...videoExtensions, ...imageExtensions, ...audioExtensions]
     onMount(async () => {
-        const files = await requestMain(Main.READ_FOLDER, { path })
-        folderFiles = sortByName(files.files.filter((a) => mediaExtensions.includes(a.extension)).map((a) => ({ path: a.path, name: a.name, type: getMediaType(a.extension), thumbnail: a.thumbnailPath })))
+        const files = keysToID(await requestMain(Main.READ_FOLDER, { path, generateThumbnails: true }))
+        folderFiles = sortByName(files.filter((a) => mediaExtensions.includes(getExtension(a.name))).map((a) => ({ path: a.path, name: a.name, type: getMediaType(getExtension(a.name)), thumbnail: (a as any).thumbnailPath })))
 
         // get total time
         let total = 0
@@ -41,7 +43,7 @@
         totalTime = Math.ceil(total)
     })
 
-    $: currentOutput = $outputs[getActiveOutputs()[0]]
+    $: currentOutput = getFirstActiveOutput($outputs)
     $: currentStyle = $styles[currentOutput?.style || ""] || {}
 
     function playMedia(file: TFile) {
@@ -62,7 +64,7 @@
 
         const mediaStyle = getMediaStyle($media[file.path], currentStyle)
 
-        let videoType = mediaStyle.videoType || ""
+        let videoType = getMediaLayerType(file.path, mediaStyle)
         let loop = videoType === "foreground" ? false : true
         let muted = videoType === "background" ? true : false
         if (videoType === "foreground") clearSlide()
@@ -79,25 +81,13 @@
     {#if folderFiles.length}
         {#each folderFiles as file}
             {@const outputted = file.type === "audio" ? [AudioPlayer.getPlaying(file.path), $playingAudio][0] : findMatchingOut(file.path, $outputs)}
-            <Card
-                resolution={{ width: 16, height: 9 }}
-                width={25}
-                outlineColor={typeof outputted === "string" ? outputted : null}
-                active={file.type === "audio" ? !!outputted : outputted !== null}
-                label={file.name}
-                title={file.path}
-                icon={file.type === "audio" ? "music" : file.type}
-                white={file.type !== "video"}
-                showPlayOnHover
-                checkered={file.type !== "audio"}
-                on:click={() => playMedia(file)}
-            >
+            <Card resolution={{ width: 16, height: 9 }} width={25} outlineColor={typeof outputted === "string" ? outputted : null} active={file.type === "audio" ? !!outputted : outputted !== null} label={file.name} title={file.path} icon={file.type === "audio" ? "music" : file.type} white={file.type !== "video"} showPlayOnHover checkered={file.type !== "audio"} on:click={() => playMedia(file)}>
                 <!-- icons -->
                 <div class="icons">
                     {#if file.type === "image" && timer}
                         <div>
                             <div class="button">
-                                <div style="padding: 3px;" title={$dictionary.preview?.nextTimer}>
+                                <div style="padding: 3px;" data-title={translateText("preview.nextTimer")}>
                                     <Icon id="clock" size={0.9} white />
                                 </div>
                             </div>
@@ -109,7 +99,7 @@
                     {#if file.type === "video"}
                         <div>
                             <div class="button">
-                                <div style="padding: 3px;" title={$dictionary.actions?.next_after_media}>
+                                <div style="padding: 3px;" data-title={translateText("actions.next_after_media")}>
                                     <Icon id="forward" size={0.9} white />
                                 </div>
                             </div>
@@ -132,28 +122,25 @@
 </div>
 
 {#if !$focusMode}
-    <div class="actions">
-        <div class="left">
-            <Button on:click={() => sendMain(Main.SYSTEM_OPEN, path)}>
-                <Icon id="folder" right />
-                <T id="main.open" />
-            </Button>
-        </div>
+    <FloatingInputs side="left" onlyOne>
+        <MaterialButton icon="folder" on:click={() => sendMain(Main.OPEN_FOLDER_PATH, path)}>
+            <T id="main.open" />
+        </MaterialButton>
+    </FloatingInputs>
 
-        <div class="right">
-            <Button
-                disabled={!folderFiles.length}
-                on:click={() => {
-                    popupData.set({ type: "folder", value: timer, totalTime })
-                    activePopup.set("next_timer")
-                }}
-                title="{$dictionary.popup?.next_timer}{totalTime !== 0 ? `: ${totalTime}s` : ''}"
-            >
-                <Icon size={1.1} id="clock" white={totalTime === 0} right />
-                {joinTime(secondsToTime(totalTime))}
-            </Button>
-        </div>
-    </div>
+    <FloatingInputs onlyOne>
+        <MaterialButton
+            disabled={!folderFiles.length}
+            on:click={() => {
+                popupData.set({ type: "folder", value: timer, totalTime, count: folderFiles.filter((a) => a.type === "image").length })
+                activePopup.set("next_timer")
+            }}
+            title="popup.next_timer{totalTime !== 0 ? `: ${totalTime}s` : ''}"
+        >
+            <Icon size={1.1} id="clock" white={totalTime === 0} />
+            {joinTime(secondsToTime(totalTime))}
+        </MaterialButton>
+    </FloatingInputs>
 {/if}
 
 <style>
@@ -164,13 +151,9 @@
 
         height: 100%;
         align-content: start;
-    }
 
-    .actions {
-        display: flex;
-        justify-content: space-between;
-        width: 100%;
-        background-color: var(--primary-darkest);
+        overflow-y: auto;
+        padding-bottom: 60px;
     }
 
     /* icons */
@@ -192,7 +175,7 @@
         /* inset-inline-end: 2px; */
         flex-wrap: wrap-reverse;
         place-items: end;
-        right: 0;
+        inset-inline-end: 0;
     }
 
     .icons div {

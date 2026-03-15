@@ -1,12 +1,13 @@
 import { get } from "svelte/store"
 import { uid } from "uid"
-import type { Show } from "../../types/Show"
+import type { Show, Slide } from "../../types/Show"
 import type { Category } from "../../types/Tabs"
 import { history } from "../components/helpers/history"
 import { checkName } from "../components/helpers/show"
-import { activeDrawerTab, activePopup, activeProject, activeRename, alertMessage, categories, drawerTabsData, shows } from "../stores"
+import { activeDrawerTab, activePopup, activeProject, activeRename, activeShow, alertMessage, categories, drawerTabsData, shows } from "../stores"
 import { newToast } from "../utils/common"
 import { convertText } from "./txt"
+import { convertOldShowValues } from "../components/helpers/setShow"
 
 export function createCategory(name: string, icon = "song", { isDefault, isArchive }: { isDefault?: boolean; isArchive?: boolean } = {}) {
     // return selected category if it is empty
@@ -34,30 +35,45 @@ export function createCategory(name: string, icon = "song", { isDefault, isArchi
 
 export function setTempShows(tempShows: { id: string; show: Show }[]) {
     if (tempShows.length === 1) {
-        history({ id: "UPDATE", newData: { data: tempShows[0].show, remember: { project: get(activeProject) } }, oldData: { id: tempShows[0].id }, location: { page: "show", id: "show" } })
+        const selectedIndex = get(activeShow)?.index === undefined ? undefined : get(activeShow)!.index! + 1
+        history({ id: "UPDATE", newData: { data: tempShows[0].show, remember: { project: get(activeProject), index: selectedIndex } }, oldData: { id: tempShows[0].id }, location: { page: "show", id: "show" } })
     } else {
         history({ id: "SHOWS", newData: { data: tempShows, replace: true }, location: { page: "show" } })
     }
 
     activePopup.set(null)
-    newToast("$main.finished")
+    newToast("main.finished")
 }
 
-export function importShow(files: { content: string; name?: string; extension?: string }[]) {
+export async function importShow(files: { content: string; name?: string; extension?: string }[]) {
     const tempShows: { id: string; show: Show }[] = []
 
-    files.forEach(({ content, name }) => {
+    await Promise.all(files.map(async (a) => loadShow(a as any)))
+
+    async function loadShow({ content, name }) {
         let id
         let show
 
         try {
-            ;[id, show] = JSON.parse(content)
+            const showData = JSON.parse(content)
+            if (Array.isArray(showData)) {
+                ;[id, show] = showData
+            } else {
+                id = uid()
+                show = showData
+            }
         } catch (e: any) {
             // try to fix broken show files
             content = content.slice(0, content.indexOf("}}]") + 3)
 
             try {
-                ;[id, show] = JSON.parse(content)
+                const showData = JSON.parse(content)
+                if (Array.isArray(showData)) {
+                    ;[id, show] = showData
+                } else {
+                    id = uid()
+                    show = showData
+                }
             } catch (err: any) {
                 console.error(name, err)
                 const pos = Number(err.toString().replace(/\D+/g, "") || 100)
@@ -69,8 +85,14 @@ export function importShow(files: { content: string; name?: string; extension?: 
         if (!show) return
         show = fixShowIssues(show)
 
+        // set to selected category if set category does not exist
+        let categoryId = show.category && get(categories)[show.category] ? show.category : get(drawerTabsData).shows?.activeSubTab
+        if (categoryId === "all" || categoryId === "unlabeled") categoryId = null
+        show.category = categoryId
+
+        show = await convertOldShowValues(show)
         tempShows.push({ id, show: { ...show, name: checkName(show.name, id) } })
-    })
+    }
 
     setTempShows(tempShows)
 }
@@ -91,8 +113,12 @@ export function importTemplate(files: { content: string; name?: string; extensio
         history({ id: "UPDATE", newData: { data: template }, oldData: { id: templateId }, location: { page: "drawer", id: "template" } })
     })
 
-    alertMessage.set("actions.imported")
-    activePopup.set("alert")
+    if (get(activePopup)) {
+        alertMessage.set("actions.imported")
+        activePopup.set("alert")
+    } else {
+        newToast("actions.imported")
+    }
 }
 
 /// //
@@ -101,7 +127,10 @@ export function importFromClipboard() {
     navigator.clipboard
         .readText()
         .then((text) => {
-            convertText({ text, noFormatting: true })
+            let activeCategory = get(drawerTabsData).shows?.activeSubTab
+            if (activeCategory === "all" || activeCategory === "unlabeled") activeCategory = null
+
+            convertText({ text, noFormatting: true, category: activeCategory })
         })
         .catch((err) => {
             console.error("Failed to read clipboard contents: ", err)
@@ -120,10 +149,21 @@ export function importSpecific(data: { content: string; name?: string; extension
         })
     })
 
-    newToast("$main.finished")
+    newToast("main.finished")
 }
 
-export function fixShowIssues(show) {
+export function fixShowIssues(show: Show) {
+    if (!show) return null
+
+    if (typeof show.name !== "string") show.name = ""
+    if (!show.category) show.category = null
+    if (!show.slides) show.slides = {}
+    if (!show.layouts) show.layouts = {}
+    if (!show.settings) show.settings = { activeLayout: Object.keys(show.layouts)[0] || "", template: null }
+    if (!show.timestamps) show.timestamps = { created: 0, modified: 0, used: 0 }
+    if (!show.meta) show.meta = {}
+    if (!show.media) show.media = {}
+
     // remove unused children slides
     const allUsedSlides: string[] = Object.keys(show.slides).reduce((ids: string[], slideId: string) => {
         const slide = show.slides[slideId]
@@ -143,6 +183,8 @@ export function fixShowIssues(show) {
             return
         }
 
+        if (!Array.isArray(slide.items)) slide.items = []
+
         // check & fix looping items bug
         if (slide.items?.length < 30) return
 
@@ -159,6 +201,17 @@ export function fixShowIssues(show) {
 
             previousItem = currentItem
         }
+    })
+
+    Object.values<Slide>(show.slides).forEach((slide) => {
+        // fix undefined items issue
+        slide.items = slide.items?.filter((item) => item !== undefined && item !== null) || []
+
+        // fix undefined lines issue
+        slide.items.forEach((item) => {
+            if (!item.lines) return
+            item.lines = item.lines.filter((line) => line !== undefined)
+        })
     })
 
     return show

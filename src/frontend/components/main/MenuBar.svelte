@@ -2,7 +2,7 @@
     import { fade } from "svelte/transition"
     import { Main } from "../../../types/IPC/Main"
     import { sendMain } from "../../IPC/main"
-    import { saved, topContextActive, windowState } from "../../stores"
+    import { activeProfile, profiles, saved, topContextActive, windowState } from "../../stores"
     import { initializeClosing } from "../../utils/save"
     import ContextChild from "../context/ContextChild.svelte"
     import ContextItem from "../context/ContextItem.svelte"
@@ -52,7 +52,7 @@
         <div class="contextMenu menu" style="inset-inline-start: {x}px; top: {y}px;" transition:fade={{ duration: 50 }}>
             {#key activeMenu}
                 {#each activeMenu as id}
-                    {#if id === "SEPERATOR"}
+                    {#if id === "SEPARATOR"}
                         <hr />
                     {:else if contextMenuItems[id]?.items}
                         <ContextChild {id} topBar />
@@ -71,6 +71,13 @@
             </Button>
         {/each}
     </div>
+
+    {#if $activeProfile && Object.keys($profiles).filter((a) => a !== "admin").length > 1}
+        <div class="info">
+            <T id="profile.profile" />: {$profiles[$activeProfile]?.name || "—"}
+        </div>
+    {/if}
+
     <div class="window">
         <Button on:click={() => sendMain(Main.MINIMIZE)} center>
             <Icon id="remove" size={1.2} white />
@@ -135,17 +142,29 @@
         position: fixed;
         min-width: 250px;
         background-color: var(--primary-darker);
-        /* border-radius: var(--border-radius); */
         box-shadow: 1px 1px 3px 2px rgb(0 0 0 / 0.2);
-        padding: 5px 0;
+        border-radius: 4px;
+        padding: 8px 0;
         z-index: 6000;
         -webkit-app-region: no-drag;
     }
 
     hr {
-        margin: 5px 10px;
-        height: 2px;
+        margin: 8px 0;
+        height: 1px;
         border: none;
         background-color: var(--primary);
+    }
+
+    /* info */
+
+    .info {
+        pointer-events: none;
+
+        font-size: 0.8em;
+        opacity: 0.7;
+
+        display: flex;
+        align-items: center;
     }
 </style>

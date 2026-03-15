@@ -37,12 +37,24 @@ export function changeSlideGroups(obj: { sel: { data: { index: number }[] }; men
     newData = updated.newData
     const newParents = updated.newParents
 
+    let childrenLayoutData: { [key: string]: { [key: string]: any } } = {}
+
     // set new children
     groups.forEach(({ slides }) => {
+        const slideId = slides[0].id
+
         // remove exising children
-        newData.slides[slides[0].id].children = []
+        newData.slides[slideId].children = []
+
         if (slides.length > 1) {
-            newData.slides[slides[0].id].children!.push(...slides.slice(1, slides.length).map(({ id }) => id))
+            const newChildren = slides.slice(1).map(({ id }) => id)
+            newData.slides[slideId].children!.push(...newChildren)
+
+            let childLayoutData: { [key: string]: any } = {}
+            newChildren.forEach((childId, childIndex) => {
+                childLayoutData[childId] = slides[childIndex + 1].data || {}
+            })
+            childrenLayoutData[slideId] = childLayoutData
         }
     })
 
@@ -52,10 +64,15 @@ export function changeSlideGroups(obj: { sel: { data: { index: number }[] }; men
     // set child layout data from old parents
     const newLayout: SlideData[] = []
     newData.layout.forEach((layoutRef) => {
+        if (childrenLayoutData[layoutRef.id]) layoutRef.children = childrenLayoutData[layoutRef.id]
+
         if (!layoutRef.remove) {
             newLayout.push(layoutRef)
             return
         }
+
+        // "child" converted to parent slide will be removed from layout if this key is not removed
+        delete layoutRef.remove
 
         const allNewChildIds = [layoutRef.id, ...Object.keys(layoutRef.children || {})]
 
@@ -64,7 +81,7 @@ export function changeSlideGroups(obj: { sel: { data: { index: number }[] }; men
 
         allNewChildIds.forEach(getData)
 
-        function getData(slideId, i) {
+        function getData(slideId: string, i: number) {
             const newParentLayoutIndex = newData.layout.findIndex((a) => a.id === newParentId)
             if (!newData.layout[newParentLayoutIndex].children) newData.layout[newParentLayoutIndex].children = {}
 
@@ -89,7 +106,7 @@ export function changeSlideGroups(obj: { sel: { data: { index: number }[] }; men
 function getConnectedGroups(newGroup: string, slides: number[], ref: LayoutRef[]) {
     // slides next to each other will be one group
     const groups: { slides: LayoutRef[]; groupData: GroupData }[] = []
-    const parentIndexes = slides.map((index) => ref[index].parent?.layoutIndex ?? index)
+    const parentIndexes = slides.map((index) => ref[index]?.parent?.layoutIndex ?? index)
 
     let previousParentIndex = -1
     ref.forEach((slideRef) => {
@@ -105,7 +122,8 @@ function getConnectedGroups(newGroup: string, slides: number[], ref: LayoutRef[]
 
         if (parentIndex === previousParentIndex) groups[groups.length - 1].slides.push(slideRef)
         else {
-            let groupData: GroupData = { globalGroup }
+            const groupData: GroupData = { globalGroup }
+            if (newGroup === "none") groupData.group = "."
             groups.push({ slides: [slideRef], groupData })
         }
 
@@ -165,6 +183,8 @@ function updateValues(groups: { slides: LayoutRef[]; groupData: GroupData }[], n
             const childData = layouts[activeLayoutIndex].slides?.find((a) => a.children?.[slide.id])?.children?.[slide.id] || {}
 
             let slideId = slide.id
+            if (!newData.slides?.[slideId]) return
+
             const originalHasChanged = otherSlides && hasChanged
             if (originalHasChanged) cloneOtherSlides()
 
@@ -214,7 +234,14 @@ function updateValues(groups: { slides: LayoutRef[]; groupData: GroupData }[], n
             function setAsParent() {
                 // const newValues: { group: string; color: string; globalGroup?: string } = { group: groupData.group || "", color: groupData.color || "" }
                 const newValues: GroupData = {}
-                if (groupData.globalGroup) newValues.globalGroup = groupData.globalGroup
+                if (groupData.globalGroup) {
+                    newValues.globalGroup = groupData.globalGroup
+                    newValues.group = groupData.group || ""
+                    newValues.color = ""
+
+                    // remove locked if set to "None" (should not be able to select if locked anyway)
+                    if (groupData.group === ".") delete newData.slides[slideId].locked
+                }
                 changeValues(newData.slides[slideId], newValues)
             }
 
@@ -227,7 +254,7 @@ function updateValues(groups: { slides: LayoutRef[]; groupData: GroupData }[], n
     return { newParents, groups, newData }
 
     function checkIfSlideExistsMorePlaces(layout, slide, i) {
-        const ref = _show().layouts([layout.layoutId]).ref()[0]
+        const ref = _show().layouts([layout.layoutId]).ref()[0] || []
         return ref.find((lslide) => lslide.id === slide.id && (lslide.index !== slide.index || layout.layoutId !== activeLayout || (i === 0 && slide.type === "child")))
     }
 }
@@ -501,9 +528,9 @@ export function removeItemValues(items: Item[]) {
 // }
 
 // split in half
-// WIP simular to Editbox.svelte
+// WIP similar to Editbox.svelte
 export function splitItemInTwo(slideRef: LayoutRef, itemIndex: number, sel: { start?: number; end?: number }[] = [], cutIndex = -1) {
-    let lines: Line[] = _show().slides([slideRef.id]).items([itemIndex]).get("lines")[0][0]
+    let lines: Line[] = clone(_show().slides([slideRef.id]).items([itemIndex]).get("lines")[0]?.[0] || [])
     lines = lines.filter((a) => a.text?.[0]?.value?.length)
 
     // if only one line (like scriptures, split by text)
@@ -562,16 +589,15 @@ export function splitItemInTwo(slideRef: LayoutRef, itemIndex: number, sel: { st
         if (!firstLines.at(-1)?.text.length) firstLines.pop()
 
         function splitLines(text) {
-            currentIndex += text.value.length
+            const value = text.value || ""
+
+            currentIndex += value.length
             if (sel[i]?.start !== undefined) start = sel[i].start!
 
             if (start < 0 || currentIndex < start) {
-                firstLines[firstLines.length - 1].text.push({
-                    style: text.style,
-                    value: text.value
-                })
-
-                textPos += text.value.length
+                if (!firstLines.length) firstLines.push({ align: line.align, text: [] })
+                firstLines[firstLines.length - 1].text.push(text)
+                textPos += value.length
                 return
             }
 
@@ -579,24 +605,25 @@ export function splitItemInTwo(slideRef: LayoutRef, itemIndex: number, sel: { st
             const pos = (sel[i]?.start || 0) - textPos
 
             if (pos > 0) {
+                if (!firstLines.length) firstLines.push({ align: line.align, text: [] })
                 firstLines[firstLines.length - 1].text.push({
                     style: text.style,
-                    value: text.value.slice(0, pos)
+                    value: value.slice(0, pos)
                 })
             }
             secondLines[secondLines.length - 1].text.push({
                 style: text.style,
-                value: text.value.slice(0, text.value.length)
+                value: value.slice(0, value.length)
             })
 
-            textPos += text.value.length
+            textPos += value.length
         }
     })
 
     const defaultLine = [
         {
-            align: lines[0].align || "",
-            text: [{ style: lines[0].text[0]?.style || "", value: "" }]
+            align: lines[0]?.align || "",
+            text: [{ style: (lines[0].text[1] || lines[0].text[0])?.style || "", value: "" }]
         }
     ]
     if (!firstLines.length || !firstLines[0].text.length) firstLines = defaultLine
@@ -637,7 +664,7 @@ export function splitItemInTwo(slideRef: LayoutRef, itemIndex: number, sel: { st
     refreshEditSlide.set(true)
 }
 
-function splitTextContentInHalf(text: string) {
+export function splitTextContentInHalf(text: string) {
     const center = Math.floor(text.length / 2)
 
     // find split index based on input "./,/!/?" closest to center
@@ -775,7 +802,7 @@ export function mergeSlides(indexes: { index: number }[]) {
     // delete slides
     allMergedSlideIds.forEach((id) => {
         // only delete if no children or they are selected!
-        const children = newShow.slides[id].children || []
+        const children = newShow.slides[id]?.children || []
         // return if at least one children is not selected
         if (children.find((childId) => !allMergedSlideIds.includes(childId))) {
             if (id === firstSlideId) {
@@ -837,6 +864,11 @@ export function mergeTextboxes(customSlideIndex = -1) {
     history({ id: "UPDATE", newData: { data: slide, key: "slides", keys: [slideRef.id] }, oldData: { id: get(activeShow)?.id }, location: { page: "edit", id: "show_key" } })
 }
 
+export function removeTagsAndContent(input) {
+    const regex = /<[^>]*>[^<]*<\/[^>]*>/g
+    return input.replace(regex, "")
+}
+
 // BREAK LONG LINES
 
 export function breakLongLines(showId: string, breakPoint: number) {
@@ -847,10 +879,10 @@ export function breakLongLines(showId: string, breakPoint: number) {
         slide.items.forEach((item) => {
             let freezeStop = 0
             do {
-                let newLines: Line[] = []
+                const newLines: Line[] = []
                 item.lines?.forEach((line) => {
                     // merge all text styles into one, if multiple!
-                    let lineText = line.text[0]
+                    const lineText = line.text[0]
                     if (!lineText) return
 
                     lineText.value = getLineText(line)
@@ -877,4 +909,25 @@ export function breakLongLines(showId: string, breakPoint: number) {
     })
 
     return slides
+}
+
+export const VIRTUAL_BREAK_CHAR = "[_VB]"
+export function createVirtualBreaks(lines: Line[], skip = false) {
+    if (!lines?.length) return []
+
+    const replaceWith = skip ? "" : "<br>"
+    lines.forEach((line) => {
+        if (!Array.isArray(line?.text)) return
+
+        line.text.forEach((text) => {
+            if (!text.value) text.value = ""
+            text.value = replaceVirtualBreaks(text.value, replaceWith)
+        })
+    })
+
+    return lines
+}
+export function replaceVirtualBreaks(line: string, replaceWith = "<br>") {
+    // replace & remove spaces
+    return line.replaceAll(VIRTUAL_BREAK_CHAR, replaceWith).replace(/\s*<br>\s*/g, "<br>")
 }

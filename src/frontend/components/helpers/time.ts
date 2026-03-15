@@ -38,7 +38,7 @@ export function joinTimeBig(time: number, showHours = true) {
     return timeValue
 }
 
-export function dateToString(date: string | number | Date, full = false, d: any = {}): string {
+export function dateToString(date: string | number | Date, full = false, d = get(dictionary)): string {
     if (!date) return ""
 
     date = new Date(date)
@@ -66,6 +66,7 @@ export function dateToString(date: string | number | Date, full = false, d: any 
 
 export function getWeekday(day: number, d = get(dictionary), uppercase = false) {
     let weekday = d.weekday ? d.weekday[day === 0 ? 7 : day] : ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day]
+    if (!weekday?.length) return ""
     if (uppercase) weekday = weekday[0].toUpperCase() + weekday.slice(1, weekday.length)
 
     return weekday
@@ -74,6 +75,7 @@ export function getWeekday(day: number, d = get(dictionary), uppercase = false) 
 export function getMonthName(month: number, d = get(dictionary), uppercase = false) {
     // this might be upper or lower case depending on the language
     let monthname = d.month ? d.month[month + 1] : ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][month]
+    if (!monthname?.length) return ""
     if (uppercase) monthname = monthname[0].toUpperCase() + monthname.slice(1, monthname.length)
 
     return monthname
@@ -82,24 +84,6 @@ export function getMonthName(month: number, d = get(dictionary), uppercase = fal
 export function getDateAndTimeString(time: number) {
     const date = splitDate(new Date(time))
     return dateToString(time) + " " + addZero(date.hours) + ":" + addZero(date.minutes)
-}
-
-export function secondsToTimes(time: number) {
-    // let hours: number = Math.floor((time / (1000 * 60 * 60)) % 24);
-    // let minutes: number = Math.floor((time / 1000 / 60) % 60);
-    // let seconds: number = Math.floor((time / 1000) % 60);
-    const hours: number = Math.floor((time / (60 * 60)) % 24)
-    const minutes: number = Math.floor((time / 60) % 60)
-    const seconds: number = Math.floor(time % 60)
-
-    return { hours, minutes, seconds }
-}
-
-export function format(t: string, { hours, minutes, seconds }: any) {
-    if (t === "HH") return addZero(hours)
-    if (t === "MM") return addZero(minutes)
-    if (t === "SS") return addZero(seconds)
-    return ""
 }
 
 export const padString = (a: number) => a.toString().padStart(2, "0")
@@ -127,6 +111,8 @@ export function changeTime(date: string | Date, time: string | Date) {
 
 export function combineDateAndTime(date: string | Date, time: string) {
     date = new Date(date)
+    if (typeof time !== "string") return date
+
     const splittedDate = splitDate(date)
     const splittedTime = { hours: Number(time.slice(0, 2)), minutes: Number(time.slice(3, 5)) }
 
@@ -139,7 +125,7 @@ const intervals = [
     { label: "day", seconds: 86400 },
     { label: "hour", seconds: 3600 },
     { label: "minute", seconds: 60 },
-    { label: "second", seconds: 1 },
+    { label: "second", seconds: 1 }
 ]
 
 export function timeAgo(time: number) {

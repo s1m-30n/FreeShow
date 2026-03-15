@@ -3,43 +3,49 @@
     import { activePopup, activeShow, customScriptureBooks, drawerTabsData, effectsLibrary, scripturesCache, selected, showsCache } from "../../../stores"
     import { clone, removeDuplicates } from "../../helpers/array"
     import { history } from "../../helpers/history"
-    import Icon from "../../helpers/Icon.svelte"
     import { getLayoutRef } from "../../helpers/show"
     import { _show } from "../../helpers/shows"
     import T from "../../helpers/T.svelte"
-    import Button from "../../inputs/Button.svelte"
-    import CombinedInput from "../../inputs/CombinedInput.svelte"
-    import TextInput from "../../inputs/TextInput.svelte"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
+    import MaterialTextInput from "../../inputs/MaterialTextInput.svelte"
 
     let list: string[] = []
     $: {
         list = []
+        let selectionData = $selected.data
+        if (!Array.isArray(selectionData)) selectionData = []
 
         if (($activeShow && $selected.id === "slide") || $selected.id === "group") {
-            $selected.data.forEach((a, i) => {
+            selectionData.forEach((a, i) => {
                 let slide = a.id ? a : getLayoutRef()[a.index]
+                if (!slide) return
+
                 if (slide.parent) slide = slide.parent.id
                 else slide = slide.id
                 let name: string = $showsCache[$activeShow!.id].slides[slide].group || ""
+                if (name === ".") name = ""
                 list.push(name || "—")
                 if (i === 0) groupName = name
             })
             list = removeDuplicates(list)
         } else if ($selected.id === "chord") {
-            groupName = $selected.data?.[0]?.chord?.key || ""
+            groupName = selectionData[0]?.chord?.key || ""
         } else if ($selected.id === "bible_book") {
             const scriptureId = $drawerTabsData.scripture?.activeSubTab || ""
             const activeBible = $scripturesCache[scriptureId]
-            const bookIndex = $selected.data[0]?.index
+            const bookIndex = selectionData[0]?.index - 1
             const book = activeBible.books?.[bookIndex] || {}
-            groupName = book.customName || book.name || ""
-        } else if ($selected.data?.[0]?.name) {
-            groupName = $selected.data[0].name
+            groupName = (book as any).customName || book.name || ""
+        } else if (selectionData[0]?.name) {
+            groupName = selectionData[0].name
         }
     }
 
     const renameAction = {
         slide: () => {
+            const showId = $activeShow?.id
+            if (!showId) return
+
             const ref = getLayoutRef()
 
             // get selected ids
@@ -74,10 +80,9 @@
                 const slideId = ref.id
 
                 // remove global group if active
-                if ($activeShow && $showsCache[$activeShow.id].slides[slideId].globalGroup)
-                    history({ id: "UPDATE", newData: { data: null, key: "slides", keys: [slideId], subkey: "globalGroup" }, oldData: { id: $activeShow?.id }, location: { page: "show", id: "show_key" } })
+                if ($activeShow && $showsCache[showId].slides[slideId].globalGroup) history({ id: "UPDATE", newData: { data: null, key: "slides", keys: [slideId], subkey: "globalGroup" }, oldData: { id: showId }, location: { page: "show", id: "show_key" } })
 
-                history({ id: "UPDATE", newData: { data: groupName, key: "slides", keys: [slideId], subkey: "group" }, oldData: { id: $activeShow?.id }, location: { page: "show", id: "show_key" } })
+                history({ id: "UPDATE", newData: { data: groupName, key: "slides", keys: [slideId], subkey: "group" }, oldData: { id: showId }, location: { page: "show", id: "show_key" } })
 
                 if (!ref?.parent) return
                 // make child a parent
@@ -89,12 +94,12 @@
                 history({
                     id: "UPDATE",
                     newData: { data: children.filter((a: string) => a !== ref.id), key: "slides", keys: [ref.parent.id], subkey: "children" },
-                    oldData: { id: $activeShow?.id },
+                    oldData: { id: showId },
                     location: { page: "show", id: "show_key" }
                 })
 
                 let currentLayouts: SlideData[][] = _show().layouts().get("slides")
-                let layoutIds: string[] = Object.keys($showsCache[$activeShow!.id].layouts)
+                let layoutIds: string[] = Object.keys($showsCache[showId].layouts)
                 let newLayouts: { [key: string]: SlideData[] } = {}
 
                 currentLayouts.forEach((layout, i: number) => {
@@ -114,10 +119,19 @@
                 })
 
                 // set updated layout slides
-                history({ id: "UPDATE", newData: { key: "layouts", keys: layoutIds, subkey: "slides", data: newLayouts }, oldData: { id: $activeShow?.id }, location: { page: "show", id: "show_key" } })
+                history({ id: "UPDATE", newData: { key: "layouts", keys: layoutIds, subkey: "slides", data: newLayouts }, oldData: { id: showId }, location: { page: "show", id: "show_key" } })
             })
         },
-        group: () => renameAction.slide(),
+        group: () => {
+            $selected.data.forEach((a) => {
+                const slideId = a.id
+
+                // remove global group if active
+                if ($activeShow && $showsCache[$activeShow.id].slides[slideId].globalGroup) history({ id: "UPDATE", newData: { data: null, key: "slides", keys: [slideId], subkey: "globalGroup" }, oldData: { id: $activeShow?.id }, location: { page: "show", id: "show_key" } })
+
+                history({ id: "UPDATE", newData: { data: groupName, key: "slides", keys: [slideId], subkey: "group" }, oldData: { id: $activeShow?.id }, location: { page: "show", id: "show_key" } })
+            })
+        },
         chord: () => {
             let chord = $selected.data[0]
             let lines: Line[] = _show().slides([chord.slideId]).items([chord.itemIndex]).get("lines")[0][0]
@@ -146,8 +160,8 @@
         },
         bible_book: () => {
             const scriptureId = $drawerTabsData.scripture?.activeSubTab || ""
-            const bookIndex = $selected.data[0]?.index
-            scripturesCache.update((a) => {
+            const bookIndex = $selected.data[0]?.index - 1
+            scripturesCache.update((a: any) => {
                 if (!a[scriptureId]?.books?.[bookIndex]) return a
 
                 a[scriptureId].books[bookIndex].customName = groupName
@@ -164,45 +178,34 @@
     }
 
     function rename() {
-        if ($selected.id) renameAction[$selected.id]()
+        if ($selected.id && renameAction[$selected.id]) renameAction[$selected.id]()
         activePopup.set(null)
         groupName = ""
         selected.set({ id: null, data: [] })
     }
 
     let groupName = ""
-    const changeValue = (e: any) => (groupName = e.target.value)
 
     function keydown(e: KeyboardEvent) {
         if (e.key === "Enter") {
-            element?.querySelector("input")?.blur()
-            rename()
+            setTimeout(rename)
         }
     }
-
-    let element: HTMLElement | undefined
 </script>
 
 <svelte:window on:keydown={keydown} />
 
 {#if list.length > 1}
     <p><T id="popup.change_name" />:</p>
-    <ul style="list-style-position: inside;margin-bottom: 10px;">
+    <ul style="list-style-position: inside;margin-bottom: 20px;">
         {#each list as text}
             <li style="font-weight: bold;">{text}</li>
         {/each}
     </ul>
 {/if}
 
-<CombinedInput>
-    <div bind:this={element} style="width: 100%;">
-        <TextInput value={groupName} on:change={(e) => changeValue(e)} autoselect />
-    </div>
-</CombinedInput>
+<MaterialTextInput label="inputs.name" value={groupName} on:change={(e) => (groupName = e.detail)} autoselect />
 
-<CombinedInput style="margin-top: 10px;">
-    <Button on:click={rename} style="width: 100%;" center dark>
-        <Icon id="edit" right />
-        <T id="actions.rename" />
-    </Button>
-</CombinedInput>
+<MaterialButton variant="contained" style="margin-top: 20px;" icon="edit" on:click={rename}>
+    <T id="actions.rename" />
+</MaterialButton>

@@ -92,11 +92,23 @@
     })
   }
 
+<<<<<<< HEAD
   const tools: string[] = ["Focus", "Pointer", "Zoom", "Particles", "Paint"]
   let tool = "Focus"
   function changeTool(e: any) {
     tool = e.target.value
   }
+=======
+    let thumbnailInterval: any = null
+    let frameReceived = true
+    $: if (draw && !thumbnailInterval) thumbnailInterval = setInterval(requestThumbnail, 800)
+    else if (thumbnailInterval) clearInterval(thumbnailInterval)
+    function requestThumbnail() {
+        if (!outputId || !frameReceived) return
+        frameReceived = false
+        socket.emit("CONTROLLER", { channel: "OUTPUT_FRAME", data: { outputId } })
+    }
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 
   // keyboard shortcuts
   function keydown(e: KeyboardEvent) {
@@ -219,6 +231,7 @@
   height: 100vh; */
   }
 
+<<<<<<< HEAD
   :root {
     --primary: #292c36;
     --primary-lighter: #363945;
@@ -229,6 +242,18 @@
     --secondary: #27a8f5;
     --secondary-opacity: #27a9f55e;
     --secondary-text: #f0f0ff;
+=======
+    :root {
+        --primary: #242832;
+        --primary-lighter: #2f3542;
+        --primary-darker: #191923;
+        --primary-darkest: #12121c;
+        --text: #f0f0ff;
+        --textInvert: #131313;
+        --secondary: #f0008c;
+        --secondary-opacity: rgba(240, 0, 140, 0.5);
+        --secondary-text: #f0f0ff;
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 
     --hover: rgb(255 255 255 / 0.05);
     --focus: rgb(255 255 255 / 0.1);
@@ -242,6 +267,7 @@
     fill: var(--text) !important;
   }
 
+<<<<<<< HEAD
   /* toggle */
   .toggles {
     position: absolute;
@@ -270,6 +296,36 @@
     text-align: center;
     font-weight: bold;
   }
+=======
+    /* toggle */
+    .toggles {
+        position: absolute;
+        bottom: 50px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 80vw;
+        display: flex;
+        /* gap: 10px; */
+    }
+    .toggles button,
+    select {
+        padding: 10px;
+        color: var(--text);
+        width: 100%;
+        text-transform: uppercase;
+        font-size: 0.8em;
+        border-radius: 5px;
+        display: flex;
+        justify-content: center;
+    }
+    select {
+        width: 80vw;
+        background-color: var(--primary-darkest);
+        border: none;
+        text-align: center;
+        font-weight: bold;
+    }
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 
   .toggles .noleft {
     border-top-left-radius: 0;
@@ -280,6 +336,7 @@
     border-bottom-right-radius: 0;
   }
 
+<<<<<<< HEAD
   /* pad */
   .draw {
     position: absolute;
@@ -291,6 +348,19 @@
     align-items: center;
     gap: 10px;
   }
+=======
+    /* pad */
+    .draw {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+    }
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 
   .pad {
     height: 55vw;
@@ -303,6 +373,7 @@
     position: relative;
   }
 
+<<<<<<< HEAD
   .thumbnail {
     pointer-events: none;
     position: absolute;
@@ -311,6 +382,16 @@
     width: 100%;
     height: 100%;
   }
+=======
+    .thumbnail {
+        pointer-events: none;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+    }
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 
   /* controller */
   .controller {
@@ -328,6 +409,7 @@
 
   @media only screen and (min-width: 800px) {
     .controller {
+<<<<<<< HEAD
       height: 70vh;
       width: 70vh;
     }
@@ -386,6 +468,80 @@
     transform: translate(40%);
   }
   /* .quart:nth-child(3) {
+=======
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        /* transform: translate(-50%, -50%) rotate(45deg); */
+
+        height: 80vw;
+        width: 80vw;
+        border-radius: 50%;
+        overflow: hidden;
+    }
+
+    @media only screen and (min-width: 800px) {
+        .controller {
+            height: 70vh;
+            width: 70vh;
+        }
+    }
+    @media only screen and (min-width: 620px) {
+        .pad {
+            height: 55vh;
+            /* width: 55vh; */
+        }
+    }
+    /* (orientation: landscape) */
+    @media (min-width: 600px) and (max-height: 700px) {
+        .controller {
+            top: 45%;
+            height: 70vh;
+            width: 70vh;
+        }
+        .draw {
+            top: 45%;
+        }
+        .pad {
+            height: 45vh;
+            /* width: 65vh; */
+        }
+        .toggles {
+            bottom: 20px;
+            height: 30px;
+            width: 60vw;
+        }
+        .toggles :global(svg) {
+            height: 1.5rem;
+        }
+    }
+
+    .quart {
+        position: absolute;
+        /* height: 50%; */
+        height: 100%;
+        width: 50%;
+        /* transition: all 0.4s; */
+    }
+    .quart:nth-child(1) {
+        top: 0;
+        left: 0;
+        border-inline-end: 5px solid var(--primary);
+    }
+    .quart:nth-child(1) :global(svg) {
+        transform: translate(-40%);
+    }
+    .quart:nth-child(2) {
+        top: 0;
+        left: 50%;
+        border-inline-start: 5px solid var(--primary);
+    }
+    .quart:nth-child(2) :global(svg) {
+        transform: translate(40%);
+    }
+    /* .quart:nth-child(3) {
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
     top: 50%;
     left: 0;
   }

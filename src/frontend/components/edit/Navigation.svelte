@@ -1,5 +1,7 @@
 <script lang="ts">
+    import type { ClickEvent } from "../../../types/Main"
     import { activeEdit, activePage, activeShow, editHistory, effects, focusMode, labelsDisabled, overlays, refreshEditSlide, shows, templates, textEditActive } from "../../stores"
+    import { getAccess } from "../../utils/profile"
     import Icon from "../helpers/Icon.svelte"
     import T from "../helpers/T.svelte"
     import { clone } from "../helpers/array"
@@ -7,13 +9,15 @@
     import { getExtension, getFileName, getMediaType } from "../helpers/media"
     import { getLayoutRef } from "../helpers/show"
     import { _show } from "../helpers/shows"
+    import FloatingInputs from "../input/FloatingInputs.svelte"
     import Button from "../inputs/Button.svelte"
+    import MaterialButton from "../inputs/MaterialButton.svelte"
     import Center from "../system/Center.svelte"
     import Slides from "./Slides.svelte"
 
     $: currentShowId = $activeShow?.id || $activeEdit.showId || ""
 
-    function addSlide(e: any) {
+    function addSlide(e: ClickEvent) {
         let index = 1
         let isParent = false
 
@@ -23,8 +27,8 @@
             if (ref[$activeEdit?.slide]) index = $activeEdit.slide + 1
         }
 
-        if (e.shiftKey) isParent = true
-        history({ id: "SLIDES", newData: { index, replace: { parent: isParent }, addItems: !e.ctrlKey && !e.metaKey } })
+        if (e.detail.shift) isParent = true
+        history({ id: "SLIDES", newData: { index, replace: { parent: isParent }, addItems: !e.detail.ctrl } })
     }
 
     const names = {
@@ -86,6 +90,18 @@
     let clonedHistory: any[] = []
     // don't change order when changing edits
     $: if ($editHistory.length !== clonedHistory.length || (!$activeEdit.id && !$activeShow?.id)) setTimeout(() => (clonedHistory = clone($editHistory).reverse()))
+
+    function openRecent(edited) {
+        activeEdit.set(edited.edit)
+        if (edited.edit?.type !== "audio") refreshEditSlide.set(true)
+        if (edited.show) {
+            if ($focusMode) activeEdit.set({ items: [], slide: edited.show.index, type: "show", showId: edited.show.id })
+            else activeShow.set(edited.show)
+        }
+    }
+
+    let profile = getAccess("shows")
+    $: isLocked = $shows[currentShowId]?.locked || profile.global === "read" || profile[$shows[currentShowId]?.category || ""] === "read"
 </script>
 
 <!-- WIP history keyboard navigation up/down? -->
@@ -101,30 +117,15 @@
     <Slides />
 {:else if $activeEdit.id || ((!currentShowId || !$shows[currentShowId]) && $editHistory.length) || $textEditActive}
     <div class="title">
-        <h3><T id="edit.recent" /></h3>
+        <h3 style="font-style: italic;opacity: 0.7;"><T id="edit.recent" /></h3>
     </div>
     {#if $editHistory.length}
         <div class="edited">
             {#each clonedHistory as edited}
-                <div class="item">
-                    <Button
-                        style="width: 100%;"
-                        on:click={() => {
-                            activeEdit.set(edited.edit)
-                            if (edited.edit?.type !== "audio") refreshEditSlide.set(true)
-                            if (edited.show) {
-                                if ($focusMode) activeEdit.set({ items: [], slide: edited.show.index, type: "show", showId: edited.show.id })
-                                else activeShow.set(edited.show)
-                            }
-                        }}
-                        active={$activeEdit.id ? $activeEdit.id === edited.id : currentShowId === edited.id}
-                        bold={false}
-                        border
-                    >
-                        <Icon id={edited.icon} right />
-                        <p style="margin: 3px 5px;">{edited.name || "—"}</p>
-                    </Button>
-                </div>
+                <MaterialButton style="width: 100%;padding: 0.15rem 0.65rem;font-weight: normal;justify-content: left;" on:click={() => openRecent(edited)} isActive={$activeEdit.id ? $activeEdit.id === edited.id : currentShowId === edited.id} tab>
+                    <Icon id={edited.icon} />
+                    <p style="margin: 3px 5px;">{edited.name || "—"}</p>
+                </MaterialButton>
             {/each}
         </div>
     {:else}
@@ -133,11 +134,17 @@
         </Center>
     {/if}
 {:else if $activeShow && ($activeShow.type === undefined || $activeShow.type === "show")}
+    <!-- <div class="title">
+        <h3 style="opacity: 0.8;">{$shows[currentShowId]?.name || ""}</h3>
+    </div> -->
+
     <Slides />
-    <Button disabled={$shows[currentShowId]?.locked} on:click={addSlide} center dark>
-        <Icon id="add" right={!$labelsDisabled} />
-        {#if !$labelsDisabled}<T id="new.slide" />{/if}
-    </Button>
+
+    <FloatingInputs onlyOne>
+        <MaterialButton disabled={isLocked} icon="add" title="new.slide" on:click={addSlide}>
+            {#if !$labelsDisabled}<T id="new.slide" />{/if}
+        </MaterialButton>
+    </FloatingInputs>
 {:else}
     <Center faded>
         <T id="empty.show" />
@@ -148,14 +155,12 @@
     .title {
         background-color: var(--primary-darker);
         text-align: center;
-        padding: 3px 0;
+        padding: 3px 8px;
         overflow: initial;
     }
     h3 {
         color: var(--text);
-        font-style: italic;
         font-size: 1em;
-        opacity: 0.7;
     }
 
     .edited {
@@ -163,9 +168,5 @@
         flex-direction: column;
         height: 100%;
         overflow: auto;
-    }
-
-    .item {
-        display: flex;
     }
 </style>

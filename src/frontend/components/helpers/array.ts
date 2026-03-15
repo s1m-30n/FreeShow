@@ -1,5 +1,4 @@
-import type { Option } from "../../../types/Main"
-import { translate } from "../../utils/language"
+import { translateText } from "../../utils/language"
 
 // check if array has any data
 export function arrayHasData<T>(array: T, data: any): boolean {
@@ -25,10 +24,23 @@ export function sortByTimeNew<T>(array: T, key = "time") {
     return array.sort((a, b) => new Date(a[key]).getTime() - new Date(b[key]).getTime())
 }
 
+export function moveToPos<T>(array: T, oldPos: number, newPos: number) {
+    if (!Array.isArray(array) || newPos < 0) return array
+
+    if (newPos >= array.length) {
+        let k = newPos - array.length + 1
+        while (k--) array.push(undefined)
+    }
+
+    array.splice(newPos, 0, array.splice(oldPos, 1)[0])
+    return array
+}
+
 // OBJETS
 
 // sort objects in array by name
 export function sortByName<T extends Record<string, any>>(arr: T[], key: keyof T = "name", numberSort = true) {
+    if (!Array.isArray(arr)) return []
     return arr
         .filter((a) => typeof a[key] === "string")
         .sort((a, b) => {
@@ -65,8 +77,11 @@ export function sortObject<T extends Record<string, any>>(object: T[], key: keyo
     return object.sort((a, b) => {
         let textA: string = a[key] || ""
         let textB: string = b[key] || ""
-        if (a.default === true) textA = translate(textA) || textA.slice(textA.indexOf("."))
-        if (b.default === true) textB = translate(textB) || textB.slice(textB.indexOf("."))
+        if (a.default === true) textA = translateText(textA) || textA.slice(textA.indexOf("."))
+        if (b.default === true) textB = translateText(textB) || textB.slice(textB.indexOf("."))
+
+        if (typeof textA !== "string") textA = ""
+        if (typeof textB !== "string") textB = ""
 
         return textA.localeCompare(textB)
     })
@@ -74,37 +89,45 @@ export function sortObject<T extends Record<string, any>>(object: T[], key: keyo
 
 // sort objects in array numerically
 export function sortObjectNumbers<T extends Record<string, any>>(object: T[], key: keyof T, reverse = false) {
+    if (!Array.isArray(object)) return []
     return object.sort((a, b) => {
         return reverse ? b[key] - a[key] : a[key] - b[key]
     })
 }
 
-// sort any object.name by numbers in the front of the string
-export function sortByNameAndNumber<T extends Record<string, any>>(array: T[]) {
+// sort quick access numbers with optional prefixes/suffixes; blanks always go last
+export function sortByNameAndNumber<T extends Record<string, any>>(array: T[], direction: "asc" | "desc" = "asc") {
+    if (!Array.isArray(array)) return []
+
+    const dir = direction === "asc" ? 1 : -1
+
+    const parseToken = (value: string | undefined) => {
+        // keep a consistent tuple of prefix, numeric core, and suffix for reliable comparisons
+        const trimmed = value?.trim() || ""
+        if (!trimmed) return { empty: true, prefix: "", number: Number.POSITIVE_INFINITY, suffix: "" }
+
+        const match = trimmed.match(/^([A-Za-z]*)(\d+)?([A-Za-z]*)$/)
+        const prefix = (match?.[1] || "").toUpperCase()
+        const suffix = (match?.[3] || "").toUpperCase()
+        const hasDigits = !!match?.[2]
+        const number = hasDigits ? parseInt(match![2]!, 10) : Number.POSITIVE_INFINITY
+
+        return { empty: false, prefix, number, suffix, hasDigits }
+    }
+
     return array.sort((a, b) => {
-        const aName = ((a.quickAccess?.number || "") + " " + a.name || "").trim()
-        const bName = ((b.quickAccess?.number || "") + " " + b.name || "").trim()
+        const aToken = parseToken(a.quickAccess?.number?.toString())
+        const bToken = parseToken(b.quickAccess?.number?.toString())
 
-        // get only number part if available
-        const extractNumber = (str) => {
-            const match = str.toString().match(/\d+/)
-            return match ? parseInt(match[0], 10) : Infinity
-        }
-        const quickAccessNumberA = extractNumber(a.quickAccess?.number || "")
-        const quickAccessNumberB = extractNumber(b.quickAccess?.number || "")
+        if (aToken.empty !== bToken.empty) return aToken.empty ? 1 : -1
 
-        // compare only number values when available
-        if (quickAccessNumberA !== quickAccessNumberB) return quickAccessNumberA - quickAccessNumberB
+        if (aToken.prefix !== bToken.prefix) return aToken.prefix.localeCompare(bToken.prefix) * dir
 
-        // get numbers in front of name
-        const matchA = aName.match(/^\d+/)
-        const matchB = bName.match(/^\d+/)
-        const numA = matchA ? parseInt(matchA[0], 10) : Infinity
-        const numB = matchB ? parseInt(matchB[0], 10) : Infinity
+        if (aToken.number !== bToken.number) return (aToken.number - bToken.number) * dir
 
-        if (numA !== numB) return numA - numB
+        if (aToken.suffix !== bToken.suffix) return aToken.suffix.localeCompare(bToken.suffix) * dir
 
-        return aName.localeCompare(bName)
+        return (a.name || "").localeCompare(b.name || "") * dir
     })
 }
 
@@ -179,24 +202,29 @@ export function changeValues<T>(object: T, values: { [key: string]: any }) {
 
 // clone objects
 export function clone<T>(object: T): T {
-    if (typeof object !== "object") return object
-    return JSON.parse(JSON.stringify(object))
+    if (object === null || typeof object !== "object") return object
+
+    try {
+        return structuredClone(object)
+    } catch {
+        return object
+    }
 }
 
 // not currently in use, but could be handy
-export function slowLoop(array, interval, returnFunc) {
-    loopFunction(0)
+// export function slowLoop(array, interval, returnFunc) {
+//     loopFunction(0)
 
-    function loopFunction(index) {
-        returnFunc(array[index])
+//     function loopFunction(index) {
+//         returnFunc(array[index])
 
-        if (index < array.length - 1) {
-            setTimeout(() => {
-                loopFunction(index + 1)
-            }, interval)
-        }
-    }
-}
+//         if (index < array.length - 1) {
+//             setTimeout(() => {
+//                 loopFunction(index + 1)
+//             }, interval)
+//         }
+//     }
+// }
 
 // randomize array items
 export function shuffleArray(array) {
@@ -206,12 +234,6 @@ export function shuffleArray(array) {
     }
 
     return array
-}
-
-// convert object to dropdown options
-export function convertToOptions(object) {
-    const options: Option[] = Object.keys(object).map((id) => ({ id, name: object[id].name }))
-    return sortByName(options)
 }
 
 // find the keys either added or changed in any object in an array
@@ -230,4 +252,44 @@ export function getChangedKeys(current: any[], previous: any[]) {
     })
 
     return changedKeys
+}
+
+export function rangeSelect(e: any, currentlySelected: (number | string)[], newSelection: number | string): (number | string)[] {
+    if (!e.ctrlKey && !e.metaKey && !e.shiftKey) return [newSelection]
+
+    if (e.ctrlKey || e.metaKey) {
+        if (currentlySelected.includes(newSelection)) {
+            return currentlySelected.filter((id) => id !== newSelection)
+        } else {
+            return [...currentlySelected, newSelection]
+        }
+    }
+
+    if (e.shiftKey && !currentlySelected.includes(newSelection) && !isNaN(Number(newSelection))) {
+        // add range between last selected and new selection
+        const lastSelected = Number(currentlySelected[currentlySelected.length - 1])
+        newSelection = Number(newSelection)
+        let first: number = newSelection + 1
+        let last: number = lastSelected
+        if (newSelection < lastSelected) {
+            first = lastSelected
+            last = newSelection - 1
+        }
+
+        for (let i = last + 1; i < first; i++) {
+            if (!currentlySelected.includes(i)) currentlySelected.push(i)
+        }
+
+        // remove duplicates
+        currentlySelected = [...new Set(currentlySelected)]
+        // sort by value (shift key last selected relies on unsorted order)
+        // currentlySelected.sort((a, b) => a - b)
+    }
+
+    return currentlySelected
+}
+
+// compare two objects, check that they are identical, regardless of key order
+export function areObjectsEqual(a: Record<string, any>, b: Record<string, any>): boolean {
+    return JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort())
 }

@@ -5,7 +5,7 @@
     export let invert = false // flip slider if max < min
 </script>
 
-<input type="range" bind:value style={$$props.style} {min} {max} step={$$props.step || 1} title={$$props.title} disabled={$$props.disabled} class:invert on:mouseenter on:mouseleave on:mousedown on:mousemove on:input on:change />
+<input type="range" bind:value style={$$props.style} {min} {max} step={$$props.step || 1} data-title={$$props.title} disabled={$$props.disabled} class:invert on:mouseenter on:mouseleave on:mousedown on:mousemove on:input on:change />
 
 <style>
     input {
@@ -13,10 +13,12 @@
         -webkit-appearance: none;
         width: 100%;
         height: 10px;
-        background: var(--primary-darker);
+        background: var(--primary-darkest);
         outline: none;
         -webkit-transition: 0.2s;
         transition: opacity 0.2s;
+
+        border-radius: 10px;
     }
 
     input.invert {
@@ -39,7 +41,7 @@
         pointer-events: none;
         opacity: 0.8;
 
-        border-radius: var(--border-radius);
+        border-radius: 50%;
 
         -webkit-transition: 0.2s;
         transition:

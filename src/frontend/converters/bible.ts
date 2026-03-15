@@ -1,18 +1,18 @@
 import { uid } from "uid"
 import { formatToFileName } from "../components/helpers/show"
-import { activePopup, alertMessage, dictionary, drawerTabsData, scriptures, scripturesCache } from "../stores"
-import { convertZefaniaBible } from "./zefaniaBible"
-import { convertOSISBible } from "./osisBible"
+import { activePopup, alertMessage, drawerTabsData, scriptures, scripturesCache } from "../stores"
+import { translateText } from "../utils/language"
 import { convertBebliaBible } from "./bebliaBible"
 import { convertOpenSongBible } from "./opensong"
-import { get } from "svelte/store"
+import { convertOSISBible } from "./osisBible"
+import { convertZefaniaBible } from "./zefaniaBible"
 
 const bibleTypes = {
     freeshow: { name: "FreeShow", func: importFSB },
     zefania: { name: "Zefania", func: convertZefaniaBible },
     osis: { name: "OSIS", func: convertOSISBible },
     beblia: { name: "Beblia", func: convertBebliaBible },
-    opensong: { name: "OpenSong", func: convertOpenSongBible },
+    opensong: { name: "OpenSong", func: convertOpenSongBible }
 }
 
 export function importBibles(data: any[]) {
@@ -25,13 +25,16 @@ export function importBibles(data: any[]) {
         const unsupported: { [key: string]: number } = {}
 
         data.forEach((file) => {
-            if (bibleTypes[file.type]) {
-                const name = bibleTypes[file.type].name
+            let type = file.type
+            if (type === "fsb" || !type) type = "freeshow"
+
+            if (bibleTypes[type]) {
+                const name = bibleTypes[type].name
                 if (!success[name]) success[name] = 0
                 success[name]++
-                bibleTypes[file.type].func([file])
+                bibleTypes[type].func([file])
             } else {
-                const id = file.type || file.name
+                const id = type || file.name
                 if (!unsupported[id]) unsupported[id] = 0
                 unsupported[id]++
             }
@@ -39,7 +42,7 @@ export function importBibles(data: any[]) {
 
         let message = ""
         if (Object.keys(success).length) {
-            message += "✓ " + (get(dictionary).actions?.imported || "Imported!")
+            message += translateText("✓ actions.imported")
             Object.entries(success).forEach(([key, count]) => {
                 message += `<br>• ${key}`
                 if (count > 1) message += ` <span style="opacity: 0.5;">(${count})</span>`
@@ -48,7 +51,7 @@ export function importBibles(data: any[]) {
         if (Object.keys(unsupported).length) {
             if (Object.keys(success).length) message += "<br><br>"
 
-            message += "✕ " + (get(dictionary).error?.import || "Could not import")
+            message += translateText("✕ error.import")
             Object.entries(unsupported).forEach(([key, count]) => {
                 message += `<br>• ${key}`
                 if (count > 1) message += ` <span style="opacity: 0.5;">(${count})</span>`

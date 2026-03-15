@@ -3,25 +3,26 @@
     import { EXPORT } from "../../../../types/Channels"
     import { Main } from "../../../../types/IPC/Main"
     import { destroyMain, receiveMain, requestMain, sendMain } from "../../../IPC/main"
-    import { activePage, activePopup, alertMessage, alertUpdates, dataPath, deletedShows, dictionary, popupData, shows, showsCache, showsPath, special, usageLog } from "../../../stores"
+    import { activePage, activePopup, alertMessage, alertUpdates, deletedShows, popupData, shows, showsCache, special, usageLog, version } from "../../../stores"
     import { send } from "../../../utils/request"
-    import Icon from "../../helpers/Icon.svelte"
     import T from "../../helpers/T.svelte"
-    import Button from "../../inputs/Button.svelte"
-    import Checkbox from "../../inputs/Checkbox.svelte"
-    import CombinedInput from "../../inputs/CombinedInput.svelte"
+    import InputRow from "../../input/InputRow.svelte"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
+    import MaterialToggleSwitch from "../../inputs/MaterialToggleSwitch.svelte"
 
     onMount(() => {
         // getCacheSize()
         // getAudioOutputs()
-        if ($showsPath) sendMain(Main.FULL_SHOWS_LIST, { path: $showsPath })
-        requestMain(Main.GET_STORE_VALUE, { file: "config", key: "disableHardwareAcceleration" }, (a) => {
-            if (a.key === "disableHardwareAcceleration") disableHardwareAcceleration = a.value
+        sendMain(Main.FULL_SHOWS_LIST)
+        requestMain(Main.GET_STORE_VALUE, { file: "config", key: "autoErrorReporting" }, (value) => {
+            autoErrorReporting = value !== false
         })
-        if ($showsPath)
-            requestMain(Main.GET_EMPTY_SHOWS, { path: $showsPath, cached: $showsCache }, (a) => {
-                if (a) emptyShows = a
-            })
+        requestMain(Main.GET_STORE_VALUE, { file: "config", key: "disableHardwareAcceleration" }, (value) => {
+            disableHardwareAcceleration = !!value
+        })
+        requestMain(Main.GET_EMPTY_SHOWS, { cached: $showsCache }, (a) => {
+            if (a) emptyShows = a
+        })
         getDuplicatedShows()
     })
 
@@ -34,7 +35,7 @@
 
     function updateSpecial(value, key) {
         special.update((a) => {
-            if (!value && key !== "autoUpdates") delete a[key]
+            if (!value) delete a[key]
             else a[key] = value
 
             return a
@@ -43,17 +44,20 @@
         // if (key === "previewRate") restartOutputs()
     }
 
-    const isChecked = (e: any) => e.target.checked
+    // auto error reporting
+    let autoErrorReporting = true
+    function toggleAutoErrorReporting(e: any) {
+        autoErrorReporting = e.detail
+        sendMain(Main.SET_STORE_VALUE, { file: "config", key: "autoErrorReporting", value: autoErrorReporting })
 
-    async function toggle(e: any, key: string) {
-        let checked = e.target.checked
-        updateSpecial(checked, key)
+        alertMessage.set("settings.restart_for_change")
+        activePopup.set("alert")
     }
 
     // hardware acceleration
-    let disableHardwareAcceleration = true
+    let disableHardwareAcceleration = false
     function toggleHardwareAcceleration(e: any) {
-        disableHardwareAcceleration = e.target.checked
+        disableHardwareAcceleration = e.detail
         sendMain(Main.SET_STORE_VALUE, { file: "config", key: "disableHardwareAcceleration", value: disableHardwareAcceleration })
 
         alertMessage.set("settings.restart_for_change")
@@ -75,22 +79,20 @@
 
     // get all shows inside current shows folder (and remove missing)
     // function refreshShows() {
-    //     sendMain(Main.REFRESH_SHOWS, { path: $showsPath })
+    //     sendMain(Main.REFRESH_SHOWS)
 
     //     setTimeout(() => {
-    //         sendMain(Main.FULL_SHOWS_LIST, { path: $showsPath })
+    //         sendMain(Main.FULL_SHOWS_LIST)
     //     }, 800)
     // }
 
     // delete shows from folder that are not indexed
     function deleteShows() {
-        if (!$showsPath) return
-
-        sendMain(Main.DELETE_SHOWS_NI, { shows: $shows, path: $showsPath })
+        sendMain(Main.DELETE_SHOWS_NI, { shows: $shows })
 
         setTimeout(() => {
             // this will not include newly created shows not saved yet, but it should not be an issue.
-            sendMain(Main.FULL_SHOWS_LIST, { path: $showsPath })
+            sendMain(Main.FULL_SHOWS_LIST)
         }, 800)
     }
 
@@ -103,9 +105,7 @@
 
     let emptyShows: { id: string; name: string }[] = []
     function deleteEmptyShows() {
-        if (!$showsPath) return
-
-        sendMain(Main.DELETE_SHOWS, { shows: emptyShows, path: $showsPath })
+        sendMain(Main.DELETE_SHOWS, { shows: emptyShows })
         // emptyShows = []
         activePage.set("show")
     }
@@ -139,19 +139,18 @@
     // delete media thumbnail cache
     // function deleteCache() {
     //     if (!Object.keys($mediaCache).length) {
-    //         newToast("$toast.empty_cache")
+    //         newToast("toast.empty_cache")
     //         return
     //     }
 
-    //     newToast("$toast.deleted_cache")
+    //     newToast("toast.deleted_cache")
     //     mediaCache.set({})
     //     cacheSize = "0 Bytes"
     // }
 
     // bundle media files
     function bundleMediaFiles() {
-        if (!$showsPath) return
-        sendMain(Main.BUNDLE_MEDIA_FILES, { showsPath: $showsPath, dataPath: $dataPath })
+        sendMain(Main.BUNDLE_MEDIA_FILES, { openFolder: true })
     }
 
     // usage log
@@ -160,49 +159,42 @@
     let usageLogExported = false
     function exportUsageLog() {
         exportingUsageLog = true
-        setTimeout(() => (usageLogExported = true), 1000)
-        send(EXPORT, ["USAGE"], { path: $dataPath, content: $usageLog })
+        setTimeout(() => {
+            usageLogExported = true
+            exportingUsageLog = false
+        }, 1000)
+        send(EXPORT, ["USAGE"], { content: $usageLog })
     }
     function resetUsageLog() {
         usageLog.set({ all: [] })
+        usageLogExported = false
     }
+
+    $: isBeta = $version.includes("-beta")
 </script>
 
-<CombinedInput>
-    <p><T id="settings.auto_updates" /></p>
-    <div class="alignRight">
-        <Checkbox checked={$special.autoUpdates !== false} on:change={(e) => toggle(e, "autoUpdates")} />
-    </div>
-</CombinedInput>
-<CombinedInput>
-    <p><T id="settings.alert_updates" /></p>
-    <div class="alignRight">
-        <Checkbox checked={$alertUpdates} on:change={(e) => alertUpdates.set(isChecked(e))} />
-    </div>
-</CombinedInput>
+<MaterialToggleSwitch label="settings.auto_updates" checked={$special.autoUpdates} on:change={(e) => updateSpecial(e.detail, "autoUpdates")} />
+
+<!-- <InputRow arrow={$alertUpdates}> -->
+<MaterialToggleSwitch style="flex: 1;" label="settings.alert_updates" checked={$alertUpdates} defaultValue={true} on:change={(e) => alertUpdates.set(e.detail)} />
+<!-- <div slot="menu"> -->
 {#if $alertUpdates}
-    <CombinedInput>
-        <p>Alert when a new beta version is available</p>
-        <div class="alignRight">
-            <Checkbox checked={$special.betaVersionAlert} on:change={(e) => updateSpecial(isChecked(e), "betaVersionAlert")} />
-        </div>
-    </CombinedInput>
+    <MaterialToggleSwitch label="settings.alert_updates_beta" disabled={isBeta} checked={isBeta ? $alertUpdates : $special.betaVersionAlert} defaultValue={false} on:change={(e) => updateSpecial(e.detail, "betaVersionAlert")} />
 {/if}
+<!-- </div> -->
+<!-- </InputRow> -->
 
-<CombinedInput style="border-top: 1px solid var(--primary-lighter);">
-    <p><T id="settings.popup_before_close" /></p>
-    <div class="alignRight">
-        <Checkbox disabled={!$dataPath} checked={$special.showClosePopup || false} on:change={(e) => toggle(e, "showClosePopup")} />
-    </div>
-</CombinedInput>
+<MaterialToggleSwitch label="settings.popup_before_close" checked={$special.showClosePopup || false} defaultValue={false} on:change={(e) => updateSpecial(e.detail, "showClosePopup")} />
 
-<!-- disableHardwareAcceleration -->
-<CombinedInput style="border-bottom: 3px solid var(--primary-lighter);">
-    <p><T id="settings.disable_hardware_acceleration" /></p>
-    <div class="alignRight">
-        <Checkbox checked={disableHardwareAcceleration} on:change={toggleHardwareAcceleration} />
-    </div>
-</CombinedInput>
+<MaterialToggleSwitch label="settings.log_song_usage" checked={$special.logSongUsage || false} defaultValue={false} on:change={(e) => updateSpecial(e.detail, "logSongUsage")} />
+
+<MaterialToggleSwitch label="settings.auto_error_reporting" checked={autoErrorReporting} defaultValue={true} on:change={toggleAutoErrorReporting} />
+
+<MaterialToggleSwitch label="settings.disable_hardware_acceleration" checked={disableHardwareAcceleration} defaultValue={false} on:change={toggleHardwareAcceleration} />
+<!-- "optimized_mode": "Optimized mode", -->
+<!-- <MaterialToggleSwitch label="settings.optimized_mode" checked={$special.optimizedMode} defaultValue={false} on:change={(e) => updateSpecial(e.detail, "optimizedMode")} /> -->
+
+<br />
 
 <!-- WIP change frame rate on remote?? -->
 <!-- <CombinedInput>
@@ -235,41 +227,32 @@
 {/if} -->
 <!-- USED TO DELETE "BROKEN" SHOWS -->
 {#if hiddenShows.length > Object.keys($shows).length}
-    <CombinedInput>
-        <Button style="width: 100%;" on:click={deleteShows}>
-            <Icon id="delete" style="margin-inline-start: 0.5em;" right />
-            <p>
-                <T id="actions.delete_shows_not_indexed" />
-                <span style="display: flex;align-items: center;margin-inline-start: 10px;opacity: 0.5;">({hiddenShows.length - Object.keys($shows).length})</span>
-            </p>
-        </Button>
-    </CombinedInput>
+    <InputRow>
+        <MaterialButton style="width: 100%;justify-content: left;" icon="delete" on:click={deleteShows}>
+            <T id="actions.delete_shows_not_indexed" />
+            <span style="opacity: 0.5;">({hiddenShows.length - Object.keys($shows).length})</span>
+        </MaterialButton>
+    </InputRow>
 {/if}
 
 <!-- DELETE EMPTY SHOWS -->
 {#if emptyShows.length}
-    <CombinedInput>
-        <Button style="width: 100%;" on:click={deleteEmptyShows}>
-            <Icon id="delete" style="margin-inline-start: 0.5em;" right />
-            <p>
-                <T id="actions.delete_empty_shows" />
-                <span style="display: flex;align-items: center;margin-inline-start: 10px;opacity: 0.5;">({emptyShows.length})</span>
-            </p>
-        </Button>
-    </CombinedInput>
+    <InputRow>
+        <MaterialButton style="width: 100%;justify-content: left;" icon="delete" on:click={deleteEmptyShows}>
+            <T id="actions.delete_empty_shows" />
+            <span style="opacity: 0.5;">({emptyShows.length})</span>
+        </MaterialButton>
+    </InputRow>
 {/if}
 
 <!-- REMOVE DUPLICATED SHOWS -->
 {#if duplicatedShows.length}
-    <CombinedInput>
-        <Button style="width: 100%;" on:click={deleteDuplicatedShows}>
-            <Icon id="delete" style="margin-inline-start: 0.5em;" right />
-            <p>
-                <T id="popup.delete_duplicated_shows" />
-                <span style="display: flex;align-items: center;margin-inline-start: 10px;opacity: 0.5;">({duplicatedShows.length})</span>
-            </p>
-        </Button>
-    </CombinedInput>
+    <InputRow>
+        <MaterialButton style="width: 100%;justify-content: left;" icon="delete" on:click={deleteDuplicatedShows}>
+            <T id="popup.delete_duplicated_shows" />
+            <span style="opacity: 0.5;">({duplicatedShows.length})</span>
+        </MaterialButton>
+    </InputRow>
 {/if}
 
 <!-- <CombinedInput>
@@ -282,57 +265,19 @@
     </Button>
 </CombinedInput> -->
 
-<CombinedInput title={$dictionary.media?.bundle_media_files_tip} style="border-top: 1px solid var(--primary-lighter);">
-    <Button style="width: 100%;" on:click={bundleMediaFiles}>
-        <Icon id="image" style="margin-inline-start: 0.5em;" right />
-        <p><T id="media.bundle_media_files" /></p>
-    </Button>
-</CombinedInput>
-
-{#if $usageLog.all?.length}
-    {#if usageLogExported}
-        <CombinedInput title={$dictionary.actions?.reset_usage_log}>
-            <Button style="width: 100%;" on:click={resetUsageLog}>
-                <Icon id="reset" style="margin-inline-start: 0.5em;" right />
-                <p><T id="actions.reset_usage_log" /></p>
-            </Button>
-        </CombinedInput>
-    {:else}
-        <CombinedInput title={$dictionary.actions?.export_usage_log}>
-            <Button disabled={exportingUsageLog} style="width: 100%;" on:click={exportUsageLog}>
-                <Icon id="export" style="margin-inline-start: 0.5em;" right />
-                <p><T id="actions.export_usage_log" /></p>
-            </Button>
-        </CombinedInput>
-    {/if}
+<!-- BUNDLE MEDIA FILES MANUALLY OR AUTOMATICALLY -->
+{#if !$special.cloudSyncMediaFolder}
+    <InputRow>
+        <MaterialButton title="media.bundle_media_files_tip" style="width: 100%;justify-content: left;" icon="image" on:click={bundleMediaFiles}>
+            <T id="media.bundle_media_files" />
+        </MaterialButton>
+    </InputRow>
 {/if}
 
-<div class="filler" />
-<div class="bottom">
-    <Button style="width: 100%;padding: 12px;border-top: 2px solid var(--primary-lighter);" on:click={() => activePopup.set("reset_all")} center red>
-        <Icon id="reset" right /><T id="settings.reset_all" />
-    </Button>
-</div>
-
-<style>
-    /* hr {
-        margin: 20px 0;
-        border: none;
-        height: 2px;
-        background-color: var(--primary-lighter);
-    } */
-
-    .filler {
-        height: 58px;
-    }
-    .bottom {
-        position: absolute;
-        bottom: 0;
-        inset-inline-start: 0;
-        width: 100%;
-        background-color: var(--primary-darkest);
-
-        display: flex;
-        flex-direction: column;
-    }
-</style>
+{#if $special.logSongUsage && $usageLog.all?.length}
+    <InputRow>
+        <MaterialButton disabled={exportingUsageLog} style="width: 100%;justify-content: left;" icon={usageLogExported ? "reset" : "export"} on:click={() => (usageLogExported ? resetUsageLog() : exportUsageLog())}>
+            <T id="actions.{usageLogExported ? 'reset' : 'export'}_usage_log" />
+        </MaterialButton>
+    </InputRow>
+{/if}

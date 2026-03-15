@@ -48,7 +48,7 @@
     // WIP this does not update when window size changes...
     let newSizes = `;
         top: ${Math.min(itemStyles.top, (itemStyles.top / 1080) * resolution.height)}px;
-        inset-inline-start: ${Math.min(itemStyles.left, (itemStyles.left / 1920) * resolution.width)}px;
+        left: ${Math.min(itemStyles.left, (itemStyles.left / 1920) * resolution.width)}px;
         width: ${Math.min(itemStyles.width, (itemStyles.width / 1920) * resolution.width)}px;
         height: ${Math.min(itemStyles.height, (itemStyles.height / 1080) * resolution.height)}px;
     `
@@ -88,20 +88,29 @@
     function updateStyles() {
         const styles = getStyles(style)
         const textStyleKeys = ["line-height", "text-decoration"]
+        // For slide_text items with autosize, exclude font-size from container style
+        // to prevent CSS inheritance of 800px (MAX_FONT_SIZE) before autosize computes correct value
+        const isSlideTextWithAutosize = item?.type === "slide_text" && (item?.auto !== false || (item?.textFit && item?.textFit !== "none"))
 
         itemStyle = ""
         textStyle = ""
 
         Object.entries(styles).forEach(([key, value]) => {
             if (textStyleKeys.includes(key)) textStyle += `${key}: ${value};`
+            else if (key === "font-size" && isSlideTextWithAutosize) {
+                // Skip font-size for autosize items - let Textbox's autosize compute it
+            }
             else itemStyle += `${key}: ${value};`
         })
     }
+
+    // fixed letter width
+    $: fixedWidth = item?.type === "timer" || item?.type === "clock" ? "font-feature-settings: 'tnum' 1;" : ""
 </script>
 
 <!-- style + (id.includes("current_output") ? "" : newSizes) -->
 <!-- {show.settings.autoStretch === false ? '' : newSizes} -->
-<div class="item" class:border={stageLayout?.settings.labels} class:isDisabledVariable style="{itemStyle}{id.includes('slide') && !id.includes('tracker') ? '' : textStyle}{newSizes}--labelColor: {stageLayout?.settings?.labelColor || '#d0a853'};">
+<div class="item" class:border={stageLayout?.settings.labels} class:isDisabledVariable style="{itemStyle}{id.includes('slide') && !id.includes('tracker') ? '' : textStyle}{newSizes}--labelColor: {stageLayout?.settings?.labelColor || '#d0a853'};{fixedWidth}">
     {#if stageLayout?.settings.labels}
         <div class="label">{item.label || ""}</div>
     {/if}
@@ -121,19 +130,7 @@
                 {#if currentSlide}
                     {#key item || currentSlide}
                         <!-- autoStage={show.settings.autoStretch !== false} -->
-                        <SlideText
-                            {currentSlide}
-                            {slideOffset}
-                            stageItem={item}
-                            show={stageLayout}
-                            {resolution}
-                            chords={typeof item.chords === "boolean" ? item.chords : item.chords?.enabled}
-                            autoSize={item.auto !== false}
-                            {fontSize}
-                            autoStage
-                            {textStyle}
-                            style={item.type ? item.keepStyle : false}
-                        />
+                        <SlideText {currentSlide} {slideOffset} stageItem={item} show={stageLayout} {resolution} chords={typeof item.chords === "boolean" ? item.chords : item.chords?.enabled} autoSize={item.auto !== false} {fontSize} autoStage {textStyle} style={item.type ? item.keepStyle : false} />
                     {/key}
                 {/if}
             {:else if item.type === "slide_notes" || id.includes("notes")}
@@ -244,5 +241,18 @@
     }
     .align :global(.item .align .lines) {
         text-align: var(--text-align);
+    }
+
+    /* phone view */
+    @media (max-width: 1000px) {
+        .label {
+            font-size: 24px;
+        }
+    }
+
+    @media (max-width: 500px) {
+        .label {
+            font-size: 18px;
+        }
     }
 </style>

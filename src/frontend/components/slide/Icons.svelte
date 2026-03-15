@@ -1,14 +1,15 @@
 <script lang="ts">
-    import { OUTPUT } from "../../../types/Channels"
     import type { Media, Slide, SlideData } from "../../../types/Show"
     import { AudioPlayer } from "../../audio/audioPlayer"
-    import { activeShow, activeTimers, dictionary, outputs, shows } from "../../stores"
-    import { send } from "../../utils/request"
+    import { activeShow, activeTimers, outputs, shows } from "../../stores"
+    import { newToast } from "../../utils/common"
+    import { translateText } from "../../utils/language"
+    import { getAccess } from "../../utils/profile"
     import { videoExtensions } from "../../values/extensions"
     import { clone } from "../helpers/array"
     import { history } from "../helpers/history"
     import Icon from "../helpers/Icon.svelte"
-    import { getExtension } from "../helpers/media"
+    import { getExtension, getFileName, removeExtension } from "../helpers/media"
     import { _show } from "../helpers/shows"
     import { joinTime, secondsToTime } from "../helpers/time"
     import Button from "../inputs/Button.svelte"
@@ -33,22 +34,43 @@
 
     $: currentShow = $shows[$activeShow?.id || ""] || {}
 
+    function hasAccess() {
+        if (currentShow.locked) {
+            newToast("show.locked")
+            return false
+        }
+
+        if (slide?.locked) {
+            newToast("output.state_locked")
+            return false
+        }
+
+        const profile = getAccess("shows")
+        const readOnly = profile.global === "read" || profile[currentShow.category || ""] === "read"
+        if (readOnly) {
+            newToast("profile.locked")
+            return false
+        }
+
+        return true
+    }
+
     function removeLayout(key: string) {
-        if (currentShow.locked) return
+        if (!hasAccess()) return
 
         history({ id: "SHOW_LAYOUT", newData: { key, indexes: [index] } })
     }
 
     // TODO: history
     function mute() {
-        if (currentShow.locked) return
+        if (!hasAccess()) return
 
         _show()
             .media([layoutSlide.background || ""])
             .set({ key: "muted", value: false })
     }
     function removeLoop() {
-        if (currentShow.locked) return
+        if (!hasAccess()) return
 
         _show()
             .media([layoutSlide.background || ""])
@@ -56,25 +78,25 @@
     }
 
     function resetTimer() {
-        if (currentShow.locked) return
+        if (!hasAccess()) return
 
         activeTimers.update((a) => {
             a = a.filter((_a, i) => !timer.includes(i))
             return a
         })
-        send(OUTPUT, ["ACTIVE_TIMERS"], $activeTimers)
+        // send(OUTPUT, ["ACTIVE_TIMERS"], $activeTimers)
     }
 
     function removeSlideSetting(key: string) {
         if (!slide || currentShow.locked) return
 
-        let settings = clone(slide.settings)
+        let settings = clone(slide.settings || {})
         delete settings[key]
         let newData = { style: settings }
 
         history({
             id: "slideStyle",
-            oldData: { style: slide.settings },
+            oldData: { style: slide.settings || {} },
             newData,
             location: { page: "show", show: $activeShow!, slide: layoutSlide.id }
         })
@@ -82,9 +104,6 @@
 
     $: audio = layoutSlide.audio?.length ? _show().get()?.media?.[layoutSlide.audio[0]] || {} : {}
     $: audioPath = audio.path
-    // no need for cloud when audio can be stacked
-    // $: cloudId = $driveData.mediaId
-    // $: audioPath = cloudId && cloudId !== "default" ? audio.cloud?.[cloudId] || audio.path : audio.path
 
     $: zoom = 4 / columns
 </script>
@@ -93,7 +112,7 @@
     {#if layoutSlide.disabled}
         <div>
             <div class="button">
-                <Button style="padding: 3px;" redHover title={$dictionary.actions?.enable} {zoom} on:click={() => removeLayout("disabled")}>
+                <Button style="padding: 3px;" redHover title={translateText("actions.enable")} {zoom} on:click={() => removeLayout("disabled")}>
                     <Icon id="disable" size={0.9} white />
                 </Button>
             </div>
@@ -103,7 +122,7 @@
     {#if timer.length}
         <div>
             <div class="button">
-                <Button style="padding: 3px;" redHover title={$dictionary.remove?.timer} {zoom} on:click={() => resetTimer()}>
+                <Button style="padding: 3px;" redHover title={translateText("remove.timer")} {zoom} on:click={() => resetTimer()}>
                     <Icon id="timer" size={0.9} white />
                 </Button>
             </div>
@@ -115,7 +134,7 @@
     {#if nextTimer}
         <div>
             <div class="button">
-                <Button style="padding: 3px;" redHover title={$dictionary.remove?.nextTimer} {zoom} on:click={() => removeLayout("nextTimer")}>
+                <Button style="padding: 3px;" redHover title={translateText("remove.nextTimer")} {zoom} on:click={() => removeLayout("nextTimer")}>
                     <Icon id="clock" size={0.9} white />
                 </Button>
             </div>
@@ -126,7 +145,7 @@
         <!-- WIP move this to Actions.svelte (right side) -->
         <div>
             <div class="button">
-                <Button style="padding: 3px;" redHover title={$dictionary.remove?.to_start} {zoom} on:click={() => removeLayout("end")}>
+                <Button style="padding: 3px;" redHover title={translateText("remove.to_start")} {zoom} on:click={() => removeLayout("end")}>
                     <Icon id="restart" size={0.9} white />
                 </Button>
             </div>
@@ -138,7 +157,7 @@
                 <Button
                     style="padding: 3px;"
                     redHover
-                    title={$dictionary.remove?.transition}
+                    title={translateText("remove.transition")}
                     {zoom}
                     on:click={() => {
                         removeLayout("transition")
@@ -154,7 +173,7 @@
     {#if layoutSlide.bindings?.length}
         <div>
             <div class="button">
-                <Button style="padding: 3px;" redHover title={$dictionary.actions?.remove_binding} {zoom} on:click={() => removeLayout("bindings")}>
+                <Button style="padding: 3px;" redHover title={translateText("actions.remove_binding")} {zoom} on:click={() => removeLayout("bindings")}>
                     <Icon id="bind" size={0.9} white />
                 </Button>
             </div>
@@ -169,8 +188,8 @@
     {#if background}
         <div>
             <div class="button">
-                <Button style="padding: 3px;" redHover title={$dictionary.remove?.background} {zoom} on:click={() => removeLayout("background")}>
-                    <Icon id={["camera", "screen", "ndi"].includes(background.type || "") ? background.type || "" : background.path?.includes("http") ? "web" : "image"} size={0.9} white />
+                <Button style="padding: 3px;" redHover title={translateText("remove.background")} {zoom} on:click={() => removeLayout("background")}>
+                    <Icon id={["camera", "screen", "ndi"].includes(background.type || "") ? background.type || "" : background.path?.startsWith("http") ? "web" : "image"} size={0.9} white />
                 </Button>
             </div>
             {#if videoDuration}
@@ -181,16 +200,16 @@
     {#if background && muted && isVideo}
         <div>
             <div class="button">
-                <Button style="padding: 3px;" redHover title={$dictionary.actions?.unmute} {zoom} on:click={() => mute()}>
+                <Button style="padding: 3px;" redHover title={translateText("actions.unmute")} {zoom} on:click={() => mute()}>
                     <Icon id="muted" size={0.9} white />
                 </Button>
             </div>
         </div>
     {/if}
-    {#if background && looping && isVideo && backgroundCount > 4}
+    {#if background && looping && isVideo && backgroundCount > 1}
         <div>
             <div class="button">
-                <Button style="padding: 3px;{layoutSlide.actions?.nextAfterMedia ? 'opacity: 0.5;' : ''}" redHover title={$dictionary.media?._loop} {zoom} on:click={() => removeLoop()}>
+                <Button style="padding: 3px;{layoutSlide.actions?.nextAfterMedia ? 'opacity: 0.5;' : ''}" redHover title={translateText("media._loop")} {zoom} on:click={() => removeLoop()}>
                     <Icon id="loop" size={0.9} white />
                 </Button>
             </div>
@@ -199,7 +218,7 @@
     {#if layoutSlide.mics?.length}
         <div>
             <div class="button">
-                <Button style="padding: 3px;" redHover title={$dictionary.actions?.remove} {zoom} on:click={() => removeLayout("mics")}>
+                <Button style="padding: 3px;" redHover title={translateText("actions.remove")} {zoom} on:click={() => removeLayout("mics")}>
                     <Icon id="microphone" size={0.9} white />
                 </Button>
             </div>
@@ -211,19 +230,23 @@
         </div>
     {/if}
     {#if layoutSlide.audio?.length}
-        <div>
+        <div style="max-width: 200px;overflow: hidden;">
             <div class="button">
-                <Button style="padding: 3px;" redHover title={$dictionary.remove?.audio} {zoom} on:click={() => removeLayout("audio")}>
+                <Button style="padding: 3px;" redHover title={translateText("remove.audio")} {zoom} on:click={() => removeLayout("audio")}>
                     <Icon id="audio" size={0.9} white />
                 </Button>
             </div>
-            <span>
+            <span style="white-space: nowrap;text-overflow: ellipsis;">
                 {#if layoutSlide.audio.length === 1}
                     {#await AudioPlayer.getDuration(audioPath || "")}
                         <p>00:00</p>
                     {:then duration}
                         <p>{joinTime(secondsToTime(duration))}</p>
                     {/await}
+
+                    <!-- file name -->
+                    <!-- WIP get title/artist from metadata? -->
+                    &nbsp;|&nbsp;{removeExtension(getFileName(audioPath || ""))}
                 {:else}
                     <p>{layoutSlide.audio.length}</p>
                 {/if}
@@ -233,7 +256,7 @@
     {#if layoutSlide.effects?.length}
         <div>
             <div class="button">
-                <Button style="padding: 3px;" redHover title={$dictionary.remove?.effects} {zoom} on:click={() => removeLayout("effects")}>
+                <Button style="padding: 3px;" redHover title={translateText("remove.effects")} {zoom} on:click={() => removeLayout("effects")}>
                     <Icon id="effects" size={0.9} white />
                 </Button>
             </div>
@@ -245,7 +268,7 @@
     {#if layoutSlide.overlays?.length}
         <div>
             <div class="button">
-                <Button style="padding: 3px;" redHover title={$dictionary.remove?.overlays} {zoom} on:click={() => removeLayout("overlays")}>
+                <Button style="padding: 3px;" redHover title={translateText("remove.overlays")} {zoom} on:click={() => removeLayout("overlays")}>
                     <Icon id="overlays" size={0.9} white />
                 </Button>
             </div>
@@ -258,7 +281,7 @@
     {#if slide?.settings?.template}
         <div>
             <div class="button">
-                <Button style="padding: 3px;" redHover title={$dictionary.actions?.remove} {zoom} on:click={() => removeSlideSetting("template")}>
+                <Button style="padding: 3px;" redHover title={translateText("actions.remove")} {zoom} on:click={() => removeSlideSetting("template")}>
                     <Icon id="templates" size={0.9} white />
                 </Button>
             </div>

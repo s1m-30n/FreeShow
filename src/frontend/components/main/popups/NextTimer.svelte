@@ -2,15 +2,13 @@
     import { onMount } from "svelte"
     import type { LayoutRef } from "../../../../types/Show"
     import { activePopup, activeProject, activeShow, popupData, projects, showsCache } from "../../../stores"
-    import Icon from "../../helpers/Icon.svelte"
     import T from "../../helpers/T.svelte"
     import { history } from "../../helpers/history"
+    import { getLayoutRef } from "../../helpers/show"
     import { _show } from "../../helpers/shows"
     import { joinTime, secondsToTime } from "../../helpers/time"
-    import Button from "../../inputs/Button.svelte"
-    import CombinedInput from "../../inputs/CombinedInput.svelte"
-    import NumberInput from "../../inputs/NumberInput.svelte"
-    import { getLayoutRef } from "../../helpers/show"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
+    import MaterialNumberInput from "../../inputs/MaterialNumberInput.svelte"
 
     let type = $popupData.type || "show"
 
@@ -20,22 +18,26 @@
     let indexes = $popupData.indexes || layoutRef.map((_, i) => i)
     let allSlides = !$popupData.indexes?.length
 
+    let isProjectItem = type === "folder" || type === "pdf"
+
+    let count = isProjectItem ? $popupData.count || 0 : allActiveSlides.length
+
     onMount(() => {
         popupData.set({})
 
-        if (type === "folder") totalTime = $popupData.totalTime
+        if (isProjectItem) totalTime = $popupData.totalTime
         else if (allSlides) getTotalTime()
     })
 
     function updateValue(e: any) {
         value = e?.detail ?? e
-        if (value) value = Number(value)
+        if (value) value = value
 
-        if (type === "folder") {
+        if (isProjectItem) {
             projects.update((a) => {
                 const index = $activeShow?.index ?? -1
                 const projectId = $activeProject
-                if (!projectId || !a[projectId] || index < 0) return a
+                if (!projectId || !a[projectId]?.shows?.[index] || index < 0) return a
 
                 if (!a[projectId].shows[index].data) a[projectId].shows[index].data = {}
                 a[projectId].shows[index].data.timer = value || 0
@@ -47,7 +49,11 @@
             return
         }
 
+        // apiHelper.ts > setNextSlideTimer()
+
         history({ id: "SHOW_LAYOUT", newData: { key: "nextTimer", data: value, indexes }, location: { page: "show", override: "change_slide_action_timer" } })
+
+        // GO TO START
 
         if (allSlides) {
             // remove existing go to start if just one applied to any slide
@@ -57,6 +63,8 @@
                 let layoutId = _show().get("settings.activeLayout")
                 showsCache.update((a) => {
                     let ref = goToStartRefs[0]
+                    if (!ref) return a
+
                     if (ref.type === "parent") delete a[showId].layouts[layoutId]?.slides?.[ref.index]?.end
                     else delete a[showId].layouts[layoutId]?.slides?.[ref.parent?.index ?? -1]?.children?.[ref.id]?.end
                     return a
@@ -78,46 +86,48 @@
         appliedToSlides = [...new Set(allValues)].length === 1 && allValues[0] === allTime ? allTime : 0
     }
 
-    let allTime: number = type === "folder" ? value || 10 : allActiveSlides[0]?.data?.nextTimer || 10
+    let allTime: number = isProjectItem ? value || 10 : allActiveSlides[0]?.data?.nextTimer || 10
 
-    $: newTime = allTime * allActiveSlides.length
+    $: newTime = allTime * count
 
     const getTime = (time: number) => (time > 59 ? joinTime(secondsToTime(time)) : time + "s")
+
+    function keydown(e: any, newValue: number) {
+        if (e.detail?.key === "Enter") {
+            updateValue(newValue)
+            activePopup.set(null)
+        }
+    }
+
+    function globalKeydown(e: KeyboardEvent) {
+        if (e.key === "Enter" && !document.activeElement?.closest(".edit") && allSlides) {
+            updateValue(allTime)
+            activePopup.set(null)
+        }
+    }
 </script>
 
+<svelte:window on:keydown={globalKeydown} />
+
 {#if allSlides}
+    <MaterialNumberInput style="margin-bottom: 10px;" label="timer.seconds" value={allTime} max={3600} on:change={(e) => (allTime = e.detail)} on:keydown={(e) => keydown(e, allTime)} />
+
+    <!-- reset if next timer applied, but not same on all slides ?? (set input to 0) -->
+    {#if isProjectItem ? !allTime || allTime === value : totalTime && (appliedToSlides === allTime || allTime === 0)}
+        <MaterialButton variant="outlined" icon="reset" on:click={() => updateValue(undefined)}>
+            <T id="actions.reset" />
+        </MaterialButton>
+    {:else}
+        <MaterialButton variant="contained" icon="clock" disabled={allTime === 0} info={getTime(newTime)} on:click={() => updateValue(allTime)}>
+            <T id="actions.to_all" />
+        </MaterialButton>
+    {/if}
+
     {#if totalTime}
-        <p style="text-align: center;opacity: 0.7;font-size: 0.9em;margin-bottom: 10px;">
+        <p style="text-align: center;opacity: 0.7;font-size: 0.9em;margin-top: 20px;">
             <T id="transition.duration" />: {getTime(totalTime)}
         </p>
     {/if}
-
-    <CombinedInput>
-        <NumberInput value={allTime} on:change={(e) => (allTime = Number(e.detail))} max={3600} fixed={value?.toString()?.includes(".") ? 1 : 0} decimals={1} />
-    </CombinedInput>
-
-    <CombinedInput>
-        <!-- reset if next timer applied, but not same on all slides ?? (set input to 0) -->
-        {#if type === "folder" ? !allTime || allTime === value : totalTime && (appliedToSlides === allTime || allTime === 0)}
-            <Button style="flex: 1;" on:click={() => updateValue(undefined)} center dark>
-                <Icon id="reset" right />
-                <T id="actions.reset" />
-            </Button>
-        {:else}
-            <Button style="flex: 1;" disabled={allTime === 0} on:click={() => updateValue(allTime)} dark center>
-                <Icon id="clock" right />
-                <p style="flex: initial;min-width: auto;width: auto;padding: 0;">
-                    <T id="actions.to_all" />
-
-                    <span style="opacity: 0.5;font-size: 0.9em;min-width: auto;display: flex;align-items: center;padding-inline-start: 6px;">
-                        {#if newTime}({getTime(newTime)}){/if}
-                    </span>
-                </p>
-            </Button>
-        {/if}
-    </CombinedInput>
 {:else}
-    <CombinedInput>
-        <NumberInput {value} on:change={updateValue} max={3600} fixed={value.toString().includes(".") ? 1 : 0} decimals={1} />
-    </CombinedInput>
+    <MaterialNumberInput label="timer.seconds" {value} max={3600} on:change={updateValue} on:keydown={(e) => keydown(e, e.detail?.target?.value)} />
 {/if}

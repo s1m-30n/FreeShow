@@ -1,9 +1,7 @@
 <script lang="ts">
     import { onMount } from "svelte"
-    import { actionHistory, actions, activePopup, activeTimers, drawerTabsData } from "../../../stores"
-    import Icon from "../../helpers/Icon.svelte"
+    import { actionHistory, activeTimers, drawerTabsData } from "../../../stores"
     import T from "../../helpers/T.svelte"
-    import Button from "../../inputs/Button.svelte"
     import TimerInfo from "../timers/TimerInfo.svelte"
 
     $: type = $drawerTabsData.functions?.activeSubTab || ""
@@ -31,17 +29,6 @@
             </p>
         {/if}
     </div>
-
-    {#if Object.keys($actions).length}
-        <Button style="width: 100%;" on:click={() => activePopup.set("action_history")} center dark>
-            <Icon id="history" right />
-            <T id="popup.action_history" />
-        </Button>
-    {/if}
-    <Button style="width: 100%;" on:click={() => activePopup.set("manage_emitters")} center dark>
-        <Icon id="emitter" right />
-        <T id="popup.manage_emitters" />
-    </Button>
 {:else if type === "timer"}
     {#if $activeTimers.length}
         <TimerInfo />

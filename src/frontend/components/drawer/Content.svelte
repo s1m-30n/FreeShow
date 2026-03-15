@@ -1,9 +1,7 @@
 <script lang="ts">
-    import type { Bible } from "../../../types/Scripture"
     import { drawerTabsData } from "../../stores"
-    import Icon from "../helpers/Icon.svelte"
     import T from "../helpers/T.svelte"
-    import Button from "../inputs/Button.svelte"
+    import MaterialButton from "../inputs/MaterialButton.svelte"
     import Audio from "./audio/Audio.svelte"
     import Scripture from "./bible/Scripture.svelte"
     import Calendar from "./calendar/Calendar.svelte"
@@ -17,7 +15,6 @@
     import Timers from "./timers/Timers.svelte"
 
     export let id: string
-    export let bibles: Bible[]
     export let searchValue: string
     export let firstMatch: null | string
     $: active = $drawerTabsData[id]?.activeSubTab || null
@@ -46,15 +43,14 @@
     {#if searchValue && active !== "all" && searchTab !== id + active && id !== "scripture"}
         <div class="warning">
             <p style="padding: 6px 8px;"><T id="main.search_active" />: <span style="color: var(--secondary);font-weight: bold;">{searchValue}</span></p>
-            <Button on:click={() => (searchValue = "")} dark>
-                <Icon id="close" right />
+            <MaterialButton icon="close" style="padding: 6px 16px;" on:click={() => (searchValue = "")}>
                 <p><T id="clear.search" /></p>
-            </Button>
+            </MaterialButton>
         </div>
     {/if}
 
     {#if id === "shows"}
-        <Shows {id} {active} {searchValue} bind:firstMatch />
+        <Shows {active} {searchValue} bind:firstMatch />
     {:else if id === "media"}
         <Media {active} {searchValue} bind:streams />
     {:else if id === "audio"}
@@ -64,7 +60,7 @@
     {:else if id === "templates"}
         <Templates {active} {searchValue} />
     {:else if id === "scripture"}
-        <Scripture {active} bind:searchValue bind:bibles />
+        <Scripture {active} bind:searchValue />
     {:else if id === "calendar"}
         <Calendar {active} {searchValue} />
     {:else if id === "functions"}
@@ -82,11 +78,15 @@
 
 <style>
     .main {
+        position: relative;
+
         overflow-y: auto;
+
         display: flex;
         flex-direction: column;
-        background-color: var(--primary-darker);
         flex: 1;
+
+        background-color: var(--primary-darker);
     }
 
     .warning {

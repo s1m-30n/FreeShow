@@ -1,21 +1,21 @@
 import { get } from "svelte/store"
 import { uid } from "uid"
-import { Main } from "../../types/IPC/Main"
 import type { Show } from "../../types/Show"
 import type { ClientMessage } from "../../types/Socket"
-import { loadBible, receiveBibleContent } from "../components/drawer/bible/scripture"
+import { AudioPlayer } from "../audio/audioPlayer"
+import { loadJsonBible } from "../components/drawer/bible/scripture"
 import { clone, keysToID, removeDeleted } from "../components/helpers/array"
 import { getBase64Path, getThumbnailPath, mediaSize } from "../components/helpers/media"
-import { getActiveOutputs, setOutput } from "../components/helpers/output"
+import { getAllNormalOutputs, getFirstActiveOutput, setOutput } from "../components/helpers/output"
 import { loadShows } from "../components/helpers/setShow"
 import { getLayoutRef } from "../components/helpers/show"
 import { updateOut } from "../components/helpers/showActions"
 import { _show } from "../components/helpers/shows"
 import { clearAll } from "../components/output/clear"
-import { destroyMain, receiveMain } from "../IPC/main"
 import { REMOTE } from "./../../types/Channels"
-import { activeProject, dictionary, driveData, folders, language, openedFolders, outLocked, outputs, overlays, projects, remotePassword, scriptures, scripturesCache, shows, showsCache, styles } from "./../stores"
-import { waitUntilValueIsDefined } from "./common"
+import { actions, actionTags, activePage, activeProject, activeShow, activeTimers, audioChannelsData, categories, connections, dictionary, folders, language, openedFolders, outLocked, outputs, overlayCategories, overlays, playerVideos, projects, remotePassword, runningActions, scriptures, shows, showsCache, styles, templateCategories, templates, timers, triggers, variables, variableTags, volume } from "./../stores"
+import { lastClickTime } from "./common"
+import { translateText } from "./language"
 import { send } from "./request"
 import { sendData, setConnectedState } from "./sendData"
 
@@ -35,8 +35,51 @@ export const receiveREMOTE: any = {
 
         // msg = { id: msg.id, channel: "SHOWS_CACHE", data: filterObjectArray(get(showsCache), ["name", "private", "category", "timestamps"]) }
         msg = { id: msg.id, channel: "SHOWS", data: get(shows) }
-        initializeRemote()
+        initializeRemote(msg.id)
 
+        return msg
+    },
+    GET_MIXER: (msg: any) => {
+        msg.data = getMixerPayload()
+        return msg
+    },
+    SET_VOLUME: (msg: any) => {
+        const newVolume = clamp01(msg.data?.volume ?? msg.data ?? 1)
+        volume.set(newVolume)
+        AudioPlayer.updateVolume()
+
+        msg.channel = "GET_MIXER"
+        msg.data = getMixerPayload()
+        return msg
+    },
+    SET_OUTPUT_VOLUME: (msg: any) => {
+        const { id, volume: newVolumeRaw } = msg.data || {}
+        if (!id) return
+
+        const newVolume = clamp01(newVolumeRaw ?? 1)
+        updateAudioChannel(id, (a) => ({ ...a, volume: newVolume }))
+
+        msg.channel = "GET_MIXER"
+        msg.data = getMixerPayload()
+        return msg
+    },
+    TOGGLE_MUTE: (msg: any) => {
+        const muted = !!(msg.data?.muted ?? msg.data)
+        updateAudioChannel("main", (a) => ({ ...a, isMuted: muted }))
+        AudioPlayer.updateVolume()
+
+        msg.channel = "GET_MIXER"
+        msg.data = getMixerPayload()
+        return msg
+    },
+    TOGGLE_OUTPUT_MUTE: (msg: any) => {
+        const { id, muted } = msg.data || {}
+        if (!id) return
+
+        updateAudioChannel(id, (a) => ({ ...a, isMuted: !!muted }))
+
+        msg.channel = "GET_MIXER"
+        msg.data = getMixerPayload()
         return msg
     },
     ACCESS: (msg: any) => {
@@ -48,7 +91,7 @@ export const receiveREMOTE: any = {
 
         // msg = { id: msg.id, channel: "SHOWS_CACHE", data: filterObjectArray(get(showsCache), ["name", "private", "category", "timestamps"]) }
         msg = { id: msg.id, channel: "SHOWS", data: get(shows) }
-        initializeRemote()
+        initializeRemote(msg.id)
 
         return msg
     },
@@ -77,6 +120,7 @@ export const receiveREMOTE: any = {
 
         if (loadingShow !== showID) return
 
+        openShow(showID)
         return msg
     },
     OUT: async (msg: any) => {
@@ -85,8 +129,8 @@ export const receiveREMOTE: any = {
         const currentId = uid(5)
         currentOut = currentId
 
-        const currentOutput: any = get(outputs)[getActiveOutputs()[0]]
-        const out: any = currentOutput?.out?.slide || null
+        const currentOutput = getFirstActiveOutput()
+        const out = currentOutput?.out?.slide || null
         let id = ""
 
         if (msg.data === "clear") {
@@ -122,21 +166,28 @@ export const receiveREMOTE: any = {
             if (out && out.id !== "temp") {
                 id = out.id
                 oldOutSlide = id
-                msg.data.show = await convertBackgrounds(get(showsCache)[id])
+                msg.data.show = await convertBackgrounds(get(showsCache)[id], false, true)
                 msg.data.show.id = id
             }
 
             if (currentOut !== currentId) return
         }
-        if (id.length && msg.id) {
+        if (id?.length && msg.id) {
             setConnectedState("REMOTE", msg.id, "active", id)
         }
 
         return msg
     },
     OUT_DATA: (msg: any) => {
-        const currentOutput = get(outputs)[getActiveOutputs()[0]]
-        const out = currentOutput?.out || {}
+        const currentOutput = getFirstActiveOutput()
+        const out = clone(currentOutput?.out || {})
+
+        // Include player video name for online media (YouTube, Vimeo, etc.)
+        if (out.background?.type === "player" && out.background?.id) {
+            const playerName = get(playerVideos)[out.background.id]?.name
+            if (playerName) out.background.name = playerName
+        }
+
         msg.data = out
 
         return msg
@@ -147,7 +198,7 @@ export const receiveREMOTE: any = {
         // get names
         msg.data.forEach((project) => {
             project.shows.forEach((show) => {
-                if (show.type === "overlay") show.name = get(overlays)[show.id]?.name || get(dictionary).main?.unnamed
+                if (show.type === "overlay") show.name = get(overlays)[show.id]?.name || translateText("main.unnamed")
             })
 
             return project
@@ -156,63 +207,226 @@ export const receiveREMOTE: any = {
         return msg
     },
     GET_SCRIPTURE: async (msg: ClientMessage) => {
-        let id = msg.data?.id
+        const { id, bookKey, chapterKey, bookIndex, chapterIndex } = msg.data || {}
         if (!id) return
 
-        // if (get(scriptures)[id]?.collection) id = get(scriptures)[id].collection!.versions[0]
+        const jsonBible = await loadJsonBible(id)
+        if (!jsonBible) return
 
-        const listenerId = receiveMain(Main.BIBLE, receiveBibleContent)
-        loadBible(id, 0, clone(get(scriptures)[id] || {}))
-        const bible = await waitUntilValueIsDefined(() => get(scripturesCache)[id])
-        destroyMain(listenerId)
+        const scriptureData: any = get(scriptures)[id]
+        const isApi = scriptureData?.api === true
 
-        msg.data.bible = bible
+        if (!isApi) {
+            msg.data.bible = jsonBible.data
+            return msg
+        }
+
+        if (bookKey && !chapterKey) {
+            try {
+                const bookData = await jsonBible.getBook(bookKey)
+                const mapped = (bookData.data.chapters || []).map((c) => ({
+                    number: c.number,
+                    keyName: c.number
+                }))
+                msg.data.bibleUpdate = { kind: "chapters", id, bookIndex, chapters: mapped }
+            } catch (error) {
+                console.warn(`Failed to load book ${bookKey}:`, error)
+                msg.data.bibleUpdate = { kind: "chapters", id, bookIndex, chapters: [] }
+            }
+            return msg
+        }
+
+        if (bookKey && chapterKey) {
+            try {
+                const bookData = await jsonBible.getBook(bookKey)
+                const chapterData = await bookData.getChapter(chapterKey)
+                const versesData = chapterData.data.verses
+                const mappedVerses = versesData.map((v) => ({
+                    number: v.number,
+                    text: v.text,
+                    keyName: v.number
+                }))
+                msg.data.bibleUpdate = { kind: "verses", id, bookIndex, chapterIndex, verses: mappedVerses }
+            } catch (error) {
+                console.warn(`Failed to load ${bookKey} ${chapterKey}:`, error)
+                msg.data.bibleUpdate = { kind: "verses", id, bookIndex, chapterIndex, verses: [] }
+            }
+            return msg
+        }
+
+        const books = jsonBible.data.books
+        const mappedBooks = (books || []).map((b) => ({
+            name: b.name,
+            number: b.number,
+            keyName: b.id,
+            chapters: []
+        }))
+        msg.data.bible = { books: mappedBooks }
+        return msg
+    },
+    SEARCH_SCRIPTURE: async (msg: ClientMessage) => {
+        const { id, searchTerm, searchType, bookFilter } = msg.data || {}
+        if (!id || !searchTerm) return
+
+        const jsonBible = await loadJsonBible(id)
+        if (!jsonBible) return
+
+        const scriptureData: any = get(scriptures)[id]
+        const isApi = scriptureData?.api === true
+
+        // For local bibles, return null to use cached search
+        if (!isApi) {
+            msg.data.searchResults = null
+            return msg
+        }
+
+        try {
+            if (searchType === "reference") {
+                // Use bookSearch for reference parsing (e.g., "John 3:16")
+                const result = jsonBible.bookSearch(searchTerm)
+                if (result) {
+                    // Get book name if we have book number
+                    let bookName: string | null = null
+                    if (result.book) {
+                        const bookObj = jsonBible.data.books.find((b: any) => b.number === result.book || b.id === result.book)
+                        bookName = bookObj?.name || null
+                    }
+                    msg.data.searchResults = {
+                        type: "reference",
+                        autocompleted: result.autocompleted || undefined,
+                        book: result.book || null,
+                        bookName: bookName,
+                        chapter: result.chapter || null,
+                        verses: result.verses || []
+                    }
+                } else {
+                    msg.data.searchResults = { type: "reference", found: false }
+                }
+            } else {
+                // Use textSearch for content search (minimum 3 characters)
+                if (searchTerm.length < 3) {
+                    msg.data.searchResults = { type: "text", results: [], bookFilter }
+                    return msg
+                }
+                const results = await jsonBible.textSearch(searchTerm)
+                let filteredResults = (results || []).map((ref: any) => ({
+                    book: ref.book,
+                    chapter: ref.chapter,
+                    verseNumber: typeof ref.verse === "object" ? ref.verse.number : ref.verse,
+                    reference: `${ref.book}.${ref.chapter}.${typeof ref.verse === "object" ? ref.verse.number : ref.verse}`,
+                    referenceFull: ref.reference || "",
+                    verseText: typeof ref.verse === "object" ? ref.verse.text : ref.text || ""
+                }))
+
+                // Apply book filter if provided
+                if (bookFilter) {
+                    filteredResults = filteredResults.filter((ref: any) => ref.book === bookFilter)
+                }
+
+                msg.data.searchResults = {
+                    type: "text",
+                    results: filteredResults.slice(0, 50),
+                    bookFilter
+                }
+            }
+        } catch (err) {
+            console.error("Scripture search error:", err)
+            msg.data.searchResults = { type: searchType, error: true }
+        }
+
+        return msg
+    },
+    GET_OVERLAYS: (msg: any) => {
+        msg.data = { overlays: get(overlays), categories: get(overlayCategories) }
+        return msg
+    },
+    GET_TEMPLATES: (msg: any) => {
+        msg.data = { templates: get(templates), categories: get(templateCategories) }
+        return msg
+    },
+    GET_FUNCTIONS: (msg: any) => {
+        msg.data = {
+            actions: get(actions),
+            actionTags: get(actionTags),
+            variables: get(variables),
+            variableTags: get(variableTags),
+            timers: get(timers),
+            triggers: get(triggers),
+            activeTimers: get(activeTimers),
+            runningActions: get(runningActions)
+        }
         return msg
     }
 }
 
 let oldOutSlide = ""
-export function initializeRemote() {
-    send(REMOTE, ["ACCESS"])
 
+export async function initializeRemote(id: string) {
+    // Send access confirmation to remote client
+    window.api.send(REMOTE, { id, channel: "ACCESS", data: null })
+
+    // Send initial data to remote client
     sendData(REMOTE, { channel: "PROJECTS", data: removeDeleted(keysToID(get(projects))) })
     send(REMOTE, ["FOLDERS"], { folders: get(folders), opened: get(openedFolders) })
     send(REMOTE, ["PROJECT"], get(activeProject))
 
-    const currentOutput: any = get(outputs)[getActiveOutputs()[0]]
-    // this is actually aspect ratio
+    // Get current output state
+    const currentOutput = getFirstActiveOutput()
     const styleRes = currentOutput?.style ? get(styles)[currentOutput?.style]?.aspectRatio || get(styles)[currentOutput?.style]?.resolution : null
 
     const outSlide = currentOutput?.out?.slide
-    const out: any = { slide: outSlide ? outSlide.index : null, layout: outSlide?.layout || null, styleRes }
-    if (out.slide !== null && outSlide?.id) {
-        oldOutSlide = outSlide.id
-        out.show = get(showsCache)[oldOutSlide] || {}
-        out.show.id = oldOutSlide
+    const out: any = {
+        slide: outSlide ? outSlide.index : null,
+        layout: outSlide?.layout || null,
+        styleRes
     }
-    send(REMOTE, ["OUT"], out)
 
-    send(REMOTE, ["OVERLAYS"], get(overlays))
+    if (out.slide !== null && outSlide?.id && outSlide?.id !== "temp") {
+        oldOutSlide = outSlide.id
+        // Output & thumbnail
+        out.show = await convertBackgrounds(get(showsCache)[oldOutSlide] || {})
+        out.show.id = oldOutSlide
+
+        // Send slide thumbnails asynchronously
+        setTimeout(async () => {
+            window.api.send(REMOTE, await receiveREMOTE.SHOW({ channel: "SHOW", id, data: oldOutSlide }))
+        })
+    }
+
+    // Send targeted initial state to this connection
+    // Use sendData so the proper OUT payload is constructed (handles scripture 'temp' etc.)
+    sendData(REMOTE, { id, channel: "OUT" })
+    sendData(REMOTE, { id, channel: "OUT_DATA" })
+
+    // Send additional data
     send(REMOTE, ["SCRIPTURE"], get(scriptures))
+    send(REMOTE, ["CATEGORIES"], get(categories))
 }
 
-export async function convertBackgrounds(show: Show, noLoad = false) {
+export async function convertBackgrounds(show: Show, noLoad = false, init = false) {
     if (!show?.media) return {}
 
     show = clone(show)
-    const mediaIds = show.layouts[show.settings?.activeLayout]?.slides.map((a) => a.background || "").filter(Boolean)
+    const mediaIds: string[] = []
+    show.layouts[show.settings?.activeLayout]?.slides.forEach((a) => {
+        if (a.background) mediaIds.push(a.background)
+        Object.values(a.children || {}).forEach((child) => {
+            if (child.background) mediaIds.push(child.background)
+        })
+    })
 
     await Promise.all(
         mediaIds.map(async (id) => {
             let path = show.media[id]?.path || show.media[id]?.id || ""
-            const cloudId = get(driveData).mediaId
-            if (cloudId && cloudId !== "default") path = show.media[id]?.cloud?.[cloudId] || path
             if (!path) return
 
             if (noLoad) {
                 show.media[id].path = getThumbnailPath(path, mediaSize.slideSize)
                 return
             }
+
+            const remoteConnections = Object.keys(get(connections).REMOTE || {})?.length || 0
+            if (!init && remoteConnections === 0) return
 
             const base64Path: string = await getBase64Path(path, mediaSize.slideSize)
             if (base64Path) show.media[id].path = base64Path
@@ -222,9 +436,51 @@ export async function convertBackgrounds(show: Show, noLoad = false) {
     return show
 }
 
+export function getMixerPayload() {
+    const audioData = get(audioChannelsData) || {}
+    const outputsStore = get(outputs) || {}
+
+    const mixerOutputs = getAllNormalOutputs().reduce((acc: any, out) => {
+        const channel = audioData[out.id] || {}
+        acc[out.id] = {
+            name: outputsStore[out.id]?.name || out.id,
+            volume: channel.volume ?? 1,
+            isMuted: !!channel.isMuted
+        }
+        return acc
+    }, {})
+
+    return {
+        main: {
+            volume: get(volume) ?? 1,
+            isMuted: !!audioData.main?.isMuted
+        },
+        outputs: mixerOutputs
+    }
+}
+
+function updateAudioChannel(id: string, updater: (a: any) => any) {
+    audioChannelsData.update((a) => {
+        const prev = a[id] || {}
+        a[id] = updater(prev) || prev
+        return a
+    })
+}
+
+const clamp01 = (value: number) => Math.min(1, Math.max(0, Number(value ?? 0)))
+
 // const toBase64 = file => new Promise((resolve, reject) => {
 //     const reader = new FileReader();
 //     reader.readAsDataURL(file);
 //     reader.onload = () => resolve(reader.result);
 //     reader.onerror = error => reject(error);
 // });
+
+function openShow(id: string) {
+    if (get(activePage) !== "show") return
+    if (!get(shows)[id]) return
+    // don't open if last interaction was less than 20 seconds ago
+    if (Date.now() - lastClickTime < 20000) return
+
+    activeShow.set({ id })
+}

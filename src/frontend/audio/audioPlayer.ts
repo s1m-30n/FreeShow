@@ -3,14 +3,16 @@
 import { get } from "svelte/store"
 import { Main } from "../../types/IPC/Main"
 import { customActionActivation } from "../components/actions/actions"
-import { encodeFilePath, getFileName, removeExtension } from "../components/helpers/media"
+import { encodeFilePath, getFileName, locateMediaFile, removeExtension } from "../components/helpers/media"
 import { checkNextAfterMedia } from "../components/helpers/showActions"
 import { sendMain } from "../IPC/main"
-import { dataPath, dictionary, gain, media, outLocked, playingAudio, playingAudioPaths, special, volume } from "../stores"
+import { audioChannelsData, dictionary, media, outLocked, playingAudio, playingAudioPaths, special, volume } from "../stores"
 import { AudioAnalyser } from "./audioAnalyser"
 import { AudioAnalyserMerger } from "./audioAnalyserMerger"
 import { clearAudio, clearing, fadeInAudio, fadeOutAudio } from "./audioFading"
+import { AudioMultichannel } from "./audioMultichannel"
 import { AudioPlaylist } from "./audioPlaylist"
+import { addToMediaFolder } from "../utils/cloudSync"
 
 type AudioMetadata = {
     name: string
@@ -34,15 +36,40 @@ export type AudioData = {
 }
 
 export class AudioPlayer {
-    static channelCount = 2
+    static channelCount = AudioMultichannel.DEFAULT_CHANNELS // default, will be updated dynamically
+    static maxChannels = AudioMultichannel.MAX_CHANNELS // support up to 8 channels (7.1 surround)
     static sampleRate = 48000 // Hz
 
     // static playing: { [key: string]: AudioData } = {}
 
+    // LOADING
+
+    private static currentlyLoading: string[] = []
+    private static isLoading(path: string) {
+        return this.currentlyLoading.includes(path)
+    }
+    private static setLoading(path: string) {
+        if (!this.isLoading(path)) this.currentlyLoading.push(path)
+    }
+    private static clearLoading(path: string) {
+        const index = AudioPlayer.currentlyLoading.indexOf(path)
+        if (index !== -1) AudioPlayer.currentlyLoading.splice(index, 1)
+    }
+
     // INIT
 
     static async start(path: string, metadata: AudioMetadata, options: AudioOptions = {}) {
-        if (get(outLocked) || clearing.includes(path)) return
+        if (get(outLocked) || clearing.includes(path) || this.isLoading(path)) return
+        this.setLoading(path)
+
+        const located = await locateMediaFile(path)
+        if (!located) {
+            this.clearLoading(path)
+            return
+        }
+
+        path = located.path
+        if (!located.hasChanged) addToMediaFolder(path)
 
         // get type
         const duration = await this.getDuration(path)
@@ -52,36 +79,44 @@ export class AudioPlayer {
         if (this.audioExists(path)) {
             if (options.pauseIfPlaying === false) {
                 updateAudioStore(path, "currentTime", 0)
+                this.clearLoading(path)
                 return
             }
             if (options.stopIfPlaying) {
                 if (options.clearTime) clearAudio(path, { clearTime: options.clearTime })
                 else AudioPlayer.stop(path)
+                this.clearLoading(path)
                 return
             }
 
             this.togglePausedState(path)
+            this.clearLoading(path)
             return
         }
 
         const audioPlaying = Object.keys(get(playingAudio)).length
         if (options.crossfade) fadeOutAudio(options.crossfade)
-        else if (!options.playMultiple) clearAudio("", { playlistCrossfade: options.playlistCrossfade })
+        else if (!options.playMultiple) clearAudio("", { playlistCrossfade: options.playlistCrossfade, isPlayingNew: true })
 
         const audio = await this.createAudio(path)
         // another audio might have been started while awaiting (if played rapidly)
-        if (!audio || this.audioExists(path)) return
+        if (!audio || this.audioExists(path)) {
+            this.clearLoading(path)
+            return
+        }
 
         const newVolume = AudioPlayer.getVolume() * (options.volume || 1)
         audio.volume = newVolume
-        if ((options.startAt || 0) > 0) audio.currentTime = options.startAt || 0
+
+        options.startAt = AudioPlayer.getStartTime(path, options.startAt)
+        if (options.startAt > 0) audio.currentTime = options.startAt
 
         playingAudio.update((a) => {
             a[path] = {
                 name: removeExtension(metadata.name || getFileName(path)),
                 paused: false,
                 isMic: false,
-                audio,
+                audio
             }
             return a
         })
@@ -97,6 +132,7 @@ export class AudioPlayer {
 
         const name = removeExtension(metadata.name || getFileName(path))
         this.nowPlaying(path, name)
+        this.clearLoading(path)
     }
 
     static async playStream(id: string, stream: MediaStream, metadata: AudioMetadata) {
@@ -114,7 +150,7 @@ export class AudioPlayer {
                 paused: false,
                 isMic: true,
                 audio,
-                stream,
+                stream
             }
             return a
         })
@@ -206,7 +242,7 @@ export class AudioPlayer {
         })
 
         AudioAnalyser.detach(id)
-        if (!AudioPlayer.getAllPlaying().length) sendMain(Main.NOW_PLAYING_UNSET, { dataPath: get(dataPath) })
+        if (!AudioPlayer.getAllPlaying().length) sendMain(Main.NOW_PLAYING_UNSET)
     }
 
     private static stopStream(stream: MediaStream | undefined) {
@@ -253,7 +289,8 @@ export class AudioPlayer {
         const audio = this.getAudio(id)
         if (!audio) return
 
-        if (audio.currentTime < audio.duration) return
+        const endingTime = AudioPlayer.getEndTime(id, audio.duration)
+        if (audio.currentTime < endingTime) return
 
         // loop single audio
         if (get(media)[id]?.loop) {
@@ -268,8 +305,8 @@ export class AudioPlayer {
             return
         }
 
-        if (get(special).clearMediaOnFinish === false) this.pause(id)
-        else this.stop(id)
+        // if (get(special).clearAudioOnFinish === false && AudioPlayer.getAudioType(id, audio.duration) === "music") this.pause(id) else
+        this.stop(id)
 
         const stillPlaying = this.getAllPlaying()
         if (!stillPlaying.length) checkNextAfterMedia(id, "audio")
@@ -279,7 +316,9 @@ export class AudioPlayer {
     static nowPlaying(filePath: string, name: string) {
         const audioLang = get(dictionary).audio || {}
         const unknownLang = [audioLang.unknown_artist || "", audioLang.unknown_title || "", audioLang.unknown_album || ""]
-        sendMain(Main.NOW_PLAYING, { dataPath: get(dataPath), filePath, name, unknownLang })
+        const format: string = get(special).nowPlayingFormat || ""
+        const duration = this.getDurationSync(filePath)
+        sendMain(Main.NOW_PLAYING, { filePath, name, unknownLang, format, duration })
     }
 
     // GET
@@ -288,7 +327,7 @@ export class AudioPlayer {
         return get(playingAudio)[id] || null
     }
 
-    static getAllPlaying(removePaused: boolean = true) {
+    static getAllPlaying(removePaused = true) {
         return get(playingAudioPaths).length
             ? get(playingAudioPaths)
             : Object.keys(get(playingAudio)).filter((id) => {
@@ -317,18 +356,55 @@ export class AudioPlayer {
         this.storedDurations.set(id, duration)
         return duration
     }
+    static getDurationSync(id: string) {
+        return this.storedDurations.get(id) || 0
+    }
 
     static getVolume(id: string | null = null, _updater = get(volume)) {
-        if (!id) return _updater
-        return _updater * (get(media)[id]?.volume || 1)
+        const mainVolume = get(audioChannelsData).main?.isMuted ? 0 : _updater
+        if (!id) return mainVolume
+        return mainVolume * (get(media)[id]?.volume || 1)
     }
 
     static getGain() {
-        return get(special).allowGaining ? get(gain) || 1 : 1
+        return 1
+        // return get(special).allowGaining ? get(gain) || 1 : 1
+    }
+
+    static getGlobalOptions(path: string) {
+        return get(media)[path] || {}
     }
 
     static getAudioType(path: string, duration: number) {
-        return get(media)[path]?.audioType || (duration < 30 ? "effect" : "music")
+        return AudioPlayer.getGlobalOptions(path).audioType || (duration < 30 ? "effect" : "music")
+    }
+
+    static getStartTime(path: string, startAt?: number | undefined) {
+        const globalStart = AudioPlayer.getGlobalOptions(path).fromTime || 0
+        return Math.max(startAt || 0, globalStart)
+    }
+    static getEndTime(path: string, duration: number) {
+        const globalEnd = AudioPlayer.getGlobalOptions(path).toTime || 0
+        // if (!duration) duration = this.storedDurations.get(path) || 0
+        // if (!duration && globalEnd) return globalEnd
+        return globalEnd > 0 ? Math.min(duration, globalEnd) : duration
+    }
+
+    static getOutputs(): Promise<{ value: string; label: string }[]> {
+        return new Promise((resolve) => {
+            navigator.mediaDevices
+                .enumerateDevices()
+                .then((devices) => {
+                    // only get audio outputs & not "default" becuase that does not work
+                    const outputDevices = devices.filter((device) => device.kind === "audiooutput" && device.deviceId !== "default")
+                    const audioOutputs = outputDevices.map((a) => ({ value: a.deviceId, label: a.label }))
+                    resolve(audioOutputs)
+                })
+                .catch((err) => {
+                    console.log(`${err.name}: ${err.message}`)
+                    resolve([])
+                })
+        })
     }
 
     // STATE

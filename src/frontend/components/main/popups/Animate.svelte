@@ -1,62 +1,65 @@
 <script lang="ts">
     import { onMount } from "svelte"
     import type { Animation, AnimationAction } from "../../../../types/Output"
-    import { activeAnimate, dictionary, popupData } from "../../../stores"
+    import { activeAnimate, popupData } from "../../../stores"
+    import { translateText } from "../../../utils/language"
     import Icon from "../../helpers/Icon.svelte"
     import T from "../../helpers/T.svelte"
     import { clone } from "../../helpers/array"
     import { history } from "../../helpers/history"
     import { addToPos } from "../../helpers/mover"
+    import { getLayoutRef } from "../../helpers/show"
     import Button from "../../inputs/Button.svelte"
-    import Checkbox from "../../inputs/Checkbox.svelte"
     import CombinedInput from "../../inputs/CombinedInput.svelte"
     import Dropdown from "../../inputs/Dropdown.svelte"
+    import MaterialDropdown from "../../inputs/MaterialDropdown.svelte"
+    import MaterialToggleSwitch from "../../inputs/MaterialToggleSwitch.svelte"
     import NumberInput from "../../inputs/NumberInput.svelte"
-    import { getLayoutRef } from "../../helpers/show"
 
     const easings = [
-        { id: "linear", name: "$:easings.linear:$" },
-        { id: "ease", name: "$:easings.ease:$" },
-        { id: "ease-in", name: "$:easings.ease-in:$" },
-        { id: "ease-out", name: "$:easings.ease-out:$" },
-        { id: "ease-in-out", name: "$:easings.ease-in-out:$" },
+        { value: "linear", label: translateText("easings.linear") },
+        { value: "ease", label: translateText("easings.ease") },
+        { value: "ease-in", label: translateText("easings.ease-in") },
+        { value: "ease-out", label: translateText("easings.ease-out") },
+        { value: "ease-in-out", label: translateText("easings.ease-in-out") }
     ]
 
     const types = [
-        { id: "change", name: "$:animate.change:$" },
-        // { id: "set", name: "$:animate.set:$" },
-        { id: "wait", name: "$:animate.wait:$" },
+        { id: "change", name: translateText("animate.change") },
+        // { id: "set", name: translateText("animate.set") },
+        { id: "wait", name: translateText("animate.wait") }
     ]
     const ids = [
-        { id: "text", name: "$:animate.text:$" },
-        { id: "item", name: "$:animate.item:$" },
-        { id: "background", name: "$:animate.background:$" },
+        { id: "text", name: translateText("animate.text") },
+        { id: "item", name: translateText("animate.item") },
+        { id: "background", name: translateText("animate.background") }
     ]
     // const setIds = [
     //     { id: "text", name: "$:animate.text:$" },
     //     { id: "item", name: "$:animate.item:$" },
     // ]
     const backgroundKeys = [
-        { id: "zoom", name: "$:actions.zoom:$" },
+        { id: "zoom", name: translateText("actions.zoom") }
+        // TODO: "speed" - video playback speed
         // { id: "filter", name: "$:edit.filters:$" },
     ]
     const textKeys = [
         // TEXT
-        { id: "font-size", data: { extension: "px" }, name: "$:edit.size:$" },
+        { id: "font-size", data: { extension: "px" }, name: translateText("edit.size") },
 
-        { id: "line-height", values: { max: 10, step: 0.1, decimals: 1, inputMultiplier: 10 }, data: { extension: "em" }, name: "$:edit.line_height:$" },
-        { id: "letter-spacing", values: { max: 100, min: -1000 }, data: { extension: "px" }, name: "$:edit.letter_spacing:$" },
-        { id: "word-spacing", values: { min: -100 }, data: { extension: "px" }, name: "$:edit.word_spacing:$" },
+        { id: "line-height", values: { max: 10, step: 0.1, decimals: 1, inputMultiplier: 10 }, data: { extension: "em" }, name: translateText("edit.line_height") },
+        { id: "letter-spacing", values: { max: 100, min: -1000 }, data: { extension: "px" }, name: translateText("edit.letter_spacing") },
+        { id: "word-spacing", values: { min: -100 }, data: { extension: "px" }, name: translateText("edit.word_spacing") }
     ]
     const itemKeys = [
-        { id: "left", values: { min: -100000, max: 100000 }, data: { extension: "px" }, name: "$:edit.x:$" },
-        { id: "top", values: { min: -100000, max: 100000 }, data: { extension: "px" }, name: "$:edit.y:$" },
-        { id: "width", values: { min: -100000, max: 100000 }, data: { extension: "px" }, name: "$:edit.width:$" },
-        { id: "height", values: { min: -100000, max: 100000 }, data: { extension: "px" }, name: "$:edit.height:$" },
+        { id: "left", values: { min: -100000, max: 100000 }, data: { extension: "px" }, name: translateText("edit.x") },
+        { id: "top", values: { min: -100000, max: 100000 }, data: { extension: "px" }, name: translateText("edit.y") },
+        { id: "width", values: { min: -100000, max: 100000 }, data: { extension: "px" }, name: translateText("edit.width") },
+        { id: "height", values: { min: -100000, max: 100000 }, data: { extension: "px" }, name: translateText("edit.height") },
 
-        { id: "rotate", values: { max: 360 }, data: { extension: "deg" }, name: "$:edit.rotation:$" },
-        { id: "opacity", values: { max: 1, step: 0.1, decimals: 1, inputMultiplier: 10 }, name: "$:edit.opacity:$" },
-        { id: "border-radius", values: { step: 10, max: 500, inputMultiplier: 0.1 }, data: { extension: "px" }, name: "$:edit.corner_radius:$" },
+        { id: "rotate", values: { max: 360 }, data: { extension: "deg" }, name: translateText("edit.rotation") },
+        { id: "opacity", values: { max: 1, step: 0.1, decimals: 1, inputMultiplier: 10 }, name: translateText("edit.opacity") },
+        { id: "border-radius", values: { step: 10, max: 500, inputMultiplier: 0.1 }, data: { extension: "px" }, name: translateText("edit.corner_radius") }
     ]
 
     const DEFAULT_ANIMATION: AnimationAction = { type: "change", duration: 3, id: "text", key: "font-size", extension: "px" }
@@ -121,11 +124,6 @@
     //     let value = e.target.value
     //     animation.actions[i].value = value
     // }
-
-    function changeRepeat(e: any) {
-        let value = e.target.checked
-        animation.repeat = value
-    }
 
     // get active output
     $: currentActive = $popupData.indexes.includes($activeAnimate.slide)
@@ -218,10 +216,10 @@
                 <Button on:click={() => moveItem(i, true)} disabled={i + 1 >= animation.actions.length}>
                     <Icon id="down" />
                 </Button>
-                <Button title={$dictionary.actions?.duplicate} on:click={() => duplicate(i)}>
+                <Button title={translateText("actions.duplicate")} on:click={() => duplicate(i)}>
                     <Icon id="duplicate" />
                 </Button>
-                <Button title={$dictionary.settings?.remove} on:click={() => removeItem(i)}>
+                <Button title={translateText("settings.remove")} on:click={() => removeItem(i)}>
                     <Icon id="delete" />
                 </Button>
             </span>
@@ -238,16 +236,8 @@
 
 <br />
 
-<CombinedInput>
-    <p><T id="calendar.repeat" /></p>
-    <span class="alignRight">
-        <Checkbox checked={animation.repeat} disabled={!animation.actions.find((a) => a.type === "wait")} on:change={changeRepeat} />
-    </span>
-</CombinedInput>
-<CombinedInput>
-    <p><T id="transition.easing" /></p>
-    <Dropdown options={easings} value={getOptionName(animation.easing || "ease", easings)} on:click={(e) => (animation.easing = e.detail.id)} />
-</CombinedInput>
+<MaterialToggleSwitch label="calendar.repeat" checked={animation.repeat} disabled={!animation.actions.find((a) => a.type === "wait")} on:change={(e) => (animation.repeat = e.detail)} />
+<MaterialDropdown label="transition.easing" options={easings} value={animation.easing || "ease"} on:change={(e) => (animation.easing = e.detail)} />
 
 <!-- <br />
 

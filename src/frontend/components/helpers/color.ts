@@ -63,8 +63,12 @@ export function hexToRgb(hex: string) {
 }
 
 export function splitRgb(rgb: string) {
-    const numbers = rgb.replace(/[^\d. ]+/g, "").replaceAll("  ", " ")
-    const splitted = numbers.split(" ")
+    // Handle both modern space-separated and legacy comma-separated syntax
+    // rgb(r g b / a) or rgb(r, g, b, a) or rgba(r, g, b, a)
+    const numbers = rgb.replace(/rgba?\(|\)/gi, "").trim()
+
+    // Split by comma or space, then filter out empty strings and slashes
+    const splitted = numbers.split(/[\s,/]+/).filter((s) => s && s !== "/")
 
     return {
         r: Number(splitted[0] ?? 0),
@@ -74,11 +78,47 @@ export function splitRgb(rgb: string) {
     }
 }
 
+export function rgbToHex(rgb: string) {
+    const splitted = splitRgb(rgb)
+    return "#" + componentToHex(splitted.r) + componentToHex(splitted.g) + componentToHex(splitted.b)
+}
+function componentToHex(c) {
+    const hex = c.toString(16)
+    return hex.length === 1 ? "0" + hex : hex
+}
+
+// CONTRAST
+
 export function getContrast(hex: string) {
     let color = "#FFFFFF"
+    if (typeof hex !== "string") return color
     const rgb = hexToRgb(hex)
     if (rgb.r * 0.299 + rgb.g * 0.587 + rgb.b * 0.114 > 186) color = "#000000"
     return color
+}
+
+export function generateRandomHexColor() {
+    // random number between 0 and 16777215 (FFFFFF in hex)
+    const randomColor = Math.floor(Math.random() * 16777215).toString(16)
+
+    // pad with leading zeros to ensure 6 characters
+    return `#${randomColor.padStart(6, "0")}`
+}
+
+// generate lighter color that has high contrast to dark background
+export function generateLightRandomColor() {
+    const minBrightness = 150
+    const r = Math.floor(Math.random() * (256 - minBrightness)) + minBrightness
+    const g = Math.floor(Math.random() * (256 - minBrightness)) + minBrightness
+    const b = Math.floor(Math.random() * (256 - minBrightness)) + minBrightness
+
+    // RGB to hex
+    const toHex = (c) => {
+        const hex = c.toString(16)
+        return hex.length === 1 ? "0" + hex : hex
+    }
+
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`
 }
 
 // GRADIENT
@@ -143,7 +183,22 @@ export function splitGradientValue(gradientStr: string) {
     const normalizeColor = (str: string) => {
         const rgbMatch = str.match(/^rgb\(([^)]+)\)$/i)
         if (!rgbMatch) return str.trim()
-        const vals = rgbMatch[1].split(/[\s,]+/).map((s) => s.trim())
+
+        const content = rgbMatch[1]
+
+        // Handle modern syntax: rgb(r g b / alpha) or rgb(r g b)
+        if (content.includes("/")) {
+            const parts = content.split("/")
+            const rgbVals = parts[0]
+                .trim()
+                .split(/[\s,]+/)
+                .map((s) => s.trim())
+            const alpha = parts[1].trim()
+            return `rgba(${rgbVals.join(",")}, ${alpha})`
+        }
+
+        // Handle legacy syntax: rgb(r, g, b) or rgba(r, g, b, a)
+        const vals = content.split(/[\s,]+/).map((s) => s.trim())
         return vals.length === 3 ? `rgba(${vals.join(",")}, 1)` : `rgba(${vals.join(",")})`
     }
 
@@ -175,4 +230,85 @@ export function splitGradientValue(gradientStr: string) {
     }
 
     return result
+}
+
+// gradient icon helper
+
+export function hexToHSL(H: string) {
+    // Convert hex to HSL (returns {h, s, l})
+    let r = 0
+    let g = 0
+    let b = 0
+    if (H.length === 4) {
+        r = parseInt(H[1] + H[1], 16)
+        g = parseInt(H[2] + H[2], 16)
+        b = parseInt(H[3] + H[3], 16)
+    } else if (H.length === 7) {
+        r = parseInt(H.substring(1, 3), 16)
+        g = parseInt(H.substring(3, 5), 16)
+        b = parseInt(H.substring(5, 7), 16)
+    }
+    r /= 255
+    g /= 255
+    b /= 255
+    const cmin = Math.min(r, g, b)
+    const cmax = Math.max(r, g, b)
+    const delta = cmax - cmin
+    let h = 0
+    let s = 0
+    let l = (cmax + cmin) / 2
+    if (delta === 0) h = 0
+    else if (cmax === r) h = ((g - b) / delta) % 6
+    else if (cmax === g) h = (b - r) / delta + 2
+    else h = (r - g) / delta + 4
+    h = Math.round(h * 60)
+    if (h < 0) h += 360
+    s = delta === 0 ? 0 : delta / (1 - Math.abs(2 * l - 1))
+    s = +(s * 100).toFixed(1)
+    l = +(l * 100).toFixed(1)
+    return { h, s, l }
+}
+
+export function hslToHex(h: number, s: number, l: number) {
+    s /= 100
+    l /= 100
+    const c = (1 - Math.abs(2 * l - 1)) * s
+    const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
+    const m = l - c / 2
+    let r = 0
+    let g = 0
+    let b = 0
+
+    if (h >= 0 && h < 60) {
+        r = c
+        g = x
+        b = 0
+    } else if (h >= 60 && h < 120) {
+        r = x
+        g = c
+        b = 0
+    } else if (h >= 120 && h < 180) {
+        r = 0
+        g = c
+        b = x
+    } else if (h >= 180 && h < 240) {
+        r = 0
+        g = x
+        b = c
+    } else if (h >= 240 && h < 300) {
+        r = x
+        g = 0
+        b = c
+    } else {
+        r = c
+        g = 0
+        b = x
+    }
+
+    const toHex = (v: number) => {
+        const hex = Math.round((v + m) * 255).toString(16)
+        return hex.length === 1 ? "0" + hex : hex
+    }
+
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`
 }

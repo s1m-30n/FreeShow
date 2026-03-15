@@ -2,21 +2,22 @@ import { get } from "svelte/store"
 import type { ToMainSendPayloads } from "../../types/IPC/ToMain"
 import { ToMain } from "../../types/IPC/ToMain"
 import type { Project } from "../../types/Projects"
-import type { Show } from "../../types/Show"
+import type { Show, Slide } from "../../types/Show"
 import { API_ACTIONS, triggerAction } from "../components/actions/api"
 import { receivedMidi } from "../components/actions/midi"
 import { menuClick } from "../components/context/menuClick"
 import { getCurrentTimerValue } from "../components/drawer/timers/timers"
-import { getDynamicValue, getVariableValue } from "../components/edit/scripts/itemHelpers"
-import { clone } from "../components/helpers/array"
+import { _getVariableValue, getDynamicValue } from "../components/edit/scripts/itemHelpers"
+import { clone, keysToID } from "../components/helpers/array"
 import { addDrawerFolder } from "../components/helpers/dropActions"
 import { history } from "../components/helpers/history"
 import { captureCanvas, setMediaTracks } from "../components/helpers/media"
 import { getActiveOutputs } from "../components/helpers/output"
 import { loadShows, saveTextCache } from "../components/helpers/setShow"
-import { checkName, getLabelId } from "../components/helpers/show"
+import { checkName, getGlobalGroup, getLabelId } from "../components/helpers/show"
 import { joinTimeBig } from "../components/helpers/time"
 import { defaultThemes } from "../components/settings/tabs/defaultThemes"
+import { processTimecodeFrame, updateTimelineStatus, updateTimelineTime } from "../components/timeline/timecode"
 import { importBibles } from "../converters/bible"
 import { convertCalendar } from "../converters/calendar"
 import { convertChordPro } from "../converters/chordpro"
@@ -26,10 +27,11 @@ import { convertEasyWorship } from "../converters/easyworship"
 import { createImageShow } from "../converters/imageShow"
 import { createCategory, importShow, importSpecific, importTemplate, setTempShows } from "../converters/importHelpers"
 import { convertLessonsPresentation } from "../converters/lessonsChurch"
+import { convertMediaShout } from "../converters/mediashout"
 import { convertOpenLP } from "../converters/openlp"
 import { convertOpenSong } from "../converters/opensong"
-import { convertPowerpoint } from "../converters/powerpoint"
-import { addToProject, importProject } from "../converters/project"
+import { convertPowerpoint } from "../converters/powerpoint/powerpointImporter"
+import { addToProject, importProject, updateRecentlyAddedFiles } from "../converters/project"
 import { convertProPresenter } from "../converters/propresenter"
 import { convertQuelea } from "../converters/quelea"
 import { convertSoftProjector } from "../converters/softprojector"
@@ -46,27 +48,26 @@ import {
     activeTimers,
     alertMessage,
     audioData,
-    chumsConnected,
+    contentProviderData,
     currentOutputSettings,
     dataPath,
-    dictionary,
     driveKeys,
     events,
     folders,
     lessonsLoaded,
     media,
+    mediaDownloads,
     outputs,
     overlays,
-    pcoConnected,
     popupData,
     presentationData,
     projects,
     projectTemplates,
     projectView,
+    providerConnections,
     redoHistory,
     shows,
     showsCache,
-    showsPath,
     spellcheck,
     stageShows,
     templates,
@@ -79,14 +80,15 @@ import {
     variables,
     windowState
 } from "../stores"
+import { setupCloudSync } from "../utils/cloudSync"
 import { newToast } from "../utils/common"
-import { validateKeys } from "../utils/drive"
+import { confirmCustom } from "../utils/popup"
 import { initializeClosing, saveComplete } from "../utils/save"
 import { updateSettings, updateSyncedSettings, updateThemeValues } from "../utils/updateSettings"
 import type { MainReturnPayloads } from "./../../types/IPC/Main"
 import { Main } from "./../../types/IPC/Main"
-import { convertMediaShout } from "../converters/mediashout"
-import { getSlidesText } from "../components/edit/scripts/textStyle"
+import { invalidateSearchIndex } from "../utils/searchFast"
+import { sendMain } from "./main"
 
 type MainHandler<ID extends Main | ToMain> = (data: ID extends keyof ToMainSendPayloads ? ToMainSendPayloads[ID] : ID extends keyof MainReturnPayloads ? Awaited<MainReturnPayloads[ID]> : undefined) => void
 export type MainResponses = {
@@ -109,9 +111,18 @@ export const mainResponses: MainResponses = {
 
         shows.set(a)
     },
-    [Main.STAGE_SHOWS]: (a) => stageShows.set(a),
+    [Main.STAGE]: (a) => stageShows.set(a),
     [Main.PROJECTS]: (a) => {
-        projects.set(a.projects || {})
+        const projectsList = a.projects || {}
+
+        // remove "Mark as played" on startup
+        Object.values(projectsList).forEach((project) => {
+            project?.shows?.forEach((item) => {
+                delete item.played
+            })
+        })
+
+        projects.set(projectsList)
         folders.set(a.folders || {})
         projectTemplates.set(a.projectTemplates || {})
     },
@@ -132,13 +143,13 @@ export const mainResponses: MainResponses = {
     },
     [Main.CACHE]: (a) => {
         textCache.set(a.text || {})
+        invalidateSearchIndex()
     },
     [Main.USAGE]: (a) => usageLog.set(a),
 
     // MAIN
     [ToMain.MENU]: (a) => menuClick(a),
     [ToMain.API]: async (a) => await API_ACTIONS[a.action]?.(a.data),
-    [Main.SHOWS_PATH]: (a) => showsPath.set(a),
     [Main.DATA_PATH]: (a) => dataPath.set(a),
     [ToMain.ALERT]: (a) => {
         alertMessage.set(a || "")
@@ -159,7 +170,7 @@ export const mainResponses: MainResponses = {
     [ToMain.RECEIVE_MIDI2]: (a) => receivedMidi(a),
     [Main.DELETE_SHOWS]: (a) => {
         if (!a.deleted.length) {
-            newToast("$toast.delete_shows_empty")
+            newToast("toast.delete_shows_empty")
             return
         }
 
@@ -180,14 +191,14 @@ export const mainResponses: MainResponses = {
         if (!finished) return activePopup.set(null)
 
         console.info("Backed up to:", path)
-        newToast(get(dictionary).settings?.backup_finished || "") // + ": " + path)
+        newToast("settings.backup_finished") // + ": " + path)
     },
     [ToMain.RESTORE2]: ({ finished, starting }) => {
         if (!finished) {
             if (get(activePopup) !== "initialize") activePopup.set(null)
             return
         }
-        if (starting) return newToast("$settings.restore_started")
+        if (starting) return newToast("settings.restore_started")
 
         // close opened
         activeEdit.set({ items: [] })
@@ -195,29 +206,9 @@ export const mainResponses: MainResponses = {
         activePage.set("show")
         if (get(activePopup) === "initialize") activePopup.set(null)
 
-        newToast("$settings.restore_finished")
+        newToast("settings.restore_finished")
     },
-    [Main.LOCATE_MEDIA_FILE]: (data) => {
-        if (!data) return
-        let prevPath = ""
-
-        showsCache.update((a) => {
-            const mediaData = a[data.ref.showId].media[data.ref.mediaId]
-            if (data.ref.cloudId) {
-                if (!mediaData.cloud) a[data.ref.showId].media[data.ref.mediaId].cloud = {}
-                prevPath = a[data.ref.showId].media[data.ref.mediaId].cloud![data.ref.cloudId]
-                a[data.ref.showId].media[data.ref.mediaId].cloud![data.ref.cloudId] = data.path
-            } else {
-                prevPath = a[data.ref.showId].media[data.ref.mediaId].path || ""
-                a[data.ref.showId].media[data.ref.mediaId].path = data.path
-            }
-
-            return a
-        })
-
-        // sometimes when lagging the image will be "replaced" even when it exists
-        if (prevPath !== data.path) newToast("$toast.media_replaced")
-    },
+    [ToMain.RECENTLY_ADDED_FILES]: (data) => updateRecentlyAddedFiles(data.paths),
     [Main.MEDIA_TRACKS]: (data) => setMediaTracks(data),
     [ToMain.API_TRIGGER2]: (data) => triggerAction(data),
     [ToMain.PRESENTATION_STATE]: (data) => presentationData.set(data),
@@ -227,6 +218,23 @@ export const mainResponses: MainResponses = {
     [ToMain.CAPTURE_CANVAS]: (data) => captureCanvas(data),
     [ToMain.LESSONS_DONE]: (data) => lessonsLoaded.set({ ...get(lessonsLoaded), [data.showId]: data.status }),
     [ToMain.IMAGES_TO_SHOW]: (data) => createImageShow(data),
+    [ToMain.MEDIA_DOWNLOAD_PROGRESS]: (data) => {
+        mediaDownloads.update((downloads) => {
+            const newDownloads = new Map(downloads)
+            if (data.status === "complete" || data.status === "error") {
+                // Remove completed/errored downloads after a short delay
+                setTimeout(() => {
+                    mediaDownloads.update((d) => {
+                        const updated = new Map(d)
+                        updated.delete(data.url)
+                        return updated
+                    })
+                }, 2000)
+            }
+            newDownloads.set(data.url, { progress: data.progress, total: data.total, status: data.status })
+            return newDownloads
+        })
+    },
     [ToMain.AUDIO_METADATA]: (data) => {
         audioData.update((a) => {
             a[data.filePath] = { metadata: data.metadata }
@@ -243,16 +251,26 @@ export const mainResponses: MainResponses = {
 
         // get "actual" variables
         Object.entries(get(variables)).forEach(([id, a]) => {
-            variableData[`variable_${getLabelId(a.name, false)}`] = getVariableValue(id)
+            if (!a.name) return
+            let val = _getVariableValue(id)
+            if (Array.isArray(val)) val = val[0]
+            variableData[`variable_${getLabelId(a.name, false)}`] = val
         })
 
         // get timers
         Object.entries(get(timers)).forEach(([id, a]) => {
+            if (!a.name) return
             const labelId = getLabelId(a.name, false)
             const currentTime = getCurrentTimerValue(a, { id }, new Date())
             const timeValue = `${currentTime < 0 ? "-" : ""}${joinTimeBig(typeof currentTime === "number" ? currentTime : 0)}`
             variableData[`timer_${labelId}`] = timeValue
             variableData[`timer_${labelId}_seconds`] = currentTime.toString()
+            const activeTimer = get(activeTimers).find((timer) => timer.id === id)
+            let status = "Stopped"
+            if (activeTimer) {
+                status = activeTimer.paused ? "Paused" : "Playing"
+            }
+            variableData[`timer_${labelId}_status`] = status
         })
 
         // timer status
@@ -264,113 +282,112 @@ export const mainResponses: MainResponses = {
     },
 
     // CONNECTION
-    [ToMain.PCO_CONNECT]: (data) => {
+    // UNIFIED PROVIDER CALLBACKS
+    [ToMain.PROVIDER_CONNECT]: (data) => {
         if (!data.success) return
-        pcoConnected.set(true)
-        if (data.isFirstConnection) newToast("$main.finished")
+
+        providerConnections.update((c) => {
+            c[data.providerId] = true
+            return c
+        })
+
+        if (data.isFirstConnection) newToast("main.finished")
+
+        setTimeout(() => {
+            setupCloudSync(!data.isFirstConnection)
+        }, 1000)
     },
-    [ToMain.PCO_PROJECTS]: (data) => {
+    [ToMain.PROVIDER_PROJECTS]: async (data) => {
         if (!data.projects) return
 
         // CREATE CATEGORY
-        createCategory("Planning Center")
+        createCategory(data.categoryName)
+
+        const replaceIds: { [key: string]: string } = {}
+        const allShows = keysToID(get(shows))
+        const providerLocalAlways = get(contentProviderData)[data.providerId]?.localAlways ?? false
 
         // CREATE SHOWS
         const tempShows: { id: string; show: Show }[] = []
-        data.shows.forEach((show) => {
+        for (const show of data.shows) {
             const id = show.id
 
-            // don't add/update if already existing (to not mess up any set styles)
-            if (get(shows)[id]) return
+            // TODO: check if name contains scripture reference (and is empty), and load from active scripture
 
-            delete show.id
-            tempShows.push({ id, show: { ...show, origin: "pco", name: checkName(show.name, id) } })
-        })
-        setTempShows(tempShows)
+            // first find any shows linked to the id
+            const linkKey = data.providerId === "planningcenter" ? "pcoLink" : data.providerId === "churchApps" ? "chumsLink" : data.providerId === "amazinglife" ? "alLink" : ""
+            const linkedShow = linkKey && allShows.find(({ quickAccess }) => quickAccess?.[linkKey] === id)
+            if (linkedShow) {
+                replaceIds[id] = linkedShow.id
+                if (providerLocalAlways) continue
+                Object.values<Slide>(show.slides).forEach((slide) => {
+                    if (slide.globalGroup || !slide.group) return
 
-        data.projects.forEach((pcoProject) => {
-            // CREATE PROJECT FOLDER
-            const folderId = pcoProject.folderId
-            if (folderId && (!get(folders)[folderId] || get(folders)[folderId].deleted)) {
-                history({ id: "UPDATE", newData: { replace: { parent: "/", name: pcoProject.folderName } }, oldData: { id: folderId }, location: { page: "show", id: "project_folder" } })
+                    const globalGroup = getGlobalGroup(slide.group)
+                    if (globalGroup) slide.globalGroup = globalGroup
+                })
+
+                const origin = data.providerId === "planningcenter" ? "pco" : data.providerId
+                tempShows.push({ id: linkedShow.id, show: { ...show, origin, name: checkName(show.name, linkedShow.id), quickAccess: { ...(linkedShow.quickAccess || {}), [linkKey]: id } } })
+                continue
             }
 
-            // CREATE PROJECT
-            const project: Project = {
-                name: pcoProject.name,
-                created: pcoProject.created,
-                used: Date.now(), // show on top in last used list
-                parent: folderId || "/",
-                shows: pcoProject.items || []
-            }
+            // find existing show with same name and ask to replace
+            const providerName = data.providerId === "planningcenter" ? "Planning Center" : data.providerId === "churchApps" ? "ChurchApps" : "the cloud"
+            const existingShow = allShows.find(({ id: existingId, name }) => existingId !== id && name.toLowerCase() === show.name.toLowerCase())
+            // const existingShowHasContent = existingShow && (await loadShows([existingShow.id])) && getSlidesText(get(showsCache)[existingShow.id].slides)
+            if (existingShow) {
+                const useLocal = providerLocalAlways || (await confirmCustom(`There is an existing show with the same name: ${existingShow.name}.<br><br>Would you like to use the local version instead of the one from ${providerName}?`))
+                if (useLocal) {
+                    replaceIds[id] = existingShow.id
 
-            const projectId = pcoProject.id
-            history({ id: "UPDATE", newData: { data: project }, oldData: { id: projectId }, location: { page: "show", id: "project" } })
-        })
+                    await loadShows([existingShow.id])
+                    showsCache.update((a) => {
+                        if (!a[existingShow.id].quickAccess) a[existingShow.id].quickAccess = {}
+                        if (linkKey) a[existingShow.id].quickAccess[linkKey] = id
+                        return a
+                    })
 
-        // open closest to today
-        activeProject.set(data.projects.sort((a, b) => a.scheduledTo - b.scheduledTo)[0]?.id)
-        projectView.set(false)
-    },
-    // CHUMS CONNECTION
-    [ToMain.CHUMS_CONNECT]: (data) => {
-        if (!data.success) return
-        chumsConnected.set(true)
-        if (data.isFirstConnection) newToast("$main.finished")
-    },
-    [ToMain.CHUMS_PROJECTS]: async (data) => {
-        if (!data.projects) return
-
-        // CREATE CATEGORY
-        createCategory("Chums")
-
-        // CREATE SHOWS
-        let replaceIds: { [key: string]: string } = {}
-        const tempShows: { id: string; show: Show }[] = []
-        for (let show of data.shows) {
-            const id = show.id
-
-            // don't add/update if already existing (to not mess up any set styles)
-            if (get(shows)[id]) continue
-
-            // replace with existing Chums show, that has the same name (but different ID), if it's without content
-            for (let [id, currentShow] of Object.entries(get(shows))) {
-                if (currentShow.name !== show.name || currentShow.origin !== "chums") continue
-                await loadShows([id])
-
-                const loadedShow = get(showsCache)[id]
-                if (!getSlidesText(loadedShow.slides)) {
-                    replaceIds[show.id] = id
-                    break
+                    continue
                 }
             }
 
-            if (replaceIds[show.id]) continue
+            if (providerLocalAlways && get(shows)[id]) continue
+
+            // replace group names with existing global groups
+            Object.values<Slide>(show.slides).forEach((slide) => {
+                if (slide.globalGroup || !slide.group) return
+
+                const globalGroup = getGlobalGroup(slide.group)
+                if (globalGroup) slide.globalGroup = globalGroup
+            })
 
             delete show.id
-            tempShows.push({ id, show: { ...show, origin: "chums", name: checkName(show.name, id) } })
+            const origin = data.providerId === "planningcenter" ? "pco" : data.providerId
+            tempShows.push({ id, show: { ...show, origin, name: checkName(show.name, id), quickAccess: { [linkKey]: id } } })
         }
         setTempShows(tempShows)
 
-        data.projects.forEach((chumsProject) => {
+        data.projects.forEach((currentProject) => {
             // CREATE PROJECT FOLDER
-            const folderId = chumsProject.folderId
+            const folderId = currentProject.folderId
             if (folderId && (!get(folders)[folderId] || get(folders)[folderId].deleted)) {
-                history({ id: "UPDATE", newData: { replace: { parent: "/", name: chumsProject.folderName } }, oldData: { id: folderId }, location: { page: "show", id: "project_folder" } })
+                history({ id: "UPDATE", newData: { replace: { parent: "/", name: currentProject.folderName } }, oldData: { id: folderId }, location: { page: "show", id: "project_folder" } })
             }
 
             // CREATE PROJECT
             const project: Project = {
-                name: chumsProject.name,
-                created: chumsProject.created,
+                name: currentProject.name,
+                created: currentProject.created,
                 used: Date.now(), // show on top in last used list
                 parent: folderId || "/",
-                shows: chumsProject.items || []
+                shows: currentProject.items || []
             }
 
+            // REPLACE IDS
             project.shows = project.shows.map((a) => ({ ...a, id: replaceIds[a.id] || a.id }))
 
-            const projectId = chumsProject.id
+            const projectId = currentProject.id
             history({ id: "UPDATE", newData: { data: project }, oldData: { id: projectId }, location: { page: "show", id: "project" } })
         })
 
@@ -380,37 +397,23 @@ export const mainResponses: MainResponses = {
     },
     [ToMain.OPEN_FOLDER2]: (a) => {
         const receiveFOLDER = {
-            MEDIA: () => addDrawerFolder(a, "media"),
-            AUDIO: () => addDrawerFolder(a, "audio"),
-            SHOWS: () => showsPath.set(a.path),
-            DATA: () => dataPath.set(a.path),
-            DATA_SHOWS: () => {
-                dataPath.set(a.path)
-                if (a.showsPath) showsPath.set(a.showsPath)
-            }
+            MEDIA: () => addDrawerFolder(a, "media"), // menuClick
+            AUDIO: () => addDrawerFolder(a, "audio") // menuClick
         }
 
         if (!receiveFOLDER[a.channel]) return
         receiveFOLDER[a.channel]()
-    },
-    [ToMain.OPEN_FILE2]: (a) => {
-        const receiveFILE = {
-            GOOGLE_KEYS: () => {
-                const path = a.files[0]
-                const file = a.content[path]
-                if (file) validateKeys(file)
-            }
-        }
-
-        if (!receiveFILE[a.channel]) return
-        receiveFILE[a.channel]()
     },
     [ToMain.IMPORT2]: (a) => {
         const mainData = a.data
 
         const receiveFilePathIMPORT = {
             // Media
-            pdf: () => addToProject("pdf", mainData as string[]),
+            pdf: () => {
+                // convert to images directly - drag and drop to keep as PDF
+                ;(mainData as string[]).forEach((path) => sendMain(Main.PDF_TO_IMAGE, { filePath: path }))
+                // addToProject("pdf", mainData as string[])
+            },
             powerkey: () => addToProject("ppt", mainData as string[])
         }
         if (mainData.find((dataValue) => typeof dataValue === "string")) {
@@ -455,5 +458,9 @@ export const mainResponses: MainResponses = {
 
         if (!receiveIMPORT[a.channel]) return
         receiveIMPORT[a.channel]()
-    }
+    },
+    // Timecode
+    [Main.TIMECODE_VALUE]: (data) => updateTimelineTime(data!),
+    [Main.TIMECODE_STATUS]: (data) => updateTimelineStatus(data!),
+    [Main.TIMECODE_AUDIO_DATA]: (data) => processTimecodeFrame(data!)
 }

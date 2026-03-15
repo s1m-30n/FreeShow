@@ -1,4 +1,5 @@
 import type { Item, Line, Slide } from "../../../../types/Show"
+import { replaceVirtualBreaks } from "../../../show/slides"
 
 // add new style to text by selection
 export function addStyle(selection: { start: number; end: number }[], item: Item, style: string | any[]): Item {
@@ -7,21 +8,23 @@ export function addStyle(selection: { start: number; end: number }[], item: Item
         let pos = 0
         if (selection[i]?.start !== undefined) {
             line.text?.forEach((text) => {
-                const length: number = text.value.length
+                const value = text.value || ""
+                const length = value.length
+
                 let from = 0
                 let to = length
                 if (pos < selection[i].start && pos + length > selection[i].start) from = selection[i].start - pos
                 if (pos < selection[i].end && pos + length > selection[i].end) to = selection[i].end - pos
 
                 if ((pos < selection[i].start && pos + length > selection[i].start) || (pos < selection[i].end && pos + length > selection[i].end) || (pos >= selection[i].start && pos + length <= selection[i].end)) {
-                    if (from > 0) newText.push({ value: text.value.slice(0, from), style: text.style })
+                    if (from > 0) newText.push({ value: value.slice(0, from), style: text.style })
                     if (to - from > 0 && to - from <= length) {
                         let newStyle = ""
                         if (Array.isArray(style)) newStyle = addStyleString(text.style, style)
                         else newStyle = style
-                        newText.push({ value: text.value.slice(from, to), style: newStyle })
+                        newText.push({ value: value.slice(from, to), style: newStyle })
                     }
-                    if (to < length) newText.push({ value: text.value.slice(to, length), style: text.style })
+                    if (to < length) newText.push({ value: value.slice(to, length), style: text.style })
                 } else newText.push(text)
 
                 // empty line
@@ -69,12 +72,14 @@ function combine(item: Item): Item {
 
 // add new style to string and remove old
 export function addStyleString(oldStyle: string, style: any[]): string {
+    if (!oldStyle) return style[1] !== null ? style.join(":") + ";" : ""
+
     let array: string[] = oldStyle.split(";")
     // remove last if empty
     if (!array[array.length - 1].length) array.pop()
-    // remove old styles
-    array.forEach((s, i) => {
-        if (s.split(":")[0].trim() === style[0] || !s.length) array.splice(i, 1)
+    // remove old styles using filter to avoid index issues
+    array = array.filter((s) => {
+        return s.split(":")[0].trim() !== style[0] && s.length > 0
     })
 
     // remove font if changing family
@@ -188,13 +193,15 @@ export function getItemStyleAtPos(lines: Line[], pos: null | { start: number; en
     ;(pos || lines).forEach((_a: any, i: number) => {
         let currentPos = 0
         lines[i]?.text?.some((text) => {
-            // if (pos) console.log(currentPos, pos[i].end, currentPos <= pos[i].end, currentPos + text.value.length >= pos[i].end)
-            if (pos?.[i] && currentPos <= pos[i].end && currentPos + text.value.length >= pos[i].end) {
-                style = text.style
+            const value = text.value || ""
+
+            // if (pos) console.log(currentPos, pos[i].end, currentPos <= pos[i].end, currentPos + value.length >= pos[i].end)
+            if (pos?.[i] && currentPos <= pos[i].end && currentPos + value.length >= pos[i].end) {
+                style = text.style || ""
                 return true
             }
 
-            currentPos += text.value.length
+            currentPos += value.length
             return false
         })
     })
@@ -209,8 +216,10 @@ export function getItemStyleAtPos(lines: Line[], pos: null | { start: number; en
 
 // get item align at selected pos
 export function getLastLineAlign(item: Item, selection: any): string {
+    if (!selection?.length) return item?.lines?.[0]?.align || ""
+
     let last = ""
-    item?.lines!.forEach((line, i) => {
+    item?.lines?.forEach((line, i) => {
         if (!selection || selection[i]?.start !== undefined) last = line.align
     })
     return last
@@ -241,7 +250,7 @@ export function getTextLines(slide: Slide | { items: Item[] }) {
         if (!fullText.length) lines.pop()
     })
 
-    return lines
+    return lines.map((a) => replaceVirtualBreaks(a))
 }
 
 // get text of slides
@@ -256,18 +265,14 @@ export function getSlideText(slide: Slide) {
 }
 
 // get text of item.text...
-export function getItemText(item: Item): string {
+export function getItemText(item: Item | null): string {
     let text = ""
-    if (!item?.lines) return ""
 
-    item.lines.forEach((line) => {
-        console.assert(Array.isArray(line?.text), "Text is not an array!")
-        if (!Array.isArray(line?.text)) return
-
-        line.text.forEach((content) => {
-            text += content.value
-        })
-    })
+    for (const line of item?.lines ?? []) {
+        for (const t of line.text ?? []) {
+            if (t.value) text += t.value
+        }
+    }
 
     return text
 }
@@ -277,26 +282,10 @@ export function getItemTextArray(item: Item): string[] {
     if (!item?.lines) return []
 
     item.lines.forEach((line) => {
-        if (!line.text) return
+        if (!Array.isArray(line?.text)) return
 
         line.text.forEach((content) => {
             text.push(content.value)
-        })
-    })
-
-    return text
-}
-
-// get chords map
-export function getItemChords(item: Item): string {
-    let text = ""
-    if (!Array.isArray(item?.lines)) return ""
-
-    item.lines.forEach((line) => {
-        if (!line.chords?.length) return
-
-        line.chords.forEach((chord) => {
-            text += chord.key
         })
     })
 
@@ -311,37 +300,6 @@ export function getLineText(line: Line): string {
     return text
 }
 
-// seperate text with breaks
-export function getItemLines(item: Item): string[] {
-    const lines: string[] = []
-    item.lines?.forEach((line) => {
-        let text = ""
-        line.text?.forEach((content) => (text += content.value))
-        lines.push(text)
-    })
-    return lines
-}
-
-// get caret pos (WIP)
-// https://stackoverflow.com/questions/4811822/get-a-ranges-start-and-end-offsets-relative-to-its-parent-container/4812022#4812022
-export function getCaretCharacterOffsetWithin(element: any) {
-    let caretOffset = 0
-    const doc = element.ownerDocument || element.document
-    const win = doc.defaultView || doc.parentWindow
-    let sel
-    if (typeof win.getSelection !== "undefined") {
-        sel = win.getSelection()
-        if (sel.rangeCount > 0) {
-            const range = win.getSelection().getRangeAt(0)
-            const preCaretRange = range.cloneRange()
-            preCaretRange.selectNodeContents(element)
-            preCaretRange.setEnd(range.endContainer, range.endOffset)
-            caretOffset = preCaretRange.toString().length
-        }
-    }
-    return caretOffset
-}
-
 export function setCaret(element: any, { line = 0, pos = 0 }, toEnd = false) {
     if (!element) return
     const range = document.createRange()
@@ -354,7 +312,7 @@ export function setCaret(element: any, { line = 0, pos = 0 }, toEnd = false) {
     let childElem = -1
     let currentTextLength = 0
     lineElem.childNodes.forEach((elem, i) => {
-        if (childElem >= 0) return
+        if (!elem?.innerText || childElem >= 0) return
         if (pos <= currentTextLength + elem.innerText.length) {
             childElem = i
             return
@@ -365,7 +323,7 @@ export function setCaret(element: any, { line = 0, pos = 0 }, toEnd = false) {
     // pasted on non-existent line
     if (childElem < 0) {
         childElem = lineElem.childNodes.length - 1
-        pos = lineElem.childNodes[childElem].innerText.length
+        pos = lineElem.childNodes[childElem]?.innerText?.length ?? 0
         currentTextLength = 0
     }
 
@@ -379,116 +337,31 @@ export function setCaret(element: any, { line = 0, pos = 0 }, toEnd = false) {
 
     // get end child elem
     const lastEndChild = lastLineElem.childNodes[lastLineElem.childNodes.length - 1]
-    const currentEndTextLength = lastEndChild.innerText.length
+    let currentEndTextLength = lastEndChild?.innerText?.length ?? 0
 
     const breakElem = lastEndChild.childNodes[0]?.nodeName === "BR"
     if (line === 0 && breakElem) return
 
-    const startElem = lineElem.childNodes[childElem].childNodes[0]
+    const startElem = lineElem.childNodes[childElem]?.childNodes[0]
     const endElem = lastEndChild.childNodes[0]
 
-    range.setStart(startElem, pos - currentTextLength)
-    if (toEnd) range.setEnd(endElem, currentEndTextLength)
-    else range.collapse(true)
+    // If startElem is a BR element, set caret before it and not inside it
+    if (startElem?.nodeName === "BR") {
+        const parentSpan = lineElem.childNodes[childElem]
+        range.setStart(parentSpan, 0)
+    } else if (startElem) {
+        const offset = pos - currentTextLength
+        const startElemLength = startElem.length ?? startElem.textContent?.length ?? 0
+        const safeStartOffset = Math.max(0, Math.min(startElemLength, offset))
+        range.setStart(startElem, safeStartOffset)
+    }
+    if (toEnd) {
+        const safeEndOffset = Math.max(0, Math.min(currentEndTextLength, endElem?.length ?? 0))
+        range.setEnd(endElem, safeEndOffset)
+    } else range.collapse(true)
 
     sel?.removeAllRanges()
     sel?.addRange(range)
-}
-
-// https://stackoverflow.com/questions/6249095/how-to-set-the-caret-cursor-position-in-a-contenteditable-element-div
-function createRange(node: any, pos: number, range: any = null) {
-    if (!range) {
-        range = document.createRange()
-        range.selectNode(node)
-        range.setStart(node, 0)
-    }
-
-    if (pos === 0) {
-        range.setEnd(node, pos)
-    } else if (node && pos > 0) {
-        if (node.nodeType === Node.TEXT_NODE) {
-            if (node.textContent.length < pos) {
-                pos -= node.textContent.length
-            } else {
-                range.setEnd(node, pos)
-                pos = 0
-            }
-        } else {
-            for (const childNode of node.childNodes) {
-                range = createRange(childNode, pos, range)
-
-                if (pos === 0) {
-                    break
-                }
-            }
-        }
-    }
-
-    return range
-}
-export function createRange2(node: any, selection: { start: number; end: number }[], range: any = null) {
-    if (!range) {
-        range = document.createRange()
-        range.selectNode(node)
-        range.setEnd(node, 0)
-    }
-
-    // console.log("CREATE RANGE: ", selection, range, node)
-
-    let started = false
-    let ended = false
-
-    selection.forEach((a, i) => {
-        if (a.start !== undefined && (!started || !ended)) {
-            const br = node.children[i]
-            let pos: null | number = 0
-            if (br.childNodes.length) {
-                new Array(...br.childNodes).forEach((text) => {
-                    pos += text.innerText.length
-                    if (!started && pos !== null && pos >= a.start) {
-                        started = true
-                        pos = null
-                        range.setStart(text.firstChild, a.start)
-                    }
-                    if (!ended && pos !== null && pos >= a.end) {
-                        ended = true
-                        pos = null
-                        range.setEnd(text.firstChild, a.end)
-                    }
-                })
-            }
-        }
-    })
-
-    return range
-}
-export function setCurrentCursorPosition(element: any, pos: number) {
-    if (pos >= 0) {
-        const selection = window.getSelection()
-
-        // pos = 90
-        // pos = 142
-        const range = createRange(element, pos)
-
-        // let range = createRange(element.childNodes[0], 5)
-
-        if (range) {
-            range.collapse(false)
-            selection?.removeAllRanges()
-            selection?.addRange(range)
-        }
-    }
-}
-
-export function setCaretPosition(elem: any, pos = 0) {
-    if (elem.createTextRange) {
-        const range = elem.createTextRange()
-        range.move("character", pos)
-        range.select()
-    } else {
-        elem.focus()
-        if (elem.selectionStart) elem.setSelectionRange(pos, pos)
-    }
 }
 
 export function setCaretAtEnd(elem: any) {

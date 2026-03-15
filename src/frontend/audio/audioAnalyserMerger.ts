@@ -1,7 +1,9 @@
 import { get } from "svelte/store"
 import type { AudioChannel } from "../../types/Audio"
 import { OUTPUT } from "../../types/Channels"
-import { audioChannels, currentWindow, outputs } from "../stores"
+import { clone } from "../components/helpers/array"
+import { audioChannels, outputs } from "../stores"
+import { isOutputWindow } from "../utils/common"
 import { send } from "../utils/request"
 import { AudioAnalyser } from "./audioAnalyser"
 import { AudioPlayer } from "./audioPlayer"
@@ -20,6 +22,25 @@ export class AudioAnalyserMerger {
     static addChannels(id: string, channels: AudioChannel[]) {
         this.channels[id] = channels
         AudioAnalyserMerger.init()
+    }
+
+    static getChannels() {
+        const channels = clone(this.channels)
+
+        // smooth channel values
+        Object.entries(channels).forEach(([id, channelArray]) => {
+            channelArray.forEach((channel, _channelIndex) => {
+                if (typeof channel.dB === "number") channel.dB = { value: channel.dB }
+                if (isNaN(channel.dB.value)) return
+
+                // already smoothed
+                if (id === "main") return
+
+                // channel.dB.value = this.getExponentiallySmoothedVolume(`${id}:${channelIndex}`, channel.dB.value)
+            })
+        })
+
+        return channels
     }
 
     static stop() {
@@ -89,13 +110,15 @@ export class AudioAnalyserMerger {
         const mergedChannels = merged.map((a, i) => ({ dB: { value: this.mergeDB(a, i) } }))
         audioChannels.set(mergedChannels)
 
-        if (get(currentWindow) === "output") {
+        if (isOutputWindow()) {
             send(OUTPUT, ["AUDIO_MAIN"], { id: Object.keys(get(outputs))[0], channels: mergedChannels })
         }
     }
 
     private static mergeDB(array: number[], channelIndex: number) {
         if (!array.length) return this.dBmin
+
+        // array = array.filter(Boolean)
 
         // https://stackoverflow.com/a/22613964
         const avgLinear = array.reduce((sum, dB) => (sum += Math.pow(10, dB / 20)), 0) / array.length
@@ -116,18 +139,18 @@ export class AudioAnalyserMerger {
 
         // return (Math.log(newDB) / Math.LN10) * 20
         // return newDB > 0 ? this.getExponentiallySmoothedVolume(channelIndex, Math.log10(newDB) * 20) : this.dBmin
-        return this.getExponentiallySmoothedVolume(channelIndex, newDB)
+        return this.getExponentiallySmoothedVolume(`main:${channelIndex}`, newDB)
     }
 
     private static smoothingFactor = 0.5 // 0 < factor <= 1, lower values smooth more
-    private static smoothedVolumes: { [key: number]: number } = {}
+    private static smoothedVolumes: { [key: string]: number } = {}
 
-    private static getExponentiallySmoothedVolume(channelIndex: number, value: number) {
-        if (this.smoothedVolumes[channelIndex] === undefined) this.smoothedVolumes[channelIndex] = value
+    private static getExponentiallySmoothedVolume(channelId: string, value: number) {
+        if (this.smoothedVolumes[channelId] === undefined) this.smoothedVolumes[channelId] = value
 
         // Exponential smoothing formula
-        this.smoothedVolumes[channelIndex] = this.smoothingFactor * value + (1 - this.smoothingFactor) * this.smoothedVolumes[channelIndex]
+        this.smoothedVolumes[channelId] = this.smoothingFactor * value + (1 - this.smoothingFactor) * this.smoothedVolumes[channelId]
 
-        return this.smoothedVolumes[channelIndex]
+        return this.smoothedVolumes[channelId]
     }
 }

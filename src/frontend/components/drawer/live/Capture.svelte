@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from "svelte"
+    import { onDestroy, onMount } from "svelte"
     import { Main } from "../../../../types/IPC/Main"
     import { sendMain } from "../../../IPC/main"
     import { outputs } from "../../../stores"
@@ -39,6 +39,11 @@
         }
     }
 
+    let retryTimeout: NodeJS.Timeout | null = null
+    onDestroy(() => {
+        if (retryTimeout) clearTimeout(retryTimeout)
+    })
+
     onMount(capture)
     function capture() {
         navigator.mediaDevices
@@ -62,7 +67,7 @@
                 // }
 
                 // retry
-                setTimeout(capture, 5000)
+                retryTimeout = setTimeout(capture, 5000)
             })
     }
 </script>
@@ -72,19 +77,7 @@
         <track kind="captions" />
     </video>
 {:else}
-    <Card
-        mediaData={JSON.stringify(constraints)}
-        class="context #screen_card"
-        {loaded}
-        outlineColor={findMatchingOut(screen.id, $outputs)}
-        active={findMatchingOut(screen.id, $outputs) !== null}
-        on:click
-        title={screen.name}
-        label={screen.name}
-        icon={screen.id.includes("screen") ? "screen" : "window"}
-        white={!screen.id.includes("screen")}
-        showPlayOnHover
-    >
+    <Card mediaData={JSON.stringify(constraints)} class="context #screen_card" {loaded} outlineColor={findMatchingOut(screen.id, $outputs)} active={findMatchingOut(screen.id, $outputs) !== null} on:click title={screen.name} label={screen.name} icon={screen.id.includes("screen") ? "screen" : "window"} white={!screen.id.includes("screen")} showPlayOnHover>
         <SelectElem style="display: flex;" id="screen" data={{ id: screen.id, type: "screen", name: screen.name }} draggable>
             <canvas bind:this={canvas} />
             {#if !loaded}
@@ -99,7 +92,7 @@
 <style>
     video {
         position: absolute;
-        inset-inline-start: 50%;
+        left: 50%;
         top: 50%;
         transform: translate(-50%, -50%);
     }

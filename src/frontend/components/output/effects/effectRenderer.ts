@@ -1,62 +1,7 @@
-import type {
-    AssetItem,
-    AuroraItem,
-    BloomItem,
-    BubbleItem,
-    CircleItem,
-    CityItem,
-    CycleItem,
-    EffectDefinition,
-    EffectFunction,
-    EffectInit,
-    EffectItem,
-    EffectType,
-    FireworkItem,
-    FogItem,
-    GalaxyItem,
-    GrassItem,
-    LensFlareItem,
-    LightningItem,
-    RainbowItem,
-    RainItem,
-    RayItem,
-    RectangleItem,
-    ShapeItem,
-    Side,
-    SnowItem,
-    SpotlightItem,
-    StarItem,
-    SunItem,
-    TriangleItem,
-    WaveItem
-} from "../../../../types/Effects"
+import type { AssetItem, AuroraItem, BloomItem, BubbleItem, CircleItem, CityItem, CycleItem, EffectDefinition, EffectFunction, EffectInit, EffectItem, EffectType, FireworkItem, FogItem, GalaxyItem, GrassItem, LensFlareItem, LightningItem, RainbowItem, RainItem, RayItem, RectangleItem, ShapeItem, Side, SnowItem, SpotlightItem, StarItem, SunItem, TriangleItem, WaveItem } from "../../../../types/Effects"
 import { createNoise2D } from "./simplex-noise"
 
-const effectTypes: readonly EffectType[] = [
-    "circle",
-    "rectangle",
-    "triangle",
-    "wave",
-    "bubbles",
-    "stars",
-    "galaxy",
-    "rain",
-    "snow",
-    "sun",
-    "lens_flare",
-    "spotlight",
-    "aurora",
-    "bloom",
-    "fog",
-    "city",
-    "rays",
-    "fireworks",
-    "cycle",
-    "grass",
-    "lightning",
-    "rainbow",
-    "asset"
-] as const
+const effectTypes: readonly EffectType[] = ["circle", "rectangle", "triangle", "wave", "bubbles", "stars", "galaxy", "rain", "snow", "sun", "lens_flare", "spotlight", "aurora", "bloom", "fog", "city", "rays", "fireworks", "cycle", "grass", "lightning", "rainbow", "asset"] as const
 // type EffectType = (typeof effectTypes)[number]
 
 export class EffectRender {
@@ -72,7 +17,7 @@ export class EffectRender {
 
     TYPES: Record<string, EffectDefinition> = {}
 
-    constructor(canvas: HTMLCanvasElement, items: EffectItem[], isPreview: boolean = false) {
+    constructor(canvas: HTMLCanvasElement, items: EffectItem[], isPreview = false) {
         if (!canvas) throw new Error("Canvas element not found")
 
         // this.width = canvas.width || this.width
@@ -117,14 +62,14 @@ export class EffectRender {
         this.items = items.filter((a) => !a.hidden)
     }
 
-    updateItems(items: EffectItem[], _noFrameChange: boolean = false) {
+    updateItems(items: EffectItem[], _noFrameChange = false) {
         this.setItems(items)
 
         // if (noFrameChange) return
         this.frame(0, true)
     }
 
-    frame(deltaTime: number, init: boolean = false) {
+    frame(deltaTime: number, init = false) {
         const ctx = this.ctx
         ctx.clearRect(0, 0, this.width, this.height)
 
@@ -133,7 +78,7 @@ export class EffectRender {
             if (!effect) {
                 if (init) {
                     console.warn("Unknown effect type:", item.type)
-                    console.log(this.TYPES)
+                    // console.log(this.TYPES)
                 }
                 continue
             }
@@ -206,7 +151,7 @@ export class EffectRender {
         return Math.random() < 0.5 ? -1 : 1
     }
 
-    checkOffscreen(item: { x: number; y: number; length?: number; size?: number; radius?: number; speed?: number }, inverted: boolean = false) {
+    checkOffscreen(item: { x: number; y: number; length?: number; size?: number; radius?: number; speed?: number }, inverted = false) {
         const size = item.size ?? item.radius ?? item.length ?? 0
         const speed = item.speed || 0
         const offscreen = (inverted ? speed > 0 : speed < 0) ? item.y + size < 0 : item.y - size > this.height
@@ -264,8 +209,28 @@ export class EffectRender {
         this.ctx.fill()
     }
 
-    setGlow(x: number, y: number, radius: number, color: string = "white") {
-        const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, radius)
+    private clamp01(value: number) {
+        return Math.min(1, Math.max(0, value))
+    }
+
+    private createSafeRadialGradient(ctx: CanvasRenderingContext2D, x: number, y: number, innerR: number, outerR: number) {
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(innerR) || !Number.isFinite(outerR)) return null
+
+        const safeInnerR = Math.max(0, innerR)
+        const safeOuterR = Math.max(0, outerR)
+        if (safeOuterR <= 0 || safeOuterR < safeInnerR) return null
+
+        return {
+            gradient: ctx.createRadialGradient(x, y, safeInnerR, x, y, safeOuterR),
+            safeOuterR
+        }
+    }
+
+    setGlow(x: number, y: number, radius: number, color = "white") {
+        const safe = this.createSafeRadialGradient(this.ctx, x, y, 0, radius)
+        if (!safe) return
+
+        const gradient = safe.gradient
         gradient.addColorStop(0, color)
         gradient.addColorStop(1, "transparent")
 
@@ -297,7 +262,7 @@ export class EffectRender {
         }
     }
 
-    //////
+    /// ///
 
     line(x: number, y: number) {
         this.ctx.lineTo(x, y)
@@ -335,7 +300,7 @@ export class EffectRender {
         const stars = this.effectData.get(item)
         if (!stars) return
 
-        for (let star of stars) {
+        for (const star of stars) {
             const x = star.x
             const y = star.y
             const glowRadius = star.radius * 2
@@ -432,7 +397,8 @@ export class EffectRender {
         const rotationSpeed = item.rotationSpeed * 0.0002 * deltaTime
 
         for (const star of stars) {
-            let x, y
+            let x
+            let y
 
             if (!star.inCore) {
                 star.rotation += rotationSpeed
@@ -490,7 +456,7 @@ export class EffectRender {
         ctx.strokeStyle = item.color
         ctx.lineWidth = item.width
 
-        for (let drop of drops) {
+        for (const drop of drops) {
             ctx.beginPath()
             ctx.moveTo(drop.x, drop.y)
             ctx.lineTo(drop.x, drop.y + drop.length)
@@ -528,7 +494,7 @@ export class EffectRender {
 
         ctx.fillStyle = item.color
 
-        for (let flake of snowflakes) {
+        for (const flake of snowflakes) {
             // sway motion
             const sway = Math.sin(time + flake.phase) * flake.drift * 2
 
@@ -567,7 +533,7 @@ export class EffectRender {
         const bubbles = this.effectData.get(item) || []
         const time = performance.now()
 
-        for (let bubble of bubbles) {
+        for (const bubble of bubbles) {
             const pulse = Math.sin(time * bubble.pulseSpeed + bubble.pulsePhase) * 0.3 + 1
             const radius = bubble.radius * pulse
 
@@ -650,7 +616,7 @@ export class EffectRender {
 
                 points.push({
                     x: x + curve,
-                    y: y,
+                    y,
                     width: widthAtPoint
                 })
             }
@@ -748,7 +714,7 @@ export class EffectRender {
             let buffer = ""
             let depth = 0
 
-            for (let char of str) {
+            for (const char of str) {
                 if (char === "(") depth++
                 if (char === ")") depth--
                 if (char === "," && depth === 0) {
@@ -809,7 +775,10 @@ export class EffectRender {
             const stopsStr = match[2]
             const r = Math.min(width, height) / 2
 
-            const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, r)
+            const safe = this.createSafeRadialGradient(ctx, 0, 0, 0, r)
+            if (!safe) return { gradient: gradientStr, plainColor: gradientStr }
+
+            const gradient = safe.gradient
 
             const stops = splitStops(stopsStr)
 
@@ -833,7 +802,7 @@ export class EffectRender {
         return { gradient: gradientStr, plainColor: gradientStr }
     }
 
-    drawRotatingShape(item: ShapeItem, deltaTime: number, drawShapeFn: (ctx: CanvasRenderingContext2D, item: any) => void) {
+    drawRotatingShape(item: ShapeItem, deltaTime: number, drawShapeFn: (canvasCtx: CanvasRenderingContext2D, shapeItem: any) => void) {
         const ctx = this.ctx
         const centerX = this.getOffsetX(item.x)
         const centerY = this.getOffsetY(item.y)
@@ -940,7 +909,8 @@ export class EffectRender {
     drawSun(item: Required<SunItem>, deltaTime: number) {
         const ctx = this.ctx
 
-        let x: number, y: number
+        let x: number
+        let y: number
         if (item.speed) {
             const data = this.effectData.get(item)
             if (!data) return
@@ -1028,7 +998,8 @@ export class EffectRender {
             const r = baseRadius + waveOffset
             const px = x + Math.cos(angle) * r
             const py = y + Math.sin(angle) * r
-            i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+            if (i === 0) ctx.moveTo(px, py)
+            else ctx.lineTo(px, py)
         }
         ctx.closePath()
 
@@ -1041,11 +1012,17 @@ export class EffectRender {
 
     fillRadialGradient(x: number, y: number, innerR: number, outerR: number, stops: [string, number][]) {
         const ctx = this.ctx
-        const grad = ctx.createRadialGradient(x, y, innerR, x, y, outerR)
-        for (const [color, stop] of stops) grad.addColorStop(stop, color)
+        const safe = this.createSafeRadialGradient(ctx, x, y, innerR, outerR)
+        if (!safe) return
+
+        const grad = safe.gradient
+        for (const [color, stop] of stops) {
+            if (!Number.isFinite(stop)) continue
+            grad.addColorStop(this.clamp01(stop), color)
+        }
         ctx.fillStyle = grad
         ctx.beginPath()
-        ctx.arc(x, y, outerR, 0, this.doublePI)
+        ctx.arc(x, y, safe.safeOuterR, 0, this.doublePI)
         ctx.fill()
     }
 
@@ -1076,7 +1053,7 @@ export class EffectRender {
 
     /// LENS FLARE ///
 
-    private setColorStops(gradient: CanvasGradient, stops: Array<[number, string]>) {
+    private setColorStops(gradient: CanvasGradient, stops: [number, string][]) {
         for (const [offset, color] of stops) {
             gradient.addColorStop(offset, color)
         }
@@ -1122,7 +1099,10 @@ export class EffectRender {
             const discX = (centerX - x) * offset + centerX
             const discY = (centerY - y) * offset + centerY
 
-            const grad = ctx.createRadialGradient(discX, discY, 0, discX, discY, discData.dia)
+            const safe = this.createSafeRadialGradient(ctx, discX, discY, 0, discData.dia)
+            if (!safe) continue
+
+            const grad = safe.gradient
             this.setColorStops(grad, [
                 [0, `hsla(${discData.hue},100%,90%,${0 * dist})`],
                 [0.9, `hsla(${discData.hue},100%,90%,${0.15 * dist})`],
@@ -1131,7 +1111,7 @@ export class EffectRender {
 
             ctx.beginPath()
             ctx.fillStyle = grad
-            ctx.arc(discX, discY, discData.dia, 0, this.doublePI)
+            ctx.arc(discX, discY, safe.safeOuterR, 0, this.doublePI)
             ctx.fill()
 
             if (i === 0) {
@@ -1144,21 +1124,25 @@ export class EffectRender {
         const ctx = this.ctx
 
         // Glow
-        const grad1 = ctx.createRadialGradient(disc.x, disc.y, 0, disc.x, disc.y, disc.dia * 2)
+        const safeGrad1 = this.createSafeRadialGradient(ctx, disc.x, disc.y, 0, disc.dia * 2)
+        if (!safeGrad1) return
+        const grad1 = safeGrad1.gradient
         this.setColorStops(grad1, [
             [0, `rgba(200,220,255,${0.2 * dist})`],
             [1, "rgba(200,220,255,0)"]
         ])
         ctx.beginPath()
         ctx.fillStyle = grad1
-        ctx.arc(disc.x, disc.y, disc.dia * 2, 0, this.doublePI)
+        ctx.arc(disc.x, disc.y, safeGrad1.safeOuterR, 0, this.doublePI)
         ctx.fill()
 
         // Spectral disc
         const ease = (a: number, b: number, t: number) => (b - a) * (1 - Math.pow(t - 1, 2)) + a
         const spec = ease(disc.dia / 5, disc.dia / 2.5, dist)
         const sdist = 1 - Math.pow(Math.abs(dist - 1), 3)
-        const grad2 = ctx.createRadialGradient(disc.x, disc.y, 0, disc.x, disc.y, spec)
+        const safeGrad2 = this.createSafeRadialGradient(ctx, disc.x, disc.y, 0, spec)
+        if (!safeGrad2) return
+        const grad2 = safeGrad2.gradient
         this.setColorStops(grad2, [
             [0.2 * sdist, `rgba(255,255,255,${sdist})`],
             [0.6, `hsla(${disc.hue},100%,75%,${0.3 * sdist})`],
@@ -1214,7 +1198,7 @@ export class EffectRender {
             const segmentHeight = this.height / segments
             const maxOffset = 50
 
-            let path = [{ x: startX, y: 0 }]
+            const path = [{ x: startX, y: 0 }]
             for (let i = 1; i <= segments; i++) {
                 path.push({
                     x: path[i - 1].x + this.randomNumber(-maxOffset, maxOffset),
@@ -1234,7 +1218,7 @@ export class EffectRender {
             ctx.lineWidth = 2
             ctx.beginPath()
             ctx.moveTo(data.strikePath[0].x, data.strikePath[0].y)
-            for (let point of data.strikePath) {
+            for (const point of data.strikePath) {
                 ctx.lineTo(point.x, point.y)
             }
             ctx.stroke()
@@ -1280,12 +1264,26 @@ export class EffectRender {
             const b = hex.length === 3 ? (bigint & 0xf) * 17 : bigint & 255
             return `rgba(${r},${g},${b},${opacity})`
         } else {
+            // Match either rgb(61,153,112) OR rgb(61 153 112 / 0.6)
             const match = baseColor.match(/rgba?\(([^)]+)\)/)
             if (match) {
-                const [r, g, b] = match[1].split(",").map((n: string) => parseFloat(n.trim()))
-                return `rgba(${r},${g},${b},${opacity})`
+                const parts = match[1].trim()
+
+                // modern syntax with spaces
+                if (parts.includes("/")) {
+                    const [rgbPart] = parts.split("/")
+                    const [r, g, b] = rgbPart
+                        .trim()
+                        .split(/\s+/)
+                        .map((n: string) => parseFloat(n))
+                    return `rgba(${r},${g},${b},${opacity})`
+                } else {
+                    const [r, g, b] = parts.split(",").map((n: string) => parseFloat(n.trim()))
+                    return `rgba(${r},${g},${b},${opacity})`
+                }
             }
         }
+
         return baseColor
     }
 
@@ -1317,7 +1315,9 @@ export class EffectRender {
 
         const baseColor = item.color
 
-        const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, length * 0.9)
+        const safeGradient = this.createSafeRadialGradient(ctx, 0, 0, 0, length * 0.9)
+        if (!safeGradient) return
+        const gradient = safeGradient.gradient
         this.setColorStops(gradient, [
             [0, this.colorWithOpacity(baseColor, 0.3)],
             [0.5, this.colorWithOpacity(baseColor, 0.15)],
@@ -1331,7 +1331,13 @@ export class EffectRender {
         ctx.closePath()
         ctx.fill()
 
-        const glowGradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 200)
+        const safeGlowGradient = this.createSafeRadialGradient(ctx, 0, 0, 0, 200)
+        if (!safeGlowGradient) {
+            ctx.restore()
+            return
+        }
+
+        const glowGradient = safeGlowGradient.gradient
         this.setColorStops(glowGradient, [
             [0, this.colorWithOpacity(baseColor, 0.3)],
             [0.8, this.colorWithOpacity(baseColor, 0)]
@@ -1482,7 +1488,13 @@ export class EffectRender {
             bufferCtx.translate(x, y)
             bufferCtx.rotate(rotation)
 
-            const grad = bufferCtx.createRadialGradient(0, 0, 0, 0, 0, radiusX)
+            const safe = this.createSafeRadialGradient(bufferCtx, 0, 0, 0, radiusX)
+            if (!safe) {
+                bufferCtx.restore()
+                continue
+            }
+
+            const grad = safe.gradient
             grad.addColorStop(0, `hsla(${color}, 90%, 70%, ${alpha})`)
             grad.addColorStop(1, "transparent")
 
@@ -1893,8 +1905,8 @@ export class EffectRender {
             }
         }
 
-        const a = parse(color1),
-            b = parse(color2)
+        const a = parse(color1)
+        const b = parse(color2)
         return `rgba(${Math.round(a.r + (b.r - a.r) * t)}, ${Math.round(a.g + (b.g - a.g) * t)}, ${Math.round(a.b + (b.b - a.b) * t)}, ${(a.a + (b.a - a.a) * t).toFixed(3)})`
     }
 

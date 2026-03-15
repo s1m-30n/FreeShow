@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from "svelte"
     import { activeEdit, activePopup, effects } from "../../../stores"
-    import { translate } from "../../../utils/language"
+    import { translateText } from "../../../utils/language"
     import Card from "../../drawer/Card.svelte"
     import Effect from "../../output/effects/Effect.svelte"
     import { effectItems } from "../../output/effects/effectItems"
@@ -10,6 +10,7 @@
 
     function selectEffect(data: any) {
         effects.update((a) => {
+            if (!a[effectId]) return a
             a[effectId].items.push(data)
             return a
         })
@@ -31,7 +32,7 @@
         {#each Object.keys(effectItems) as type, i}
             {@const data = { type, ...effectItems[type].default }}
 
-            <Card label={translate(`effect.${effectItems[type].default?.type || type}`)} width={100 / 4} on:click={() => selectEffect(data)} checkered>
+            <Card label={translateText(`effect.${effectItems[type].default?.type || type}`)} width={100 / 4} on:click={() => selectEffect(data)} checkered>
                 {#if slowLoader > i}
                     <Effect effect={{ name: "", style: "", background: "", color: null, items: [data] }} preview />
                 {/if}

@@ -1,8 +1,8 @@
 import { get } from "svelte/store"
 import { uid } from "uid"
 import type { Item, Slide, SlideData, Template } from "../../../types/Show"
-import { breakLongLines, removeItemValues, splitItemInTwo } from "../../show/slides"
-import { activeEdit, activePage, activePopup, activeProject, activeShow, alertMessage, cachedShowsData, deletedShows, driveData, groups, notFound, projects, refreshEditSlide, renamedShows, shows, showsCache, templates } from "../../stores"
+import { breakLongLines, removeItemValues } from "../../show/slides"
+import { activeEdit, activePage, activePopup, activeProject, activeShow, alertMessage, cachedShowsData, deletedShows, groups, notFound, projects, refreshEditSlide, renamedShows, shows, showsCache, templates } from "../../stores"
 import { save } from "../../utils/save"
 import { EMPTY_SHOW_SLIDE } from "../../values/empty"
 import { customActionActivation } from "../actions/actions"
@@ -14,6 +14,7 @@ import { addToPos } from "./mover"
 import { getItemsCountByType, isEmptyOrSpecial, mergeWithTemplate, updateLayoutsFromTemplate, updateSlideFromTemplate } from "./output"
 import { loadShows, saveTextCache } from "./setShow"
 import { getShowCacheId } from "./show"
+import { getItemWithMostLines } from "./showActions"
 import { _show } from "./shows"
 
 // TODO: move history switch to actions
@@ -55,6 +56,14 @@ export const historyActions = ({ obj, undo = null }: any) => {
 
                 if (initializing && obj.location.id === "show") customActionActivation("show_created")
                 if (initializing && empty && updater.initialize) data.data = updater.initialize(data.data, id)
+
+                // cloud sync update
+                if (initializing && obj.location.id === "project_ref") {
+                    projects.update((a) => {
+                        a[id].modified = Date.now()
+                        return a
+                    })
+                }
 
                 if (data.replace) {
                     data.data = { ...data.data, ...data.replace }
@@ -134,10 +143,7 @@ export const historyActions = ({ obj, undo = null }: any) => {
                 data = { ...data, data: clone(a[id]) }
 
                 if (previousData) a[id] = previousData
-                else {
-                    if (updater.cloudCombine) a[id] = { id, deleted: true, modified: Date.now() }
-                    else delete a[id]
-                }
+                else delete a[id]
 
                 return a
             }
@@ -162,7 +168,7 @@ export const historyActions = ({ obj, undo = null }: any) => {
 
                 if (subkey && index !== undefined && index > -1 && !Array.isArray(a[id][key][subkey])) delete data.previousData
 
-                if (initializing && updater.timestamp && a[id]) a[id].modified = Date.now()
+                if (updater.timestamp && a[id]) a[id].modified = Date.now() // cloud sync
                 if (data.previousData === data.data) console.warn(obj.id, "HISTORY:", "Previous data is the same as current data. Try using clone()!")
                 return a
             }
@@ -304,6 +310,9 @@ export const historyActions = ({ obj, undo = null }: any) => {
                     } else {
                         if (!show) return
 
+                        // don't overwrite from project if locked
+                        if (projectImport && get(shows)[id]?.locked) return
+
                         // return if old show is modified after new show & not importing project
                         if (initializing && !projectImport && get(shows)[id]?.timestamps?.modified && show.timestamps?.modified && get(shows)[id].timestamps.modified! > show.timestamps.modified) return
 
@@ -441,6 +450,7 @@ export const historyActions = ({ obj, undo = null }: any) => {
 
             const { showId, layout } = data.remember || {}
             if (!showId || !layout) return
+
             const ref = _show(showId).layouts([layout]).ref()[0] || []
             if (!deleting) data.index = data.index ?? ref.length
             let index = data.index
@@ -519,6 +529,8 @@ export const historyActions = ({ obj, undo = null }: any) => {
                                     const firstChildId = currentSlide.children[0]
                                     const newChildren = clone(currentSlide.children.slice(1))
 
+                                    if (!a[showId].slides[firstChildId]) return
+
                                     // make parent
                                     a[showId].slides[firstChildId].globalGroup = currentSlide.globalGroup
                                     a[showId].slides[firstChildId].group = currentSlide.group
@@ -570,17 +582,14 @@ export const historyActions = ({ obj, undo = null }: any) => {
                     // backgrounds
                     if (data.layout?.backgrounds?.length) {
                         const background = data.layout.backgrounds[i] || data.layout.backgrounds[0]
-
                         let id = ""
-                        const cloudId = get(driveData).mediaId
-                        if (layoutValue.background && cloudId && cloudId !== "default") id = layoutValue.background
 
                         // find existing
-                        const existingBackgrounds = _show(showId).get("media")
+                        const existingBackgrounds = _show(showId).get("media") || {}
                         const existingId = Object.keys(existingBackgrounds).find((mediaId) => existingBackgrounds[mediaId].path === background.path)
                         if (existingId) id = existingId
 
-                        const bgId = _show(showId).media().add(background, id)
+                        const bgId = existingId ? id : _show(showId).media().add(background, id)
                         layoutValue.background = bgId
                     }
 
@@ -593,7 +602,7 @@ export const historyActions = ({ obj, undo = null }: any) => {
                         _show(showId).layouts([layout]).slides([slideLayoutIndex]).add([layoutValue])
 
                         // set to correct index
-                        const updatedRef = _show(showId).layouts([layout]).ref()[0]
+                        const updatedRef = _show(showId).layouts([layout]).ref()[0] || []
                         index = updatedRef.find((a) => a.id === layoutValue.id)?.layoutIndex ?? index
                     } else if (slide.oldChild) {
                         const parent = ref.find((a) => a.children?.includes(slide.oldChild))
@@ -736,7 +745,7 @@ export const historyActions = ({ obj, undo = null }: any) => {
             const previousShow: string = JSON.stringify(show)
             let slides = show.slides || {}
 
-            let ref = _show(data.remember.showId).layouts([data.remember.layout]).ref()[0]
+            let ref = _show(data.remember.showId).layouts([data.remember.layout]).ref()[0] || []
             const slideId: string = data.indexes ? ref[data.indexes[0]]?.id : ""
 
             const createItems = !!data.data?.createItems
@@ -756,9 +765,14 @@ export const historyActions = ({ obj, undo = null }: any) => {
                 if (templateId && !slideId && previousTemplateId !== templateId) _show(data.remember.showId).set({ key: "settings.template", value: slideId ? null : templateId })
 
                 const template = clone(get(templates)[templateId])
-                if (template?.settings?.maxLinesPerSlide) splitToMaxLines(template.settings.maxLinesPerSlide)
-                if (template?.settings?.breakLongLines) {
-                    slides = breakLongLines(data.remember.showId, template.settings.breakLongLines)
+                const maxLines = template?.settings?.maxLinesPerSlide
+                if (maxLines !== "0" && !isNaN(Number(maxLines))) {
+                    slides = splitToMaxLines(Number(maxLines))
+                    show.slides = slides
+                }
+                const brLongLines = template?.settings?.breakLongLines
+                if (brLongLines !== "0" && !isNaN(Number(brLongLines))) {
+                    slides = breakLongLines(data.remember.showId, Number(brLongLines))
                     show.slides = slides
                 }
                 updateSlidesWithTemplate(template)
@@ -779,36 +793,61 @@ export const historyActions = ({ obj, undo = null }: any) => {
             else obj.newData = clone(data)
 
             function splitToMaxLines(maxLines: number) {
-                let itemIndex = -1
-                // find match
-                let slideMatch = ref.find((slideRef) => {
-                    itemIndex = slides[slideRef.id]?.items?.findIndex((a) => (a.lines?.length || 0) > maxLines)
-                    return itemIndex > -1
+                const currentSlides = clone(show.slides) || {}
+                if (!maxLines) return currentSlides
+
+                const newSlides: { [key: string]: Slide } = {}
+
+                Object.entries(currentSlides).forEach(([id, slide]) => {
+                    let childrenIds: string[] = []
+
+                    const totalLines = getItemWithMostLines(slide)
+                    const splitLines = Math.max(totalLines, 1)
+                    for (let i = 0; i < splitLines; i += maxLines) {
+                        const newItems: Item[] = []
+                        slide.items.forEach((item) => {
+                            if (!item.lines) {
+                                newItems.push(item)
+                                return
+                            }
+
+                            const lines = clone(item.lines).slice(i, i + maxLines)
+                            newItems.push({ ...item, lines })
+                        })
+
+                        const newSlide = {
+                            ...clone(slide),
+                            group: i === 0 ? slide.group : null,
+                            color: i === 0 ? slide.color : null,
+                            items: newItems
+                        }
+                        if (i > 0) {
+                            delete newSlide.globalGroup
+                            delete newSlide.children
+                        }
+
+                        const currentId = i === 0 ? id : uid()
+                        newSlides[currentId] = newSlide
+                        if (i > 0) childrenIds.push(currentId)
+                    }
+
+                    if (childrenIds.length) newSlides[id].children = childrenIds
                 })
 
-                let breaker = 0
-                while (slideMatch && breaker < 250) {
-                    breaker++
-                    splitItemInTwo(slideMatch, itemIndex, [], maxLines)
-
-                    // update
-                    ref = _show(data.remember.showId).layouts([data.remember.layout]).ref()[0] || []
-                    slides = get(showsCache)[data.remember.showId]?.slides || {}
-                    // find match
-                    slideMatch = ref.find((slideRef) => {
-                        itemIndex = slides[slideRef.id]?.items?.findIndex((a) => (a.lines?.length || 0) > maxLines)
-                        return itemIndex > -1
-                    })
-                }
-
-                // update
-                show = get(showsCache)[data.remember.showId]
+                return newSlides
             }
 
             function updateSlidesWithTemplate(template: Template) {
                 // const slidesWithTextboxes = Object.values(slides).reduce((count, slide) => (getSlideText(slide).length ? count + 1 : count), 0)
+
+                // first slide template
+                const firstLayoutSlideId = show.layouts?.[data.remember.layout]?.slides?.[0]?.id || ""
+                const firstSlideTemplateId = template?.settings?.firstSlideTemplate || ""
+                const previousFirstSlideTemplateId = get(templates)[data.previousData?.template || ""]?.settings?.firstSlideTemplate || ""
+
                 Object.entries(slides).forEach(([id, slide]) => {
-                    if ((slideId && slideId !== id) || !slide) return
+                    const isGroupLocked = !!slide.locked // WIP get group slide
+                    if ((slideId && slideId !== id) || !slide || isGroupLocked) return
 
                     // show template
                     let slideTemplate = template
@@ -816,7 +855,10 @@ export const historyActions = ({ obj, undo = null }: any) => {
                     // slide template
                     if (slide.settings?.template) {
                         slideTemplate = clone(get(templates)[slide.settings.template]) || template
-                        templateMode = "slide"
+                        // first slide template
+                        const matchesFirstTemplate = !!firstSlideTemplateId && slide.settings.template === firstSlideTemplateId
+                        const matchesPreviousFirstTemplate = !!previousFirstSlideTemplateId && slide.settings.template === previousFirstSlideTemplateId
+                        templateMode = matchesFirstTemplate || matchesPreviousFirstTemplate ? "global" : "slide"
                     } else {
                         // group template
                         const isChild = slide.group === null
@@ -831,9 +873,29 @@ export const historyActions = ({ obj, undo = null }: any) => {
                         }
                     }
 
+                    // first slide template
+                    const isFirstSlide = templateMode === "global" && id === firstLayoutSlideId
+                    let appliedFirstOverride = false
+                    if (isFirstSlide && firstSlideTemplateId) {
+                        const overrideTemplate = clone(get(templates)[firstSlideTemplateId || ""])
+                        if (overrideTemplate?.items?.length) {
+                            slideTemplate = overrideTemplate
+                            appliedFirstOverride = true
+                            if (!show.slides[id].settings) show.slides[id].settings = {}
+                            show.slides[id].settings.template = firstSlideTemplateId
+                        }
+                    } else if (!isFirstSlide && slide.settings?.template === firstSlideTemplateId) {
+                        if (show.slides[id].settings) {
+                            delete show.slides[id].settings.template
+                            if (!Object.keys(show.slides[id].settings).length) delete (show.slides[id] as any).settings
+                        }
+                    }
+
                     if (!slideTemplate?.items?.length) return
 
                     // roll items around
+                    // WIP this is not changing anything at the moment
+                    // WIP apparently when template is not clicked directly the text content is re-ordered based on the item order, but the item order itself is unchanged, but it should be
                     const newTemplate = data.previousData.template !== data.id
                     if (shiftItems && !slide.settings?.template && !newTemplate) slide.items = [...slide.items.slice(1), slide.items[0]].filter((a) => a)
 
@@ -849,32 +911,38 @@ export const historyActions = ({ obj, undo = null }: any) => {
                     // && slidesWithTextboxes < 5
                     const changeOverflowItems = !!(slide.settings?.template || createItems)
 
-                    let newItems = mergeWithTemplate(slide.items, slideTemplate.items, changeOverflowItems, obj.save !== false, createItems)
+                    const mode = slideTemplate?.settings?.mode
+                    let newItems = mergeWithTemplate(slide.items, slideTemplate.items, changeOverflowItems, obj.save !== false, createItems, mode, slide.customDynamicValues)
 
                     // remove items if not in template (and textbox is empty)
                     if (changeOverflowItems) {
                         const templateItemCount = getItemsCountByType(slideTemplate.items)
                         const slideItemCount = getItemsCountByType(newItems)
-                        newItems = newItems.filter((a) => {
-                            const type = a.type || "text"
-                            if (templateItemCount[type] - slideItemCount[type] >= 0) return true
-                            if (type === "text" && !isEmptyOrSpecial(a)) return true
-                            if (type === "media" && a.src) return true
+                        newItems = newItems
+                            .reverse()
+                            .filter((a) => {
+                                const type = a.type || "text"
+                                if (templateItemCount[type] - slideItemCount[type] >= 0) return true
+                                if (type === "text" && !isEmptyOrSpecial(a)) return true
+                                if (type === "media" && a.src) return true
 
-                            // remove item
-                            slideItemCount[type]--
-                            return false
-                        })
+                                // remove item
+                                slideItemCount[type]--
+                                return false
+                            })
+                            .reverse()
                     }
 
                     show.slides[id].items = clone(newItems)
 
+                    if (!show.slides[id].settings) show.slides[id].settings = {}
                     // TemplateSettings / updateSlideFromTemplate()
                     // if (slideTemplate.settings?.resolution) show.slides[id].settings.resolution = slideTemplate.settings?.resolution
                     if (slideTemplate.settings?.backgroundColor) show.slides[id].settings.color = slideTemplate.settings?.backgroundColor
 
-                    const isFirst = templateMode === "global" && !!show.layouts[data.remember.layout].slides?.find((a) => a?.id === id)
-                    show.slides[id] = updateSlideFromTemplate(show.slides[id], slideTemplate, isFirst, changeOverflowItems)
+                    const isFirst = templateMode === "global" && id === firstLayoutSlideId
+                    const firstTemplateForUpdate = isFirst && firstSlideTemplateId && (appliedFirstOverride || slide.settings?.template === firstSlideTemplateId) ? firstSlideTemplateId : undefined
+                    show.slides[id] = updateSlideFromTemplate(show.slides[id], slideTemplate, isFirst, changeOverflowItems, firstTemplateForUpdate)
 
                     const slideRefs = ref.filter((a) => a.id === id)
                     const oldTemplate = get(templates)[previousTemplateId || ""] || {}
@@ -930,6 +998,7 @@ export const historyActions = ({ obj, undo = null }: any) => {
 
                     let currentIndex = -1
                     layoutSlides.forEach((l, i) => {
+                        if (!l) return
                         if (!a[data.remember.showId].slides[l.id]) {
                             console.error("MISSING SLIDE")
                             return
@@ -966,7 +1035,7 @@ export const historyActions = ({ obj, undo = null }: any) => {
                     let value = valueIndex < 0 ? values[i] : data.dataIsArray ? values : data.dataIsArray === false ? values[valueIndex] || values[i] : values[i]?.[valueIndex] || values[valueIndex] || values[i]
 
                     if (!data.dataIsArray && typeof values[i] === "string") value = values[i]
-                    console.log(valueIndex, value, values, data, key, l)
+                    // console.log(valueIndex, value, values, data, key, l)
 
                     if (value === undefined) delete l[key]
                     else if (data.key && data.keys) {
@@ -986,17 +1055,17 @@ export const historyActions = ({ obj, undo = null }: any) => {
             const key: string | null = data.key || null
 
             if (initializing) {
-                data.remember = { showId: get(activeShow)?.id }
+                data.remember = { showId: data.showId || get(activeShow)?.id }
             }
 
             if (!deleting) {
                 data.previousData = clone(_show(data.remember.showId).slides(data.slides).items(data.items).get()[0])
 
-                _show().slides(data.slides).items(data.items).set({ key, values: data.data })
+                _show(data.remember.showId).slides(data.slides).items(data.items).set({ key, values: data.data })
             } else {
                 if (!data.previousData) return
 
-                _show().slides(data.slides).items(data.items).set({ values: data.previousData })
+                _show(data.remember.showId).slides(data.slides).items(data.items).set({ values: data.previousData })
             }
 
             if (!initializing) return
@@ -1070,6 +1139,7 @@ function filterIndexes(data: any, subkey = "", { indexes, keys }) {
     return filteredData
 }
 
+// move text value to any template textbox with matching text content
 function rearrangeContent(content: Item[], prevState: Item[], newState: Item[]) {
     const indexMap: { [key: string]: number } = {}
 
@@ -1092,11 +1162,13 @@ function rearrangeContent(content: Item[], prevState: Item[], newState: Item[]) 
     newState.forEach((item, newIndex) => {
         const value = getItemText(item)
         if (indexMap[value] === undefined) return
+        // must be of text type
+        if (!content[newIndex]?.lines) return
 
         let count = 0
         while (usedIndices.has(indexMap[getValue(value, count)])) count++
         const contentIndex = indexMap[getValue(value, count)]
-        if (contentIndex < content.length && !usedIndices.has(contentIndex)) {
+        if (contentIndex < content.length && !usedIndices.has(contentIndex) && content[contentIndex]?.lines) {
             if (content[contentIndex]) {
                 tempContent[newIndex] = clone({ ...content[newIndex], lines: clone(content[contentIndex].lines) })
             }

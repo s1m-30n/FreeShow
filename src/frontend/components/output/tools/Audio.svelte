@@ -2,7 +2,9 @@
     import { onDestroy } from "svelte"
     import { AudioPlayer } from "../../../audio/audioPlayer"
     import { AudioPlaylist } from "../../../audio/audioPlaylist"
-    import { activeFocus, activePlaylist, activeShow, audioPlaylists, dictionary, focusMode, metronome, outLocked, playingAudio, playingMetronome } from "../../../stores"
+    import { activeFocus, activePlaylist, activeShow, audioPlaylists, focusMode, metronome, outLocked, playingAudio, playingMetronome } from "../../../stores"
+    import { triggerClickOnEnterSpace } from "../../../utils/clickable"
+    import { translateText } from "../../../utils/language"
     import Icon from "../../helpers/Icon.svelte"
     import { getFileName, removeExtension } from "../../helpers/media"
     import { joinTime, secondsToTime } from "../../helpers/time"
@@ -105,7 +107,7 @@
                 style="flex: 0"
                 disabled={$outLocked}
                 center
-                title={paused ? $dictionary.media?.play : $dictionary.media?.pause}
+                title={translateText(paused ? "media.play" : "media.pause")}
                 on:click={() => {
                     if ($outLocked) return
                     AudioPlayer.start(path, { name }, { pauseIfPlaying: true, startAt: currentTime })
@@ -126,7 +128,7 @@
 
             <Slider value={currentTime} max={duration} on:input={setSliderValue} on:change={(e) => setTime(e, path)} />
 
-            <span style={fullLength ? "" : "color: var(--secondary)"} on:click={() => (fullLength = !fullLength)}>
+            <span style={fullLength ? "" : "color: var(--secondary)"} role="button" tabindex="0" on:click={() => (fullLength = !fullLength)} on:keydown={triggerClickOnEnterSpace}>
                 {#if fullLength}
                     {joinTime(secondsToTime(duration))}
                 {:else}
@@ -135,7 +137,7 @@
             </span>
 
             {#if $activePlaylist?.active === path}
-                <Button style="flex: 0" disabled={$outLocked} center title={$dictionary.media?.next} on:click={() => AudioPlaylist.next()}>
+                <Button style="flex: 0" disabled={$outLocked} center title={translateText("media.next")} on:click={() => AudioPlaylist.next()}>
                     <Icon id="audio_forward" size={1.2} />
                 </Button>
             {/if}
@@ -166,5 +168,12 @@
     }
     .controls span {
         padding: 0 0.3em;
+    }
+    .controls span[role="button"] {
+        cursor: pointer;
+    }
+    .controls span[role="button"]:focus {
+        outline: 2px solid var(--secondary);
+        outline-offset: 2px;
     }
 </style>

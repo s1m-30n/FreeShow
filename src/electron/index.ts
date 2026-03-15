@@ -2,23 +2,25 @@
 // This is the electron entry point
 
 import type { Rectangle } from "electron"
-import { BrowserWindow, Menu, app, ipcMain, screen } from "electron"
-import { AUDIO, CLOUD, EXPORT, MAIN, NDI, OUTPUT, RECORDER, STARTUP } from "../types/Channels"
+import { BrowserWindow, Menu, app, ipcMain, powerSaveBlocker, protocol, screen } from "electron"
+import { AUDIO, BLACKMAGIC, CLOUD, EXPORT, MAIN, NDI, OUTPUT, STARTUP } from "../types/Channels"
 import { Main } from "../types/IPC/Main"
 import type { Dictionary } from "../types/Settings"
 import { receiveAudio } from "./audio/receiveAudio"
 import { cloudConnect } from "./cloud/cloud"
 import { startExport } from "./data/export"
-import { config, updateDataPath } from "./data/store"
+import { registerProtectedProtocol } from "./data/protected"
+import { config, setupStores } from "./data/store"
 import { receiveMain, sendMain } from "./IPC/main"
-import { saveRecording } from "./IPC/responsesMain"
+import { autoErrorReport } from "./IPC/responsesMain"
 import { receiveNDI } from "./ndi/talk"
 import { OutputHelper } from "./output/OutputHelper"
 import { callClose, exitApp, saveAndClose } from "./utils/close"
-import { isWithinDisplayBounds, mainWindowInitialize, openDevTools, waitForBundle } from "./utils/init"
+import { isWithinDisplayBounds, mainWindowInitialize, openDevTools, parseCommandLineArgs, waitForBundle, isDraggableAreaVisible } from "./utils/init"
 import { template } from "./utils/menuTemplate"
 import { spellcheck } from "./utils/spellcheck"
 import { loadingOptions, mainOptions } from "./utils/windowOptions"
+import { receiveBM } from "./blackmagic/bmdTalk"
 
 // ----- STARTUP -----
 
@@ -37,6 +39,14 @@ export const isWindows: boolean = process.platform === "win32"
 export const isMac: boolean = process.platform === "darwin"
 export const isLinux: boolean = process.platform === "linux"
 
+let autoProfile = ""
+export function setAutoProfile(profile: string) {
+    if (profile) autoProfile = profile
+}
+
+// parse command line arguments
+parseCommandLineArgs()
+
 // check if store works
 config.set("loaded", true)
 if (!config.get("loaded")) console.error("Could not get stored data!")
@@ -48,27 +58,84 @@ if (!isProd) console.info("Building app! (This may take 20-90 seconds)")
 // set application menu
 setGlobalMenu()
 
-// disable hardware acceleration by default
-if (config.get("disableHardwareAcceleration") !== false) {
-    // Video flickers, especially on ARM mac otherwise. Performance is actually better without (most of the time).
-    // this should remove flickers on videos, but we have had reports of increased CPU usage in a lot of cases.
+// error reporting
+autoErrorReport()
+
+// hardware acceleration
+const disableHWA = config.get("disableHardwareAcceleration")
+if (disableHWA === true) {
+    // Video did flicker sometime with HWA, especially on ARM Mac.
+    // CPU usage is often lower with HWA enabled.
     // https://www.electronjs.org/docs/latest/tutorial/offscreen-rendering
     app.disableHardwareAcceleration()
-} else {
-    console.info("Starting with Hardware Acceleration")
+    console.info("Hardware Acceleration Disabled")
 }
+
+protocol.registerSchemesAsPrivileged([
+    {
+        scheme: "freeshow-protected",
+        privileges: {
+            standard: true,
+            secure: true,
+            supportFetchAPI: true,
+            corsEnabled: true,
+            stream: true
+        }
+    }
+])
 
 // start when ready
 if (RECORD_STARTUP_TIME) console.time("Full startup")
-app.on("ready", startApp)
+app.on("ready", async () => {
+    await startApp()
+    requestHeaders()
+})
 
-function startApp() {
+export let powerSaveBlockerId: number | null = null
+async function startApp() {
     if (RECORD_STARTUP_TIME) console.time("Initial")
+
+    // WIDEVINE
+    // Wait for Widevine CDM components to be ready (required for castlabs electron)
+    // try {
+    //     const { components } = require("electron")
+    //     await components.whenReady()
+    //     console.info("Widevine CDM components ready")
+    // } catch (err) {
+    //     console.warn("Failed to initialize Widevine CDM components:", err)
+    // }
+
     setTimeout(createLoading)
-    updateDataPath({ load: true })
+
+    await setupStores()
+
+    registerProtectedProtocol()
+
+    // Start servers initialization early (asynchronously)
+    Promise.resolve()
+        .then(() => {
+            require("./servers")
+        })
+        .catch(console.error)
+
     if (RECORD_STARTUP_TIME) console.timeEnd("Initial")
 
     createMain()
+
+    // prevent display sleeping
+    powerSaveBlockerId = powerSaveBlocker.start("prevent-display-sleep")
+}
+
+function requestHeaders() {
+    // Fix YouTube Error 153 - set referrer policy for all requests
+    // https://stackoverflow.com/questions/79802987/youtube-error-153-video-player-configuration-error-when-embedding-youtube-video
+    const session = require("electron").session.defaultSession
+    session.webRequest.onBeforeSendHeaders((details: any, callback: any) => {
+        if (details.url.includes("youtube.com") || details.url.includes("youtube-nocookie.com")) {
+            details.requestHeaders.Referer = "https://freeshow.app/"
+        }
+        callback({ requestHeaders: details.requestHeaders })
+    })
 }
 
 // ----- LOADING WINDOW -----
@@ -83,32 +150,35 @@ function createLoading() {
 // ----- MAIN WINDOW -----
 
 export let mainWindow: BrowserWindow | null = null
-const MIN_WINDOW_SIZE = 200
+const MIN_WINDOW_SIZE = 400
 const DEFAULT_WINDOW_SIZE = { width: 800, height: 600 }
 function createMain() {
     if (RECORD_STARTUP_TIME) console.time("Main window")
-    const bounds: Rectangle = config.get("bounds")
+    const bounds: Rectangle = windowBounds.get()
     const screenBounds: Rectangle = screen.getPrimaryDisplay().bounds
 
     const options: Electron.BrowserWindowConstructorOptions = {
         width: getWindowBounds("width"),
         height: getWindowBounds("height"),
         frame: !isProd || !isWindows,
-        autoHideMenuBar: isProd && isWindows,
+        autoHideMenuBar: isProd && isWindows
     }
 
     // should be centered to screen if x & y is not set (or bottom left on mac)
     if (bounds.x) options.x = bounds.x
     if (bounds.y) options.y = bounds.y
 
-    // check if window position is within a visible area
-    if (bounds.x && bounds.y && !isWithinDisplayBounds({ x: bounds.x, y: bounds.y })) {
+    // check if window position is within a visible area and draggable top area is accessible
+    if (bounds.x && bounds.y && (!isWithinDisplayBounds({ x: bounds.x, y: bounds.y }) || !isDraggableAreaVisible(bounds, options.width!))) {
         options.x = (screenBounds.width - options.width!) / 2
         options.y = (screenBounds.height - options.height!) / 2
     }
 
     // create window
     mainWindow = new BrowserWindow({ ...mainOptions, ...options })
+
+    // ensure correct dimensions regardless of DPI scaling (without this, the window changed size each startup when scale was not 100%)
+    mainWindow.setSize(options.width!, options.height!)
 
     // macos min size
     mainWindow.setMinimumSize(MIN_WINDOW_SIZE, MIN_WINDOW_SIZE)
@@ -154,7 +224,7 @@ export async function loadWindowContent(window: BrowserWindow, type: null | "out
     }
 
     window.webContents.on("did-finish-load", () => {
-        window.webContents.send(STARTUP, { channel: "TYPE", data: type })
+        window.webContents.send(STARTUP, { channel: "TYPE", data: type, autoProfile })
     })
 
     function loadingFailed(err: Error) {
@@ -178,13 +248,33 @@ function setMainListeners() {
     mainWindow.on("maximize", () => config.set("maximized", true))
     mainWindow.on("unmaximize", () => config.set("maximized", false))
 
-    mainWindow.on("resize", () => config.set("bounds", mainWindow?.getBounds()))
-    mainWindow.on("move", () => config.set("bounds", mainWindow?.getBounds()))
+    mainWindow.on("resize", windowBounds.save)
+    mainWindow.on("move", windowBounds.save)
 
     mainWindow.on("close", callClose)
     mainWindow.once("closed", exitApp)
 
     mainWindow.webContents.on("context-menu", (_, a) => spellcheck(a))
+}
+
+const windowBounds = {
+    get(): Rectangle {
+        try {
+            const bounds = config.get("bounds")
+            if (bounds?.width && bounds?.height) return bounds 
+        } catch (err) {
+            console.warn("Failed to load saved bounds:", err)
+        }
+        return { x: 0, y: 0, width: 0, height: 0 }
+    },
+    save() {
+        if (mainWindow?.isDestroyed()) return
+        try {
+            config.set("bounds", mainWindow!.getBounds())
+        } catch (err) {
+            console.warn("Failed to save window bounds:", err)
+        }
+    }
 }
 
 export function maximizeMain() {
@@ -245,8 +335,8 @@ ipcMain.on(MAIN, receiveMain)
 ipcMain.on(OUTPUT, OutputHelper.receiveOutput)
 ipcMain.on(EXPORT, startExport)
 ipcMain.on(CLOUD, cloudConnect)
-ipcMain.on(RECORDER, saveRecording)
 ipcMain.on(NDI, receiveNDI)
+ipcMain.on(BLACKMAGIC, receiveBM)
 ipcMain.on(AUDIO, receiveAudio)
 
 // send messages to main frontend (should not be used anymore - use sendMain() instead)

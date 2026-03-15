@@ -1,8 +1,32 @@
 import os from "os"
 import { toApp } from ".."
 import { CaptureHelper } from "../capture/CaptureHelper"
-import { CaptureTransmitter } from "../capture/helpers/CaptureTransmitter"
 import util from "./vingester-util"
+
+// Dynamic import for grandiose ES module to prevent TypeScript compilation issues
+let warned = false
+let grandioseModule: any | null = null
+let grandiosePromise: Promise<any | null> | null = null
+const loadGrandiose = async () => {
+    if (grandioseModule) return grandioseModule
+    if (grandiosePromise) return grandiosePromise
+
+    grandiosePromise = import("grandiose")
+        .then((imported) => {
+            grandioseModule = imported
+            return imported
+        })
+        .catch((err: any) => {
+            if (!warned) console.warn("NDI not available:", err?.message || err)
+            warned = true
+            return null
+        })
+        .finally(() => {
+            grandiosePromise = null
+        })
+
+    return grandiosePromise
+}
 
 // Resources:
 // https://www.npmjs.com/package/grandiose-mac
@@ -10,11 +34,9 @@ import util from "./vingester-util"
 // https://github.com/rse/grandiose
 // https://github.com/rse/vingester
 
-// TODO: audio
 export class NdiSender {
-    static ndiDisabled = false // isLinux && os.arch() !== "x64" && os.arch() !== "ia32"
     static timeStart = BigInt(Date.now()) * BigInt(1e6) - process.hrtime.bigint()
-    static NDI: { [key: string]: { name: string; status?: string; previousStatus?: string; sender?: any; timer?: NodeJS.Timeout; sendAudio?: boolean } } = {}
+    static NDI: { [key: string]: { name: string; groups?: string; status?: string; previousStatus?: string; sender?: any; timer?: NodeJS.Timeout; sendAudio?: boolean } } = {}
 
     static stopSenderNDI(id: string) {
         if (!this.NDI[id]?.timer) return
@@ -31,18 +53,26 @@ export class NdiSender {
         delete this.NDI[id]
     }
 
-    static async createSenderNDI(id: string, title = "") {
-        if (this.ndiDisabled || this.NDI[id]) return
-        const grandiose = require("grandiose")
+    static initNameNDI(name?: string, outputName?: string) {
+        return name || `FreeShow NDI${outputName ? ` - ${outputName}` : ""}`
+    }
 
-        this.NDI[id] = { name: `FreeShow NDI${title ? ` - ${title}` : ""}` }
-        console.info("NDI - creating sender: " + this.NDI[id].name)
+    static async createSenderNDI(id: string, name = "", groups?: string) {
+        if (this.NDI[id]) return
+
+        this.NDI[id] = { name, groups }
+        console.info("NDI - creating sender: " + this.NDI[id].name, groups ? `; In group: ${groups}` : "")
 
         try {
+            const grandiose = await loadGrandiose()
+            if (!grandiose) return
+
+            /* eslint @typescript-eslint/await-thenable: 0 */
             this.NDI[id].sender = await grandiose.send({
                 name: this.NDI[id].name,
+                groups: this.NDI[id].groups,
                 clockVideo: false,
-                clockAudio: false,
+                clockAudio: false
             })
         } catch (err) {
             console.error("Could not create NDI sender:", err)
@@ -63,20 +93,20 @@ export class NdiSender {
                 this.NDI[id].previousStatus = newStatus
 
                 if (this.NDI[id].status === "connected") {
-                    Object.keys(CaptureTransmitter.channels).forEach((key) => {
-                        if (key.includes("ndi")) {
-                            // force an instant check / output refresh when reconnected
-                            CaptureTransmitter.channels[key].lastCheck = 999
-                        }
-                    })
+                    // Force a frame update when NDI reconnects
+                    // (frames now stream directly, so just log reconnection)
+                    console.log(`[NDI] Reconnected for ${id}`)
                 }
             }
         }, 1000)
     }
 
+    // static frames = 0
     static async sendVideoBufferNDI(id: string, buffer: Buffer, { size = { width: 1280, height: 720 }, ratio = 16 / 9, framerate = 1 }) {
-        if (this.ndiDisabled || !this.NDI[id]?.sender) return
-        const grandiose = require("grandiose")
+        // DEBUG log fps
+        // this.frames++
+        // setTimeout(() => this.frames--, 1000)
+        // console.log(`NDI FPS ${id}:`, this.frames)
 
         /*  convert from ARGB (Electron/Chromium on big endian CPU)
         to BGRA (supported input of NDI SDK). On little endian
@@ -86,6 +116,9 @@ export class NdiSender {
         }
 
         /*  optionally convert from BGRA to BGRX (no alpha channel)  */
+        const grandiose = await loadGrandiose()
+        if (!grandiose) return
+
         const fourCC = grandiose.FOURCC_BGRA
         // if (!this.cfg.v) {
         //     util.ImageBufferAdjustment.BGRAtoBGRX(buffer)
@@ -112,7 +145,7 @@ export class NdiSender {
 
             /*  the data itself  */
             fourCC,
-            data: buffer,
+            data: buffer
         }
 
         try {
@@ -133,12 +166,14 @@ export class NdiSender {
     }
 
     static bytesForFloat32 = 4
-    static sendAudioBufferNDI(buffer: Buffer, { sampleRate, channelCount }: { sampleRate: number; channelCount: number }) {
-        if (this.ndiDisabled || !Object.values(this.NDI).find((a) => a?.sendAudio)) return
-        const grandiose = require("grandiose")
+    static async sendAudioBufferNDI(buffer: Buffer, { sampleRate, channelCount }: { sampleRate: number; channelCount: number }) {
+        if (!Object.values(this.NDI).find((a) => a?.sendAudio)) return
 
         const ndiAudioBuffer = convertPCMtoPlanarFloat32(buffer, channelCount)
         if (!ndiAudioBuffer) return
+
+        const grandiose = await loadGrandiose()
+        if (!grandiose) return
 
         const now = this.timeStart + process.hrtime.bigint()
         const frame = {
@@ -153,7 +188,7 @@ export class NdiSender {
 
             /*  the data itself  */
             fourCC: grandiose.FOURCC_FLTp,
-            data: ndiAudioBuffer,
+            data: ndiAudioBuffer
         }
 
         Object.values(this.NDI).forEach((data) => {

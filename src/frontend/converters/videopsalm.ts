@@ -1,10 +1,12 @@
 import { get } from "svelte/store"
 import { uid } from "uid"
-import { checkName } from "../components/helpers/show"
-import { ShowObj } from "./../classes/Show"
-import { activePopup, alertMessage, dictionary, groups } from "./../stores"
-import { createCategory, setTempShows } from "./importHelpers"
+import { DEFAULT_ITEM_STYLE } from "../components/edit/scripts/itemHelpers"
 import { setQuickAccessMetadata } from "../components/helpers/setShow"
+import { checkName } from "../components/helpers/show"
+import { translateText } from "../utils/language"
+import { ShowObj } from "./../classes/Show"
+import { activePopup, alertMessage, groups } from "./../stores"
+import { createCategory, setTempShows } from "./importHelpers"
 
 interface VideoPsalm {
     Guid: string
@@ -90,7 +92,7 @@ const keys = [
     "Tonality",
     "Language",
     "IsAudioFileEnabled",
-    "Tempo",
+    "Tempo"
 ]
 export function convertVideopsalm(data: any) {
     const categoryId = createCategory("VideoPsalm")
@@ -117,7 +119,7 @@ export function convertVideopsalm(data: any) {
         }
 
         let i = 0
-        const importingText = get(dictionary).popup?.importing || "Importing"
+        const importingText = translateText("popup.importing")
 
         const album: string = content?.Text
         const songsCount: number = content.Songs?.length || 0
@@ -135,7 +137,7 @@ export function convertVideopsalm(data: any) {
             let show = new ShowObj(false, categoryId, layoutID)
             show.origin = "videopsalm"
             const showId = song.Guid || uid()
-            const name = title || get(dictionary).main?.unnamed || "Unnamed"
+            const name = title || translateText("main.unnamed")
             show.name = checkName(name, showId) || ""
             show.meta = {
                 number: (song.ID || "").toString(),
@@ -144,14 +146,14 @@ export function convertVideopsalm(data: any) {
                 author: song.Author || "",
                 composer: song.Composer || "",
                 copyright: song.Copyright || "",
-                CCLI: song.CCLI || "",
+                CCLI: song.CCLI || ""
             }
             if (show.meta.number !== undefined) show.quickAccess = { number: show.meta.number }
             if (show.meta.CCLI) show = setQuickAccessMetadata(show, "CCLI", show.meta.CCLI)
 
             const { slides, layout, notes }: any = createSlides(song)
             show.slides = slides
-            show.layouts = { [layoutID]: { name: get(dictionary).example?.default || "", notes: notes || "", slides: layout } }
+            show.layouts = { [layoutID]: { name: translateText("example.default"), notes: notes || "", slides: layout } }
 
             tempShows.push({ id: showId, show })
 
@@ -302,14 +304,14 @@ function createSlides({ Verses, Sequence }: Song) {
             lines.push(line)
         })
 
-        const items = [{ style: "inset-inline-start:50px;top:120px;width:1820px;height:840px;", lines }]
+        const items = [{ style: DEFAULT_ITEM_STYLE, lines }]
 
         slides[id] = {
             group: "",
             color: null,
             settings: {},
             notes: "",
-            items,
+            items
         }
         const globalGroup = sequenceKey ? VPgroups[sequenceKey.replace(/[0-9]/g, "")] : "verse"
         if (get(groups)[globalGroup]) slides[id].globalGroup = globalGroup

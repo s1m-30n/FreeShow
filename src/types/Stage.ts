@@ -1,3 +1,4 @@
+import type { AutosizeTypes } from "../frontend/components/edit/scripts/autosize"
 import type { Resolution } from "./Settings"
 import type { Condition, Line } from "./Show"
 
@@ -14,6 +15,7 @@ export interface StageLayout {
     name: string
     disabled: boolean
     password: string
+    modified?: number // cloud sync
     settings: {
         output?: string
         background?: boolean
@@ -49,6 +51,7 @@ export interface StageItem {
     // textbox
     chords?: { enabled?: boolean; color?: string; size?: number }
     auto?: boolean
+    textFit?: AutosizeTypes // auto size text fix option (default: growToFit)
     button?: { press?: string; release?: string } // click actions
 
     // slide text
@@ -69,4 +72,5 @@ export interface StageItem {
     tracker?: any // slide tracker data
     timer?: any // timer options
     clock?: any // clock options
+    currentOutput?: { source?: string; showLabel?: boolean }
 }

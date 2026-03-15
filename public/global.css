@@ -1,7 +1,12 @@
 /* custom CMG Sans */
 @font-face {
+<<<<<<< HEAD
   font-family: "CMGSans";
   src: url("./fonts/CMGSans-Regular.ttf");
+=======
+    font-family: "CMGSans";
+    src: url("./fonts/CMGSans-Medium.ttf");
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 }
 @font-face {
   font-family: "CMGSans";
@@ -9,9 +14,15 @@
   font-weight: bold;
 }
 @font-face {
+<<<<<<< HEAD
   font-family: "CMGSans";
   src: url("./fonts/CMGSans-Italic.ttf");
   font-style: italic;
+=======
+    font-family: "CMGSans";
+    src: url("./fonts/CMGSans-MediumItalic.ttf");
+    font-style: italic;
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 }
 @font-face {
   font-family: "CMGSans";
@@ -28,6 +39,7 @@
 }
 
 :root {
+<<<<<<< HEAD
   --primary: #003366; /* Deep Navy Blue from shield */
   --primary-lighter: #363945; /* Brighter Blue from ribbon edge */
   --primary-darker: #001f3f; /* Darker blue tone */
@@ -41,11 +53,34 @@
 
   --accent-green: #6abc44; /* Light green from "F" */
   --accent-blue: #27a8f5; /* Bright cyan from shield inner glow */
+=======
+    --primary: #242832;
+    --primary-lighter: #2f3542;
+    --primary-darker: #191923;
+    --primary-darkest: #12121c;
+    --text: #f0f0ff;
+    --textInvert: #131313;
+    --secondary: #f0008c;
+    --secondary-opacity: rgba(240, 0, 140, 0.5);
+    --secondary-text: #f0f0ff;
+    --transparent: #232530;
+
+    --accent: #90caf9;
+
+    --connected: #27a827;
+    --disconnected: #a82727;
+
+    --red: rgb(255 0 0 / 0.25);
+
+    --hover: rgb(255 255 255 / 0.05);
+    --focus: rgb(255 255 255 / 0.1);
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 
   --transparent: #003366cc; /* Semi-transparent navy for overlays */
   --connected: #27a827;
   --disconnected: #a82727;
 
+<<<<<<< HEAD
   --hover: rgba(255, 255, 255, 0.05);
   --focus: rgba(255, 255, 255, 0.1);
 
@@ -75,6 +110,9 @@
   --border-radius: 0;
 
   --navigation-width: 290px;
+=======
+    --navigation-width: 290px;
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 }
 
 * {
@@ -119,7 +157,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
+<<<<<<< HEAD
   background: rgb(255 255 255 / 0.3);
+=======
+    background: rgb(255 255 255 / 0.3);
+    border-radius: 6px;
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -159,10 +202,21 @@ p {
 /* CHECKERED */
 
 .checkered {
+<<<<<<< HEAD
   /* background-color: var(--transparent); */
   background: repeating-conic-gradient(
       rgba(70, 70, 80, 0.1) 0% 25%,
       transparent 0% 50%
     )
     50% / 26px 26px;
+=======
+    /* background-color: var(--transparent); */
+    background: repeating-conic-gradient(rgba(70, 70, 80, 0.15) 0% 25%, transparent 0% 50%) 50% / 26px 26px;
+}
+
+/* OPTIMIZED MODE */
+
+.isOptimized {
+    backdrop-filter: none !important;
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 }

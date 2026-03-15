@@ -3,66 +3,48 @@
 import { get } from "svelte/store"
 import { uid } from "uid"
 import type { History } from "../../../types/History"
+import { Main } from "../../../types/IPC/Main"
 import type { DropData, Selected } from "../../../types/Main"
-import type { Item, Show, Slide, SlideAction } from "../../../types/Show"
-import { ShowObj } from "../../classes/Show"
-import { createCategory } from "../../converters/importHelpers"
+import type { Item, Slide, SlideAction } from "../../../types/Show"
+import { sendMain } from "../../IPC/main"
 import { changeLayout, changeSlideGroups } from "../../show/slides"
-import {
-    activeDrawerTab,
-    activePage,
-    activePopup,
-    activeProject,
-    activeShow,
-    alertMessage,
-    audioFolders,
-    audioPlaylists,
-    audioStreams,
-    drawerTabsData,
-    media,
-    mediaFolders,
-    overlays,
-    projects,
-    scriptureSettings,
-    shows,
-    showsCache,
-    templates,
-    timers
-} from "../../stores"
+import { activeDrawerTab, activePage, activePopup, activeProject, activeShow, alertMessage, audioFolders, audioPlaylists, audioStreams, drawerTabsData, editingProjectTemplate, media, mediaFolders, overlays, playerVideos, projects, projectTemplates, scriptureSettings, shows, showsCache, templates, timers } from "../../stores"
 import { newToast } from "../../utils/common"
+import { getAccess } from "../../utils/profile"
 import { audioExtensions, imageExtensions, mediaExtensions, presentationExtensions, videoExtensions } from "../../values/extensions"
 import { actionData } from "../actions/actionData"
-import { getActionTriggerId } from "../actions/actions"
-import { getShortBibleName, getSlides, joinRange } from "../drawer/bible/scripture"
+import { addSlideAction, getActionTriggerId } from "../actions/actions"
+import { getActiveScripturesContent, getReferenceText, getScriptureShow, getScriptureSlidesNew } from "../drawer/bible/scripture"
 import { addItem, DEFAULT_ITEM_STYLE } from "../edit/scripts/itemHelpers"
 import { clone, removeDuplicates } from "./array"
 import { projectDropFolders } from "./drop"
 import { history, historyAwait } from "./history"
-import { getExtension, getFileName, getMediaStyle, getMediaType, removeExtension } from "./media"
+import { downloadOnlineMedia, getExtension, getFileName, getMediaLayerType, getMediaStyle, getMediaType, removeExtension } from "./media"
 import { addToPos, getIndexes, mover } from "./mover"
-import { checkName, getLayoutRef } from "./show"
+import { getLayoutRef } from "./show"
 import { getVariableNameId } from "./showActions"
 import { _show } from "./shows"
+import { getVimeoName, getYouTubeName, trimPlayerId } from "../drawer/player/playerHelper"
 
 function getId(drag: Selected): string {
     const id = ""
     if (drag.id === "slide" || drag.id === "group") return "slide"
-    const extension: string = getExtension(drag.data[0].name)
+    const extension: string = getExtension(drag.data[0]?.name)
     if (drag.id === "files" && getMediaType(extension) === "audio") return "audio"
-    if (drag.id === "show" && drag.data[0].type === "audio") return "audio"
+    if (drag.id === "show" && drag.data[0]?.type === "audio") return "audio"
     if (drag.id === "effect") return "overlay"
-    if ((drag.id === "show" && ["media", "image", "video"].includes(drag.data[0].type)) || drag.id === "media" || drag.id === "files" || drag.id === "camera" || drag.id === "screen" || drag.id === "ndi") return "media"
+    if ((drag.id === "show" && ["media", "image", "video"].includes(drag.data[0]?.type)) || drag.id === "media" || drag.id === "files" || drag.id === "camera" || drag.id === "screen" || drag.id === "ndi") return "media"
     // if (drag.id === "audio") return "audio"
     // if (drag.id === "global_group") return "global_group"
     return drag.id || id
 }
 
 type Data = { drag: Selected; drop: DropData }
-type Keys = { shiftKey: boolean }
+type Keys = { shiftKey: boolean; ctrlKey: boolean; altKey: boolean }
 
 export const dropActions = {
     slides: ({ drag, drop }: Data, history: History, keys?: Keys) => dropActions.slide({ drag, drop }, history, keys),
-    slide: ({ drag, drop }: Data, history: History, keys?: Keys) => {
+    slide: async ({ drag, drop }: Data, history: History, keys?: Keys) => {
         const customId: string = drag.showId || drag.data[0]?.showId
         const showId = customId || get(activeShow)?.id || ""
         if (!showId || get(shows)[showId]?.locked) return
@@ -71,7 +53,22 @@ export const dropActions = {
 
         const id: string = getId(drag)
         if (slideDrop[id]) {
-            history = slideDrop[id]({ drag, drop }, history, keys)
+            const show = _show().get()
+            if (show?.locked) {
+                alertMessage.set("show.locked")
+                activePopup.set("alert")
+                return
+            }
+
+            const profile = getAccess("shows")
+            const readOnly = profile.global === "read" || profile[show?.category || ""] === "read"
+            if (readOnly) {
+                alertMessage.set("profile.locked")
+                activePopup.set("alert")
+                return
+            }
+
+            history = await slideDrop[id]({ drag, drop }, history, keys)
             return history
         }
 
@@ -80,7 +77,7 @@ export const dropActions = {
     },
     projects: ({ drag, drop }: Data, h: History) => {
         if (drag.id !== "folder" && drag.id !== "project") return
-        if (drop.data.type && drop.data.type !== "folder") return
+        if (drop.data.type && drop.data.type !== "folder" && drop.data.type !== "project") return
 
         h.location!.page = "show"
 
@@ -109,7 +106,8 @@ export const dropActions = {
             h.location!.id = "project_key"
         }
 
-        h.newData = { key: "parent", data: drop.data.id || "/" }
+        const newParent = drop.data.type === "project" ? get(projects)[drop.data.id]?.parent : drop.data.id
+        h.newData = { key: "parent", data: newParent || "/" }
 
         // move multiple
         ids.forEach((id) => {
@@ -117,12 +115,17 @@ export const dropActions = {
             history(h)
         })
     },
-    project: ({ drag, drop }: Data, history: History) => {
-        history.id = "UPDATE"
-        history.location = { page: "show", id: "project_ref" }
-        history.oldData = { id: get(activeProject) }
+    project: async ({ drag, drop }: Data, h: History) => {
+        h.id = "UPDATE"
+        const isTemplate = get(editingProjectTemplate)
+        const projectId = isTemplate ? get(editingProjectTemplate) : get(activeProject)
+        if (!projectId) return
 
-        const projectShows = get(projects)[history.oldData.id]?.shows || []
+        h.location = { page: "show", id: isTemplate ? "project_template" : "project_ref" }
+        h.oldData = { id: projectId }
+
+        const currentProject = isTemplate ? get(projectTemplates)[projectId] : get(projects)[projectId]
+        const projectShows = currentProject?.shows || []
 
         if (drag.id === "action") {
             let index = drop.index
@@ -132,51 +135,105 @@ export const dropActions = {
 
             const actionId: string = drag.data?.[0]?.id || ""
             projectShows[index].data = { settings: { triggerAction: actionId } }
-            history.newData = { key: "shows", data: projectShows }
-            return history
+            h.newData = { key: "shows", data: projectShows }
+            return h
         }
 
         if (drop.index === undefined) drop.index = projectShows.length
-        if (drag.id === "files" && drop.trigger?.includes("end")) drop.index++
+        if ((drag.id === "files" || drag.id === "urls") && drop.trigger?.includes("end")) drop.index++
 
         let data = drag.data
         if (drag.id === "media" || drag.id === "files") {
-            let extraFiles: string[] = []
+            const extraFiles: string[] = []
+            const pptFiles: string[] = []
+            const projectFiles: string[] = []
+
             data = data
                 .map((a) => {
                     const path = a.path || window.api.showFilePath(a)
                     const extension: string = getExtension(path || a.name)
+
+                    if (extension === "project") {
+                        projectFiles.push(path)
+                        return
+                    }
+
                     if (drag.id === "files" && !files[drop.id].includes(extension)) {
                         extraFiles.push(path)
                         return null
                     }
 
+                    // pre-download online media
+                    if (typeof path === "string" && path.startsWith("http")) {
+                        downloadOnlineMedia(path)
+                    }
+
                     const type: string = getMediaType(extension)
+
+                    if (type === "ppt") {
+                        pptFiles.push(path)
+                        return null
+                    }
 
                     const name: string = a.name || getFileName(path)
                     return { name: removeExtension(name), id: path, type }
                 })
-                .filter((a) => a)
+                .filter(Boolean)
 
             // add folders
             if (extraFiles.length) projectDropFolders(extraFiles, drop.index)
-        } else if (drag.id === "audio") {
+            // auto convert PPT to slides
+            if (pptFiles.length) sendMain(Main.IMPORT_FILES, { id: "powerpoint", paths: pptFiles })
+            // iport projects
+            if (projectFiles.length) sendMain(Main.IMPORT_FILES, { id: "freeshow_project", paths: projectFiles })
+        } else if (drag.id === "urls") {
+            data = await Promise.all(
+                data.map(async (url) => {
+                    if (url.includes("youtube.com") || url.includes("youtu.be")) {
+                        const id = trimPlayerId(url, "youtube")
+                        const name = await getYouTubeName(id)
+                        return { id: "-", type: "player", data: { type: "youtube", id, name } }
+                    }
+                    if (url.includes("vimeo.com")) {
+                        const id = trimPlayerId(url, "vimeo")
+                        const name = await getVimeoName(id)
+                        return { id: "-", type: "player", data: { type: "vimeo", id, name } }
+                    }
+
+                    return { id: url, type: "url" }
+                })
+            )
+            // WIP no URLs for now!
+            data = data.filter((a) => a.type !== "url")
+        } else if (drag.id === "audio" || drag.id === "audio_effect") {
             data = data.map((a) => ({ id: a.path, name: removeExtension(a.name), type: "audio" }))
         } else if (drag.id === "overlay") {
             data = data.map((a) => ({ id: a, type: "overlay" }))
         } else if (drag.id === "player") {
-            data = data.map((a) => ({ id: a, type: "player" }))
+            data = data.map((a) => {
+                // store actual player data in project
+                const playerData = get(playerVideos)[a] || {}
+                return { id: a, type: "player", data: { type: playerData.type, id: playerData.id, name: playerData.name } }
+            })
         } else if (drag.id === "camera") {
             data = data.map((a) => ({ id: a.id, name: a.name, type: "camera", data: { groupId: a.cameraGroup } }))
         } else if (drag.id === "scripture") {
-            return createScriptureShow(drag, drop)
+            const biblesContent = await getActiveScripturesContent()
+            const show = await getScriptureShow(biblesContent)
+            if (!show) return
+
+            let index = drop.index
+            if (drop.trigger?.includes("end")) index++
+
+            history({ id: "UPDATE", newData: { data: show, remember: { project: projectId, index } }, location: { page: "show", id: "show" } })
+            return
         }
 
-        history.newData = { key: "shows", data: [] }
-        if (drag.id === "show") history.newData.data = mover(projectShows, getIndexes(data), drop.index)
-        else history.newData.data = addToPos(projectShows, data, drop.index)
+        h.newData = { key: "shows", data: [] }
+        if (drag.id === "show") h.newData.data = mover(projectShows, getIndexes(data), drop.index)
+        else h.newData.data = addToPos(projectShows, data, drop.index)
 
-        return history
+        return h
     },
     all_slides: ({ drag, drop }: Data, h: History) => {
         h.location = { page: "show" }
@@ -188,15 +245,24 @@ export const dropActions = {
             const indexes: number[] = []
             // dropping on the center of a slide will add the template to just that slide
             if (drop.center) {
-                if (_show().get()?.locked) {
-                    alertMessage.set("show.locked_info")
+                const show = _show().get()
+                if (show?.locked) {
+                    alertMessage.set("show.locked")
+                    activePopup.set("alert")
+                    return
+                }
+
+                const profile = getAccess("shows")
+                const readOnly = profile.global === "read" || profile[show?.category || ""] === "read"
+                if (readOnly) {
+                    alertMessage.set("profile.locked")
                     activePopup.set("alert")
                     return
                 }
 
                 const showTemplateId: string = _show().get("settings.template") || ""
                 if (showTemplateId === templateId) {
-                    newToast("$toast.template_applied_globally")
+                    newToast("toast.template_applied_globally")
                     return
                 }
 
@@ -206,6 +272,15 @@ export const dropActions = {
 
                 const ref = getLayoutRef()
                 const slideId = ref[drop.index!].id
+
+                const slide = _show()
+                    .slides([ref[drop.index!]?.parent?.id || ref[drop.index!]?.id])
+                    .get()[0]
+                if (slide?.locked) {
+                    newToast("output.state_locked")
+                    return
+                }
+
                 const slideSettings = _show().slides([slideId]).get("settings")
                 const oldData = { style: clone(slideSettings) }
                 const newData = { style: { ...clone(slideSettings), template: templateId } }
@@ -224,15 +299,24 @@ export const dropActions = {
 
             // create slide from template if dropping on a slide
             if (drop.trigger) {
-                if (_show().get()?.locked) {
-                    alertMessage.set("show.locked_info")
+                const show = _show().get()
+                if (show?.locked) {
+                    alertMessage.set("show.locked")
+                    activePopup.set("alert")
+                    return
+                }
+
+                const profile = getAccess("shows")
+                const readOnly = profile.global === "read" || profile[show?.category || ""] === "read"
+                if (readOnly) {
+                    alertMessage.set("profile.locked")
                     activePopup.set("alert")
                     return
                 }
 
                 const showId = drag.showId || drag.data[0]?.showId || get(activeShow)?.id || ""
-                const slides: { [key: string]: Slide } = _show(showId).get().slides
-                let layout = _show(showId).layouts("active").get()[0].slides
+                const slides: { [key: string]: Slide } = _show(showId).get()?.slides || {}
+                let layout = _show(showId).layouts("active").get()[0]?.slides || []
                 const oldData = clone({ slides, layout })
                 const ref = getLayoutRef(showId)
 
@@ -298,7 +382,7 @@ export const dropActions = {
         }
 
         // audio playlist
-        if (get(audioPlaylists)[drop.data] && drag.id === "audio") {
+        if (get(audioPlaylists)[drop.data] && (drag.id === "audio" || drag.id === "audio_effect")) {
             h.id = "UPDATE"
             h.location = { page: "drawer", id: "audio_playlist_key" }
 
@@ -334,7 +418,7 @@ export const dropActions = {
             const templateId: string = drop.data
             if (!mediaPath || !templateId) return
 
-            if (!files[drop.id].includes(getExtension(mediaPath))) return
+            if (!files[drop.id]?.includes(getExtension(mediaPath))) return
 
             const templateSettings = get(templates)[templateId]?.settings || {}
             const newData = { key: "settings", data: { ...templateSettings, backgroundPath: mediaPath } }
@@ -347,8 +431,8 @@ export const dropActions = {
         if (drag.id !== "slide") return
 
         drag.data.forEach(({ index }) => {
-            const ref = getLayoutRef()[index]
-            const slides: Slide[] = _show().get().slides
+            const ref = getLayoutRef()[index] || {}
+            const slides: { [key: string]: Slide } = _show().get()?.slides || {}
             const slide = ref.type === "child" ? slides[ref.parent!.id] : slides[ref.id]
             const activeTab: string | null = get(drawerTabsData)[get(activeDrawerTab)]?.activeSubTab
 
@@ -371,7 +455,7 @@ export const dropActions = {
             drag.data.forEach((a) => {
                 const name = getVariableNameId(a.name || "")
                 if (!name) return
-                addItem("text", null, {}, `{variable_${name}}`)
+                addItem("text", null, {}, `{$${name}}`)
             })
         }
     },
@@ -406,7 +490,11 @@ function dropFileInDrawerNavigation(drag) {
     // drop folders
     if (drawerTab === "media" || drawerTab === "audio") {
         drag.data.forEach((file) => {
-            if (file.type) return
+            if (file.type) {
+                newToast("Drag media files into a project or a show!")
+                return
+            }
+
             addDrawerFolder(file, drawerTab)
         })
     }
@@ -421,7 +509,7 @@ export function addDrawerFolder(file: any, type: "media" | "audio") {
     const path: string = file.path || window.api.showFilePath(file)
     const exists = Object.values(type === "media" ? get(mediaFolders) : get(audioFolders)).find((a) => a.path === path)
     if (exists) {
-        newToast("$error.folder_exists")
+        newToast("error.folder_exists")
         return
     }
 
@@ -444,8 +532,10 @@ const files = {
 }
 
 const slideDrop = {
-    media: ({ drag, drop }: Data, history: History) => {
-        let data = drag.data
+    media: ({ drag, drop }: Data, h: History, keys: Keys) => {
+        let data = clone(drag.data)
+        if (!data.length) return
+
         // TODO: move multiple add to possible slides
 
         // check files
@@ -464,15 +554,13 @@ const slideDrop = {
         } else if (drag.id === "camera") data[0].type = "camera"
         else if (drag.id === "screen") data[0].type = "screen"
         else if (drag.id === "ndi") data[0].type = "ndi"
-        else if (!data[0].name) data[0].name = data[0].path
+        else if (!data[0]?.name) data[0].name = data[0].path
 
         let center = drop.center
         if (drag.id === "files" && drop.index !== undefined) center = true
 
-        // get background type
-        let backgroundTypeData: any = {}
         // videos are probably not meant to be background if they are added in bulk
-        if (data.length > 1 && !center) backgroundTypeData = { muted: false, loop: false }
+        const shouldBeForeground = data.length > 1 && !center
 
         data = data.map((a) => {
             const path = a.path || a.id
@@ -481,34 +569,68 @@ const slideDrop = {
             a.path = path
             delete a.id
 
-            let backgroundData = backgroundTypeData
+            // "background" by default
+            let backgroundData = { muted: true, loop: true }
             const mediaStyle = getMediaStyle(get(media)[path], undefined)
-            if (mediaStyle.videoType === "background") backgroundData = { muted: true, loop: true }
-            else if (mediaStyle.videoType === "foreground") backgroundData = { muted: false, loop: false }
+            let type = getMediaLayerType(path, mediaStyle) || (shouldBeForeground ? "foreground" : "background")
+            if (a.contentProvider) type = "foreground"
+            if (type === "foreground") backgroundData = { muted: false, loop: false }
 
             return { ...a, path, ...(a.type === "video" ? backgroundData : {}) }
         })
 
         if (center) {
             if (!data[0]) return
-            history.id = "showMedia"
+            h.id = "showMedia"
 
             if (drop.trigger?.includes("end")) drop.index!--
-            history.location!.layoutSlide = drop.index
-            const newData = data[0]
+            h.location!.layoutSlide = drop.index
+            let newData = data[0]
             delete newData.index
             delete newData.id
-            history.newData = newData
+            delete newData.contentProvider
+            h.newData = newData
 
-            return history
+            // change slide group name if same name as previous media
+            const showId = get(activeShow)?.id || ""
+            const layoutRef = getLayoutRef()
+            const slideId = layoutRef[drop.index!]?.id
+            const slide = _show(showId).slides([slideId]).get()?.[0] || {}
+            const currentBgId = layoutRef[drop.index!]?.data.background || ""
+            const mediaName = removeExtension(_show(showId).media([currentBgId]).get()?.[0]?.name || "")
+
+            if (slide.locked || get(showsCache)[showId]?.slides?.[layoutRef[drop.index!]?.parent?.id || ""]?.locked) {
+                newToast("output.state_locked")
+                return
+            }
+
+            // add as slide bg instead of layout bg
+            if (keys.ctrlKey) {
+                const slideSettings = _show().slides([slideId]).get("settings")
+                const oldData = { style: clone(slideSettings) }
+                newData = { style: { ...clone(slideSettings), backgroundImage: newData.path } }
+
+                history({ id: "slideStyle", oldData, newData, location: { page: "edit", show: get(activeShow)!, slide: slideId } })
+                return
+            }
+
+            if (newData.name && slide.group === mediaName) {
+                showsCache.update((shows) => {
+                    if (!shows[showId]?.slides?.[slideId]) return shows
+                    shows[showId].slides[slideId].group = removeExtension(newData.name)
+                    return shows
+                })
+            }
+
+            return h
         }
 
-        history.id = "SLIDES"
-        const slides = drag.data.map((a) => ({ id: a.id || uid(), group: removeExtension(a.name || ""), color: null, settings: {}, notes: "", items: [] }))
+        h.id = "SLIDES"
+        const slides = drag.data.map((a) => ({ id: (a.id?.length > 11 ? "" : a.id) || uid(), group: removeExtension(a.name || ""), color: null, settings: {}, notes: "", items: [] }))
 
-        history.newData = { index: drop.index, data: slides, layout: { backgrounds: data } }
+        h.newData = { index: drop.index, data: slides, layout: { backgrounds: data } }
 
-        return history
+        return h
     },
     audio: ({ drag, drop }: Data, h: History) => {
         h.id = "showAudio"
@@ -538,6 +660,14 @@ const slideDrop = {
             history(h)
         })
     },
+    category_audio: ({ drag, drop }: Data) => {
+        // drop playlist to create action
+        const playlistId = drag.data[0]
+        if (!playlistId || !get(audioPlaylists)[playlistId]) return
+
+        addSlideAction(drop.index ?? -1, "start_playlist", { id: playlistId })
+    },
+    audio_effect: ({ drag, drop }: Data, h: History) => slideDrop.audio({ drag, drop }, h),
     microphone: ({ drag, drop }: Data, h: History) => {
         if (drop.index === undefined) return
         h.id = "SHOW_LAYOUT"
@@ -559,9 +689,17 @@ const slideDrop = {
         const showId = drag.showId || drag.data[0]?.showId || get(activeShow)?.id || ""
         history.id = "slide"
         let ref = getLayoutRef(showId)
+        const slides: { [key: string]: Slide } = _show(showId).get()?.slides || {}
 
-        const slides: { [key: string]: Slide } = _show(showId).get().slides
-        const oldLayout = _show(showId).layouts("active").get()[0].slides
+        // remove locked slide groups
+        let data: any[] = []
+        drag.data.forEach((a: any) => {
+            const slideId = ref[a.index]?.parent?.id ?? ref[a.index]?.id
+            if (!slides?.[slideId]?.locked) data.push(a)
+        })
+        if (data.length < drag.data.length) newToast("output.state_locked")
+
+        const oldLayout = _show(showId).layouts("active").get()[0]?.slides || []
         history.oldData = clone({ layout: oldLayout, slides })
 
         // end of layout
@@ -572,7 +710,7 @@ const slideDrop = {
         let sortedLayout: any[] = []
 
         if (drag.id === "slide") {
-            let selected: number[] = getIndexes(drag.data)
+            let selected: number[] = getIndexes(data)
 
             // move all children when parent is moved
             selected.forEach(selectChildren)
@@ -607,7 +745,7 @@ const slideDrop = {
                 // WIP adding to children will not remove old children
             }
 
-            moved = drag.data.map(({ index, id }) => ref[index] || { type: "parent", id })
+            moved = data.map(({ index, id }) => ref[index] || { type: "parent", id })
             sortedLayout = addToPos(ref, moved, newIndex)
         }
 
@@ -637,11 +775,13 @@ const slideDrop = {
 
         const layoutId: string = _show().get("settings.activeLayout")
 
-        const slides: { [key: string]: Slide } = clone(get(showsCache)[get(activeShow)!.id].slides)
-        const mediaData: any = clone(get(showsCache)[get(activeShow)!.id].media || {})
+        const slides: { [key: string]: Slide } = clone(get(showsCache)[get(activeShow)?.id || ""]?.slides)
+        if (!slides) return
+
+        const mediaData: any = clone(get(showsCache)[get(activeShow)?.id || ""]?.media || {})
         let layout: any[] = _show().layouts([layoutId]).slides().get()[0]
 
-        if (drop.index === undefined) drop.index = layout.length
+        if (drop.index === undefined) drop.index = ref.length
         const newIndex: number = drop.index
 
         let newMedia: any = mediaData
@@ -695,15 +835,18 @@ const slideDrop = {
         history.newData = { key: "overlays", data, dataIsArray: true, indexes: [drop.index] }
         return history
     },
-    scripture: ({ drag, drop }: Data, history: History) => {
-        const bibles = drag.data[0]?.bibles
-        if (!bibles?.[0]) return
+    scripture: async ({ drop }: Data, history: History) => {
+        const biblesContent = await getActiveScripturesContent()
+        if (!biblesContent?.length) return
 
-        let newSlides: any[] = getSlides(drag.data[0])
+        const selectedChapters = biblesContent[0].chapters
+        const selectedVerses = biblesContent[0].activeVerses
+
+        const { slides: scriptureSlides, groupNames, slideDynamicValues } = await getScriptureSlidesNew({ biblesContent, selectedChapters, selectedVerses })
         const slideTemplate: string = get(scriptureSettings).verseNumbers ? "" : get(scriptureSettings).template || ""
-        newSlides = newSlides.map((items) => {
-            const referenceText = getReferenceText(bibles, drag.data[0]?.sorted, items)
-            return { group: referenceText, color: null, settings: { template: slideTemplate }, notes: "", items }
+        let newSlides = scriptureSlides.map((items, i) => {
+            const referenceText = getReferenceText(biblesContent)
+            return { group: groupNames[i] || referenceText, color: null, settings: { template: slideTemplate }, notes: "", items, customDynamicValues: slideDynamicValues?.[i] }
         })
 
         // set to correct order
@@ -716,16 +859,18 @@ const slideDrop = {
 
         const layoutId: string = _show().get("settings.activeLayout")
 
-        const slides: { [key: string]: Slide } = clone(get(showsCache)[get(activeShow)!.id].slides)
-        let layout: any[] = _show().layouts([layoutId]).slides().get()[0]
+        const slides: { [key: string]: Slide } = clone(get(showsCache)[get(activeShow)?.id || ""]?.slides)
+        if (!slides) return
 
-        if (drop.index === undefined) drop.index = layout.length
+        let layout: any[] = _show().layouts([layoutId]).slides().get()[0] || []
+
+        if (drop.index === undefined) drop.index = ref.length
         let newIndex: number = drop.index
         if (drop.trigger?.includes("end")) newIndex++
 
         newSlides.forEach((slide) => {
             const id = uid()
-            delete slide.id
+            delete (slide as any).id
             slides[id] = slide
 
             let parent: any = ref[newIndex - 1] || { index: -1 }
@@ -784,7 +929,7 @@ const slideDrop = {
         history.id = "SLIDES"
         const slides = drag.data.map((a) => ({ id: uid(), group: a.name || "", color: null, settings: {}, notes: "", items: getTimerItem(a) }))
         function getTimerItem(timer): Item[] {
-            return [{ type: "timer", style: DEFAULT_ITEM_STYLE, timerId: timer.id }]
+            return [{ type: "timer", style: DEFAULT_ITEM_STYLE, timer: { id: timer.id } }]
         }
 
         // start timer layout
@@ -809,7 +954,7 @@ const slideDrop = {
 
         const slides = variables.map((a) => ({ id: uid(), group: a.name || "", color: null, settings: {}, notes: "", items: getItem(a) }))
         function getItem(a): Item[] {
-            const variableId = `{variable_${getVariableNameId(a.name || "")}}`
+            const variableId = `{$${getVariableNameId(a.name || "")}}`
             const lines = [{ align: "", text: [{ value: variableId, style: "font-size: 150px;" }] }]
             return [{ type: "text", style: DEFAULT_ITEM_STYLE, lines }]
         }
@@ -863,11 +1008,24 @@ const slideDrop = {
             if (!data) return
 
             // replace if existing & and only one or value is the same
-            const existingIndex = slideActions.findIndex((a) => getActionTriggerId(a.triggers[0]) === triggerId && (!data.canAddMultiple || JSON.stringify(a.actionValues) === JSON.stringify(action.actionValues)))
+            // For actions that can have multiple instances, only replace if values are identical
+            const existingIndex = slideActions.findIndex((a) => {
+                const actionTriggerId = getActionTriggerId(a.triggers[0])
+                if (actionTriggerId !== triggerId) return false
+
+                // If action cannot have multiple instances, replace any existing
+                if (!data.canAddMultiple) return true
+
+                // If action can have multiple instances, only replace if values are exactly the same
+                return JSON.stringify(a.actionValues) === JSON.stringify(action.actionValues)
+            })
+
             if (existingIndex > -1) {
                 slideActions[existingIndex] = { ...action, id: slideActions[existingIndex].id }
                 return
             }
+
+            if (keys?.shiftKey) action.customData = { [action.triggers[0]]: { overrideCategoryAction: true } }
 
             newActions.push({ id: uid(), ...action })
         })
@@ -886,7 +1044,11 @@ function createSlideAction(triggerId: string, slideIndex: number, data: any, rem
     const actions: any = ref.data?.actions || {}
     const slideActions: any[] = actions.slideActions || []
 
-    if (removeExisting) {
+    // Check if this action type can have multiple instances
+    const actionDataConfig = actionData[triggerId]
+    const canAddMultiple = actionDataConfig?.canAddMultiple
+
+    if (removeExisting || !canAddMultiple) {
         const existingIndex = slideActions.findIndex((a) => a.triggers?.[0] === triggerId)
         if (existingIndex > -1) slideActions.splice(existingIndex, 1)
     }
@@ -896,61 +1058,4 @@ function createSlideAction(triggerId: string, slideIndex: number, data: any, rem
 
     actions.slideActions = slideActions
     return actions
-}
-
-// WIP duplicate of ScriptureInfo.svelte createSlides()
-function createScriptureShow(drag, drop) {
-    const bibles = drag.data[0]?.bibles
-    if (!bibles?.[0]) return
-
-    const slides: any = {}
-    const layouts: any[] = []
-
-    const newSlides = getSlides(drag.data[0])
-    newSlides.forEach((items) => {
-        const id = uid()
-        const referenceText = getReferenceText(bibles, drag.data[0]?.sorted, items)
-
-        slides[id] = { group: referenceText, color: null, settings: {}, notes: "", items }
-        layouts.push({ id })
-    })
-
-    // add scripture category
-    const categoryId = createCategory("scripture", "scripture", { isDefault: true, isArchive: true })
-
-    const layoutID = uid()
-    // only set template if not combined (because it might be a custom reference style on first line)
-    const template = get(scriptureSettings).combineWithText ? false : get(scriptureSettings).template || false
-    // this can be set to private - to only add to project and not in drawer, because it's mostly not used again
-    const show: Show = new ShowObj(false, categoryId, layoutID, new Date().getTime(), template)
-
-    const bibleShowName = `${bibles[0].book} ${bibles[0].chapter},${joinRange(drag.data[0]?.sorted || [])}`
-    show.name = checkName(bibleShowName)
-    if (show.name !== bibleShowName) show.name = checkName(`${bibleShowName} - ${getShortBibleName(bibles[0].version)}`)
-    show.slides = slides
-    show.layouts = { [layoutID]: { name: bibles[0].version || "", notes: "", slides: layouts } }
-
-    const versions = bibles.map((a) => a.version).join(" + ")
-    show.reference = {
-        type: "scripture",
-        data: { collection: get(drawerTabsData).scripture?.activeSubTab || bibles[0].id || "", version: versions, api: bibles[0].api, book: bibles[0].bookId ?? bibles[0].book, chapter: bibles[0].chapter, verses: bibles[0].activeVerses }
-    }
-
-    let index = drop.index
-    if (drop.trigger?.includes("end")) index++
-
-    history({ id: "UPDATE", newData: { data: show, remember: { project: get(activeProject), index } }, location: { page: "show", id: "show" } })
-}
-
-function getReferenceText(bibles, range: string[], items: Item[]) {
-    const referenceTextItem = items.find((a) => a.lines?.find((a) => a.text?.find((a) => a.value.includes(":") && a.value.length < 25)))
-    if (referenceTextItem) return referenceTextItem.lines?.[0]?.text?.[0]?.value
-
-    const referenceDivider = get(scriptureSettings).referenceDivider || ":"
-    const reference = bibles[0].book + " " + bibles[0].chapter + referenceDivider + joinRange(range)
-    if (reference) return reference
-
-    // this is probably never called
-    const firstTextItem = items.find((a) => a.lines)
-    return firstTextItem?.lines?.[0]?.text?.[0]?.value?.split(" ")?.slice(0, 4)?.join(" ")?.trim() || ""
 }

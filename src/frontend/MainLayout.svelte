@@ -1,30 +1,20 @@
 <script lang="ts">
     import { customActionActivation } from "./components/actions/actions"
-    import DrawSettings from "./components/draw/DrawSettings.svelte"
     import DrawTabs from "./components/draw/DrawTabs.svelte"
-    import Slide from "./components/draw/Slide.svelte"
-    import Drawer from "./components/drawer/Drawer.svelte"
-    import AudioTools from "./components/edit/AudioTools.svelte"
-    import EditTools from "./components/edit/EditTools.svelte"
-    import Editor from "./components/edit/Editor.svelte"
-    import EffectTools from "./components/edit/EffectTools.svelte"
-    import MediaTools from "./components/edit/MediaTools.svelte"
     import Navigation from "./components/edit/Navigation.svelte"
-    import TextEditTools from "./components/edit/TextEditTools.svelte"
+    import LazyLoad from "./components/helpers/LazyLoad.svelte"
+    import ProfileChangerMenu from "./components/main/ProfileChangerMenu.svelte"
+    import Tipbar from "./components/main/Tipbar.svelte"
     import Top from "./components/main/Top.svelte"
     import Preview from "./components/output/preview/Preview.svelte"
-    import Settings from "./components/settings/Settings.svelte"
     import SettingsTabs from "./components/settings/SettingsTabs.svelte"
-    import SettingsTools from "./components/settings/SettingsTools.svelte"
     import Projects from "./components/show/Projects.svelte"
     import Show from "./components/show/Show.svelte"
     import ShowTools from "./components/show/ShowTools.svelte"
-    import FocusMode from "./components/show/focus/FocusMode.svelte"
-    import StageShow from "./components/stage/StageLayout.svelte"
     import StageLayouts from "./components/stage/StageLayouts.svelte"
-    import StageTools from "./components/stage/StageTools.svelte"
     import Resizeable from "./components/system/Resizeable.svelte"
-    import { activeEdit, activePage, activeShow, activeStage, currentWindow, focusMode, loaded, os, showsCache, textEditActive } from "./stores"
+    import Timeline from "./components/timeline/Timeline.svelte"
+    import { activeEdit, activePage, activeProfile, activeProject, activeShow, activeStage, currentWindow, focusMode, loaded, os, projectView, resized, showChangeProfileMenu, showsCache, special, textEditActive } from "./stores"
     import { DEFAULT_WIDTH } from "./utils/common"
 
     $: page = $activePage
@@ -49,7 +39,9 @@
         <Resizeable id="leftPanel">
             <div class="left">
                 {#if page === "show"}
-                    <Projects />
+                    {#key $activeProfile}
+                        <Projects />
+                    {/key}
                 {:else if page === "edit"}
                     <Navigation />
                 {:else if page === "stage"}
@@ -65,18 +57,18 @@
         <div class="center">
             {#if page === "show"}
                 {#if $focusMode}
-                    <FocusMode />
+                    <LazyLoad component={() => import("./components/show/focus/FocusMode.svelte")} show={$focusMode} />
                 {:else}
                     <Show />
                 {/if}
             {:else if page === "edit"}
-                <Editor />
+                <LazyLoad component={() => import("./components/edit/Editor.svelte")} show={page === "edit"} />
             {:else if page === "draw"}
-                <Slide />
+                <LazyLoad component={() => import("./components/draw/Slide.svelte")} show={page === "draw"} />
             {:else if page === "settings"}
-                <Settings />
+                <LazyLoad component={() => import("./components/settings/Settings.svelte")} show={page === "settings"} />
             {:else if page === "stage"}
-                <StageShow />
+                <LazyLoad component={() => import("./components/stage/StageLayout.svelte")} show={page === "stage"} />
             {/if}
         </div>
 
@@ -89,32 +81,46 @@
                     {/if}
                 {:else if page === "edit"}
                     {#if $activeEdit.type === "media" || $activeEdit.type === "camera"}
-                        <MediaTools />
+                        <LazyLoad component={() => import("./components/edit/MediaTools.svelte")} show={$activeEdit.type === "media" || $activeEdit.type === "camera"} />
                     {:else if $activeEdit.type === "audio"}
-                        <AudioTools />
+                        <LazyLoad component={() => import("./components/edit/AudioTools.svelte")} show={$activeEdit.type === "audio"} />
                     {:else if $activeEdit.type === "effect"}
-                        <EffectTools />
+                        <LazyLoad component={() => import("./components/edit/EffectTools.svelte")} show={$activeEdit.type === "effect"} />
                     {:else if $activeEdit.type === "overlay" || $activeEdit.type === "template" || $showsCache[$activeShow?.id || ""]}
                         {#if ($activeEdit.type || "show") === "show" && $textEditActive}
-                            <TextEditTools />
+                            <!-- <LazyLoad component={() => import("./components/edit/TextEditTools.svelte")} show={($activeEdit.type || "show") === "show" && $textEditActive} /> -->
                         {:else if !$focusMode}
-                            <EditTools />
+                            <LazyLoad component={() => import("./components/edit/EditTools.svelte")} show={!$focusMode} />
                         {/if}
                     {/if}
                 {:else if page === "draw"}
-                    <DrawSettings />
+                    <LazyLoad component={() => import("./components/draw/DrawSettings.svelte")} show={page === "draw"} />
                 {:else if page === "stage" && $activeStage.id}
-                    <StageTools />
+                    <LazyLoad component={() => import("./components/stage/StageTools.svelte")} show={page === "stage" && !!$activeStage.id} />
                 {:else if page === "settings"}
-                    <SettingsTools />
+                    <LazyLoad component={() => import("./components/settings/SettingsTools.svelte")} show={page === "settings"} />
                 {/if}
             </div>
         </Resizeable>
     </div>
 
-    {#if $loaded && (page === "show" || page === "edit")}
-        <Drawer />
+    {#if page === "show" && $special.projectTimelineActive && $activeProject && !$projectView}
+        <Resizeable id="project_timeline" side="bottom" maxWidth={DEFAULT_WIDTH} minWidth={40}>
+            {#key $activeProject}
+                <Timeline type="project" isClosed={$resized.project_timeline <= 40} />
+            {/key}
+        </Resizeable>
     {/if}
+
+    {#if $loaded && (page === "show" || page === "edit")}
+        <LazyLoad component={() => import("./components/drawer/Drawer.svelte")} show={$loaded && (page === "show" || page === "edit")} />
+    {/if}
+
+    {#if $showChangeProfileMenu && $activeProfile !== null}
+        <ProfileChangerMenu />
+    {/if}
+
+    <Tipbar />
 </div>
 
 <style>
@@ -147,6 +153,8 @@
 
     .left,
     .right {
+        position: relative;
+
         display: flex;
         flex-direction: column;
         flex: 1;
@@ -166,8 +174,8 @@
         min-width: 50%;
     }
 
-    .right.row :global(.color .picker) {
-        inset-inline-end: -1px;
-        inset-inline-start: unset;
+    .right.row :global(.textfield .picker) {
+        left: unset !important;
+        right: 0;
     }
 </style>

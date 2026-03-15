@@ -1,7 +1,16 @@
-import type fs from "fs"
+import type { Stats } from "fs"
 import type { dataFolderNames } from "../electron/utils/files"
-import type { ShowRef } from "./Projects"
 import type { Cropping } from "./Settings"
+
+export interface Config {
+    loaded: boolean
+    maximized: boolean
+    bounds: Electron.Rectangle
+    dataPath: string | null
+    disableHardwareAcceleration: boolean | null
+    autoErrorReporting?: boolean
+    mediaFolderPath?: string
+}
 
 export interface OS {
     platform: NodeJS.Platform
@@ -12,6 +21,7 @@ export interface OS {
 export interface Option {
     name: string
     extra?: string
+    extraInfo?: string
     data?: any
     id?: string | null
     icon?: string
@@ -33,7 +43,19 @@ export interface Time {
     d: number
 }
 
+export interface ClickEvent {
+    detail: {
+        ctrl: boolean
+        shift: boolean
+        alt: boolean
+        doubleClick: boolean
+        target: EventTarget
+    }
+}
+
 export type SelectIds =
+    | "files"
+    | "urls"
     | "slide"
     | "slide_icon"
     | "group"
@@ -43,7 +65,6 @@ export type SelectIds =
     | "show_drawer"
     | "project"
     | "folder"
-    | "files"
     | "category_shows"
     | "category_media"
     | "category_overlays"
@@ -78,6 +99,7 @@ export type SelectIds =
     | "theme"
     | "style"
     | "output"
+    | "profile"
     | "tag"
     | "bible_book"
 
@@ -131,15 +153,19 @@ export interface ActiveEdit {
     data?: any // camera data
 }
 
+export type FileFolder = { isFolder: false; path: string; name: string; thumbnailPath?: string; stats: Stats } | { isFolder: true; path: string; name: string; files: string[] }
+
 export type MediaFit = "contain" | "cover" | "fill" | "blur"
 export interface Media {
     [key: string]: MediaStyle
 }
 export interface MediaStyle {
+    creationTime?: number // used for checking valid media thumbnail cache
     filter?: string
     flipped?: boolean
     flippedY?: boolean
-    fit?: MediaFit
+    fit?: MediaFit | ""
+    fitOptions?: any
     speed?: string
     fromTime?: number
     toTime?: number
@@ -154,6 +180,10 @@ export interface MediaStyle {
     tracks?: Subtitle[]
     subtitle?: string
     tags?: string[] // media tags
+    name?: string // display name for content provider media (encrypted videos)
+    contentFile?: any // ContentFile from content provider (imported type would create circular dependency)
+    licenseChecked?: boolean // whether license has been checked for this media
+    pingbackUrl?: string // URL for sending pingback after playback
     cropping?: Partial<Cropping>
 
     ignoreLayer?: boolean // foreground background type
@@ -177,7 +207,7 @@ export interface MainFilePaths {
 }
 
 export type LyricSearchResult = {
-    source: "Genius" | "Hymnary" | "Letras"
+    source: "Genius" | "Hymnary" | "Letras" | "Ultimate Guitar"
     key: string
     artist: string
     title: string
@@ -186,15 +216,12 @@ export type LyricSearchResult = {
 
 export interface DriveData {
     mainFolderId: string | null
-    path: string | null
-    dataPath: string
     method: string | null
     closeWhenFinished: boolean
 }
 
 export interface LessonsData {
     type?: keyof typeof dataFolderNames
-    path: string
     showId: string
     name: string
     files: LessonFile[]
@@ -212,7 +239,7 @@ export interface LessonFile {
 export interface Variable {
     id?: string
     name: string
-    type: "number" | "random_number" | "text"
+    type: "number" | "random_number" | "text" | "text_set"
     tags?: string[]
 
     // number
@@ -227,11 +254,16 @@ export interface Variable {
     eachNumberOnce?: boolean
     sets?: { name: string; minValue?: number; maxValue?: number }[]
     setName?: string // chosen random set
-    setLog?: { name: string; number: number }[]
+    setLog?: { name: string; number: string }[]
 
     // text
     text?: string
     enabled?: boolean
+
+    // text set
+    activeTextSet?: number
+    textSetKeys?: string[]
+    textSets?: { [key: string]: string }[]
 }
 
 export interface Trigger {
@@ -242,19 +274,30 @@ export interface Trigger {
 
 export interface FileData {
     path: string
-    stat: fs.Stats
+    stat: Stats
     extension: string
     folder: boolean
     name: string
     thumbnailPath?: string
 }
 
+export interface Profiles {
+    [key: string]: Profile
+}
+export interface Profile {
+    name: string
+    color: string
+    password?: string // currently admin only
+    autoOpenLastUsed?: boolean // admin only
+    image: string
+    access: { [key: string]: { [key: string]: AccessType } }
+}
+export type AccessType = "none" | "read" | "write"
+
 export interface ErrorLog {
     time: Date
     os: string
     version: string
-    active: { window: string; page: string; show: ShowRef | null; edit: ActiveEdit }
-    drawer: { active: string }
     type: string
     source: string
     message: string
@@ -264,6 +307,7 @@ export interface ErrorLog {
 
 export type Popups =
     | "initialize"
+    | "confirm"
     | "custom_text"
     | "import"
     | "songbeamer_import"
@@ -282,6 +326,7 @@ export type Popups =
     | "manage_metadata"
     | "manage_dynamic_values"
     | "player"
+    | "template_style_overrides"
     | "rename"
     | "color"
     | "color_gradient"
@@ -290,12 +335,14 @@ export type Popups =
     | "variable"
     | "trigger"
     | "audio_stream"
+    | "now_playing"
     | "aspect_ratio"
     | "max_lines"
     | "transition"
     | "media_fit"
     | "metadata_display"
     | "import_scripture"
+    | "create_collection"
     | "scripture_show"
     | "edit_event"
     | "choose_chord"
@@ -304,6 +351,7 @@ export type Popups =
     | "choose_output"
     | "choose_style"
     | "change_output_values"
+    | "output_selector"
     | "set_time"
     | "assign_shortcut"
     | "dynamic_values"
@@ -313,24 +361,28 @@ export type Popups =
     | "next_timer"
     | "display_duration"
     | "manage_tags"
-    | "advanced_settings"
     | "about"
     | "shortcuts"
     | "unsaved"
+    | "restore"
     | "reset_all"
     | "alert"
+    | "new_update"
     | "history"
     | "action_history"
     | "manage_emitters"
     | "action"
     | "category_action"
     | "custom_action"
-    | "user_data_overwrite"
+    | "slide_midi"
     | "connect"
+    | "cloud_sync"
     | "cloud_update"
     | "cloud_method"
-    | "chums_sync_categories"
+    | "sync_categories"
     | "effect_items"
+    | "timeline"
+    | "timecode"
 
 export type DefaultProjectNames = "date" | "today" | "sunday" | "week" | "custom" | "blank"
 

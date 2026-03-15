@@ -2,17 +2,17 @@ import { get } from "svelte/store"
 import { uid } from "uid"
 import { Main } from "../../types/IPC/Main"
 import { ToMain } from "../../types/IPC/ToMain"
+import type { LessonFile } from "../../types/Main"
 import { ShowObj } from "../classes/Show"
 import { clone } from "../components/helpers/array"
 import { history } from "../components/helpers/history"
 import { getExtension } from "../components/helpers/media"
 import { checkName, formatToFileName, getLabelId } from "../components/helpers/show"
 import { destroyMain, receiveToMain, sendMain } from "../IPC/main"
-import { activeProject, activeRename, dataPath, projectView, projects, refreshSlideThumbnails } from "../stores"
+import { activeProject, activeRename, projectView, projects, refreshSlideThumbnails } from "../stores"
 import { newToast } from "../utils/common"
 import { videoExtensions } from "../values/extensions"
 import { createCategory, setTempShows } from "./importHelpers"
-import type { LessonFile } from "../../types/Main"
 
 type File = {
     name: string
@@ -66,7 +66,7 @@ export async function convertLessonsPresentation(data: any) {
 
     if (!lesson) return
 
-    newToast("$popup.importing")
+    newToast("popup.importing")
     createCategory("Lessons", "book")
     createProject()
 
@@ -74,7 +74,7 @@ export async function convertLessonsPresentation(data: any) {
     const { mediaToDownload, lessonShow } = convertOpenLessonPlaylist(lesson)
 
     // download videos/images
-    sendMain(Main.DOWNLOAD_MEDIA, [{ path: get(dataPath), name: lesson.lessonName, files: mediaToDownload, showId: lessonShow.id }])
+    sendMain(Main.DOWNLOAD_LESSONS_MEDIA, [{ name: lesson.lessonName, files: mediaToDownload, showId: lessonShow.id }])
 
     const replace = await receiveMessage()
     replace.forEach((r) => {
@@ -113,7 +113,7 @@ function createProject() {
 }
 
 function convertOpenLessonPlaylist(lesson: OlpLesson) {
-    const slideGroups = [{ files: [{ name: "Lesson Image", url: lesson.lessonImage }], name: "Lesson Image" }, ...lesson.messages]
+    const slideGroups = [{ files: [{ name: "Lesson Image", url: lesson.lessonImage }], name: "Lesson Image" }, ...(lesson.messages || [])]
 
     // fix file names (might have spaces or :)
     slideGroups.forEach((group, i) => {
@@ -152,7 +152,7 @@ function convertOpenLessonPlaylist(lesson: OlpLesson) {
         show.meta = {
             title: lesson.lessonTitle,
             name: lesson.lessonName,
-            venue: lesson.venueName,
+            venue: lesson.venueName
         }
 
         return { id: showId, show }
@@ -163,7 +163,7 @@ function convertOlfLessonToOlpType(lesson: OlfLesson) {
     const newLesson: OlpLesson = clone({
         ...lesson,
         lessonTitle: lesson.lessonName,
-        messages: getMessages(lesson.sections),
+        messages: getMessages(lesson.sections)
     })
 
     return newLesson
@@ -236,7 +236,7 @@ function convertToSlides(groups) {
                 color: "",
                 settings: {},
                 notes: "",
-                items: [],
+                items: []
             }
 
             const currentLayoutData: any = { background: mediaId }

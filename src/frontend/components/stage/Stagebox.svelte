@@ -1,15 +1,20 @@
 <script lang="ts">
     import { onDestroy } from "svelte"
-    import type { StageItem, StageLayout } from "../../../types/Stage"
-    import { activePopup, activeStage, activeTimers, allOutputs, currentWindow, dictionary, outputs, outputSlideCache, previewBuffers, refreshEditSlide, stageShows, timers, variables } from "../../stores"
+    import type { StageItem, StageLayout as TStageLayout } from "../../../types/Stage"
+    import { activePopup, activeStage, activeTimers, allOutputs, currentWindow, dictionary, outputs, outputSlideCache, refreshEditSlide, stageShows, timers, variables } from "../../stores"
+    import { translateText } from "../../utils/language"
     import { sendBackgroundToStage } from "../../utils/stageTalk"
     import EditboxLines from "../edit/editbox/EditboxLines.svelte"
     import autosize from "../edit/scripts/autosize"
+    import { isConditionMet } from "../edit/scripts/itemHelpers"
+    import { getItemText } from "../edit/scripts/textStyle"
     import { clone, keysToID, sortByName } from "../helpers/array"
+    import Icon from "../helpers/Icon.svelte"
     import { getActiveOutputs, getStageResolution, percentageStylePos } from "../helpers/output"
     import { getStyles } from "../helpers/style"
+    import Button from "../inputs/Button.svelte"
     import Media from "../output/layers/Media.svelte"
-    import PreviewCanvas from "../output/preview/PreviewCanvas.svelte"
+    import Output from "../output/Output.svelte"
     import SlideItems from "../slide/SlideItems.svelte"
     import Textbox from "../slide/Textbox.svelte"
     import SlideProgress from "../slide/views/SlideProgress.svelte"
@@ -20,20 +25,19 @@
     import SlideNotes from "./items/SlideNotes.svelte"
     import SlideText from "./items/SlideText.svelte"
     import VideoTime from "./items/VideoTime.svelte"
-    import { getCustomStageLabel, stageItemToItem } from "./stage"
-    import Button from "../inputs/Button.svelte"
-    import Icon from "../helpers/Icon.svelte"
+    import { getCustomStageLabel, getSlideTextItems, stageItemToItem } from "./stage"
+    import StageLayout from "./StageLayout.svelte"
 
     export let id: string
-    export let item: StageItem
-    export let stageLayout: StageLayout | null = null
+    export let item: StageItem | undefined
+    export let stageLayout: TStageLayout | null = null
     export let ratio: number
     export let preview = false
     export let edit = false
 
     $: currentShow = stageLayout === null ? ($activeStage.id ? $stageShows[$activeStage.id] : null) : stageLayout
 
-    $: slideOffset = item.type ? Number(item.slideOffset || 0) : id.includes("next") ? 1 : 0
+    $: slideOffset = item?.type ? Number(item.slideOffset || 0) : id.includes("next") ? 1 : 0
 
     export let mouse: any = null
     function mousedown(e: any) {
@@ -41,7 +45,7 @@
 
         console.log(e)
         activeStage.update((ae) => {
-            if (e.ctrlKey || e.metaKey) {
+            if (e.shiftKey) {
                 if (ae.items.includes(id)) {
                     if (e.target.closest(".line")) ae.items.splice(ae.items.indexOf(id), 1)
                 } else ae.items.push(id)
@@ -51,6 +55,7 @@
         })
 
         let target = e.target.closest(".stage_item")
+        if (!target) return
 
         mouse = {
             x: e.clientX,
@@ -77,6 +82,7 @@
             // TODO: history??
             stageShows.update((a) => {
                 delete a[$activeStage.id!].items[id]
+                a[$activeStage.id!].modified = Date.now()
                 return a
             })
             activeStage.set({ ...$activeStage, items: [] })
@@ -86,7 +92,7 @@
     function deselect(e: any) {
         if (e.target.closest(".stageTools") || e.target.closest(".contextMenu") || $activePopup) return
 
-        if ((edit && !e.ctrlKey && !e.metaKey && e.target.closest(".stage_item")?.id !== id && $activeStage.items.includes(id) && !e.target.closest(".stage_item")) || e.target.closest(".panel")) {
+        if ((edit && !e.shiftKey && e.target.closest(".stage_item")?.id !== id && $activeStage.items.includes(id) && !e.target.closest(".stage_item")) || e.target.closest(".panel")) {
             activeStage.update((ae) => {
                 ae.items = []
                 return ae
@@ -98,20 +104,76 @@
     let today = new Date()
     const dateInterval = setInterval(() => (today = new Date()), 1000)
 
-    onDestroy(() => clearInterval(dateInterval))
+    onDestroy(() => {
+        clearInterval(dateInterval)
+        if (currentAutoSizeTimeout) clearTimeout(currentAutoSizeTimeout)
+    })
 
-    $: fontSize = Number(getStyles(item.style, true)?.["font-size"] || 0) || 100 // item.autoFontSize ||
+    $: fontSize = Number(getStyles(item?.style, true)?.["font-size"] || 0) || 100 // item.autoFontSize ||
+
+    // Exclude slide_text from Stagebox autosize - it uses Textbox's own autosize instead
+    // Stagebox autosize is for SlideNotes, SlideProgress, VideoTime, etc.
+    $: autoSizeEnabled = item?.type === "current_output" || item?.type === "slide_text" ? false : item?.type?.includes("text") ? item?.auto || (item?.textFit && item?.textFit !== "none") : item?.auto !== false || item?.textFit !== "none"
 
     let alignElem
     let size = 100
+    // Track previous slide to reset retry counter when slide changes
+    let prevSlideForAutoSize: any = undefined
     // currentSlide & timeout to update auto size properly if slide notes
-    $: if (alignElem && item && currentSlide !== undefined) setTimeout(() => (size = autosize(alignElem, { type: "growToFit", textQuery: ".autoFontSize" })))
+    $: if (alignElem && item && currentSlide !== undefined && autoSizeEnabled) {
+        // Reset retry counter when slide changes
+        if (prevSlideForAutoSize !== currentSlide) {
+            autoSizeRetryCount = 0
+            prevSlideForAutoSize = currentSlide
+        }
+        updateAutoSize()
+    }
+    let currentAutoSizeTimeout: NodeJS.Timeout | null = null
+    let autoSizeRetryCount = 0
+    const MAX_AUTOSIZE_RETRIES = 5
+    function updateAutoSize() {
+        if (currentAutoSizeTimeout) clearTimeout(currentAutoSizeTimeout)
+        currentAutoSizeTimeout = setTimeout(() => {
+            // Check if the element has valid dimensions before measuring
+            // If height is 0, the content hasn't rendered yet - retry with longer delay
+            if (!alignElem || alignElem.clientHeight === 0) {
+                autoSizeRetryCount++
+
+                if (autoSizeRetryCount < MAX_AUTOSIZE_RETRIES) {
+                    // Retry with progressively longer delays
+                    currentAutoSizeTimeout = setTimeout(() => updateAutoSize(), 50 * autoSizeRetryCount)
+                    return
+                }
+                // Give up after max retries - don't apply bad values
+                currentAutoSizeTimeout = null
+                return
+            }
+
+            // Reset retry count on successful measurement
+            autoSizeRetryCount = 0
+
+            let itemFontSize = Number(getStyles(item?.style, true)?.["font-size"] || "") || 100
+
+            const type = item?.textFit || "growToFit"
+            let defaultFontSize = itemFontSize
+            let maxFontSize = type ? itemFontSize : 0
+
+            const isTextItem = item?.type === "slide_text" || (item?.type || "text") === "text"
+            if (!isTextItem) maxFontSize = 0
+
+            size = autosize(alignElem, { type, textQuery: ".autoFontSize", defaultFontSize, maxFontSize })
+
+            currentAutoSizeTimeout = null
+        }, 20)
+    }
     $: autoSize = fontSize !== 100 ? Math.max(fontSize, size) : size
 
     // SLIDE
     $: stageOutputId = currentShow?.settings?.output || getActiveOutputs($currentWindow === "output" ? $allOutputs : $outputs, false, true, true)[0]
     $: currentOutput = $outputs[stageOutputId] || $allOutputs[stageOutputId] || {}
     $: currentSlide = currentOutput.out?.slide || (slideOffset !== 0 ? $outputSlideCache[stageOutputId] || null : null)
+
+    $: outputWindowId = item?.currentOutput?.source || stageOutputId
 
     let timeout: NodeJS.Timeout | null = null
     $: if (stageOutputId && ($allOutputs || $outputs)) startTimeout()
@@ -121,7 +183,7 @@
     }
     let currentBackground: any
     async function getCurrentBackground() {
-        if (item.type ? !item.includeMedia : !id.includes("slide")) return
+        if (item?.type ? !item.includeMedia : !id.includes("slide")) return
 
         let currentOutputs = $currentWindow ? $allOutputs : $outputs
         let bg = await sendBackgroundToStage(stageOutputId, currentOutputs, true)
@@ -134,24 +196,30 @@
     $: isDisabledVariable = id.includes("variables") && $variables[id.split("#")[1]]?.enabled === false
 
     let firstTimerId = ""
-    $: if (!item.timer?.id || id.includes("first_active_timer")) {
+    $: if (!item?.timer?.id || id.includes("first_active_timer")) {
         firstTimerId = $activeTimers[0]?.id
         if (!firstTimerId) firstTimerId = sortByName(keysToID($timers)).find((timer) => timer.type !== "counter")?.id || ""
     } else firstTimerId = ""
 
     let itemStyle = ""
     let textStyle = ""
-    $: if (item.style) updateStyles()
+    $: if (item?.style) updateStyles()
     function updateStyles() {
-        const styles = getStyles(item.style)
+        const styles = getStyles(item?.style)
         const textStyleKeys = ["line-height", "text-decoration"]
+        // For slide_text items with autosize, exclude font-size from container style
+        // to prevent CSS inheritance of 800px (MAX_FONT_SIZE) before autosize computes correct value
+        const isSlideTextWithAutosize = item?.type === "slide_text" && (item?.auto !== false || (item?.textFit && item?.textFit !== "none"))
 
         itemStyle = ""
         textStyle = ""
 
         Object.entries(styles).forEach(([key, value]) => {
             if (textStyleKeys.includes(key)) textStyle += `${key}: ${value};`
-            else itemStyle += `${key}: ${value};`
+            else if (key === "font-size" && isSlideTextWithAutosize) {
+                // Skip font-size for autosize items - let Textbox's autosize compute it
+                // Otherwise 800px gets inherited and causes giant text flash
+            } else itemStyle += `${key}: ${value};`
         })
     }
 
@@ -174,7 +242,7 @@
         }, 100)
     }
 
-    $: newItem = clone({ ...item, timer: { ...(item.timer || {}), id: firstTimerId || item.timer?.id } })
+    $: newItem = item ? clone({ ...item, timer: { ...(item.timer || {}), id: firstTimerId || item.timer?.id || "" } }) : null
 
     // ACTIONS
 
@@ -183,11 +251,22 @@
         stageShows.update((a) => {
             if (!a[$activeStage.id!]?.items?.[id]?.conditions) return a
             delete a[$activeStage.id!].items[id].conditions
+            a[$activeStage.id!].modified = Date.now()
             return a
         })
     }
 
-    $: contextId = item.type === "slide_text" ? "stage_slide_text_item" : item.type === "text" ? "stage_text_item" : item.type === "current_output" ? "stage_item_output" : "stage_item"
+    $: contextId = item?.type === "text" ? "stage_text_item" : item?.type === "current_output" ? "stage_item_output" : "stage_item"
+
+    let conditionsUpdater = 0
+    const updaterInterval = setInterval(() => conditionsUpdater++, 3000)
+    onDestroy(() => clearInterval(updaterInterval))
+
+    $: currentItemText = item ? (item.type === "slide_text" ? getSlideTextItems(stageLayout!, item).map(getItemText).join("") : getItemText(stageItemToItem(item))) : ""
+    $: showItemState = edit ? isConditionMet(item?.conditions?.showItem, currentItemText, "stage", conditionsUpdater) : false
+
+    // fixed letter width
+    $: fixedWidth = item?.type === "timer" || item?.type === "clock" ? "font-feature-settings: 'tnum' 1;" : ""
 </script>
 
 <svelte:window on:keydown={keydown} on:mousedown={deselect} />
@@ -200,20 +279,20 @@
     class:selected={edit && $activeStage.items.includes(id)}
     class:isDisabledVariable
     class:isOutput={!!$currentWindow}
-    style="{getCustomStyle(itemStyle)}{id.includes('slide') && !id.includes('tracker') ? '' : textStyle}{edit ? `outline: ${3 / ratio}px solid rgb(255 255 255 / 0.2);` : ''}--labelColor: {currentShow?.settings?.labelColor || '#d0a853'};"
+    style="{getCustomStyle(itemStyle)}{id.includes('slide') && !id.includes('tracker') ? '' : textStyle}{edit ? `outline: ${3 / ratio}px solid rgb(255 255 255 / 0.2);` : ''}--labelColor: {currentShow?.settings?.labelColor || '#d0a853'};{fixedWidth}"
     on:mousedown={mousedown}
 >
-    {#if currentShow?.settings?.labels && id}
+    {#if currentShow?.settings?.labels && id && item}
         <div class="label">{getCustomStageLabel(item.type || id, item, $dictionary)}</div>
     {/if}
-    {#if edit}
+    {#if edit && item}
         <Movebox {ratio} itemStyle={item.style} active={$activeStage.items.includes(id)} />
 
         <!-- ACTIONS -->
         <div class="actions">
             <!-- button -->
-            {#if item?.button?.press || item?.button?.release}
-                <div title={$dictionary.popup?.action} class="actionButton" style="zoom: {1 / ratio};inset-inline-start: 0;inset-inline-end: unset;">
+            {#if item.button?.press || item.button?.release}
+                <div data-title={translateText("popup.action")} class="actionButton" style="zoom: {1 / ratio};left: 0;inset-inline-end: unset;">
                     <span style="padding: 5px;z-index: 3;font-size: 0;">
                         <Icon id="button" white />
                     </span>
@@ -221,8 +300,8 @@
             {/if}
 
             <!-- conditions -->
-            {#if Object.values(item?.conditions || {}).length}
-                <div title={$dictionary.actions?.conditions} class="actionButton" style="zoom: {1 / ratio};inset-inline-start: 0;inset-inline-end: unset;">
+            {#if Object.values(item.conditions || {}).length}
+                <div data-title={translateText("actions.conditions")} class="actionButton" style="zoom: {1 / ratio};left: 0;inset-inline-end: unset;background-color: var(--{showItemState ? '' : 'dis'}connected);">
                     <Button on:click={removeConditions} redHover>
                         <Icon id="light" white />
                     </Button>
@@ -231,80 +310,85 @@
         </div>
     {/if}
 
-    <div bind:this={alignElem} class="align" style="--align: {item.align};--text-align: {item.alignX};{item.type !== 'slide_text' || item.keepStyle ? 'height: 100%;' : ''}">
-        <span style="pointer-events: none;width: 100%;height: 100%;">
-            {#if item.type === "current_output" || id.includes("current_output")}
-                {#if id.includes("_alpha") && currentOutput.keyOutput}
-                    <PreviewCanvas capture={$previewBuffers[currentOutput.keyOutput || ""]} id={currentOutput.keyOutput} fullscreen />
-                {:else}
-                    <PreviewCanvas capture={$previewBuffers[stageOutputId]} id={stageOutputId} fullscreen />
-                {/if}
-            {:else if item.type === "slide_text" || id.includes("slide")}
-                {#if (item.type ? item.includeMedia : !id.includes("_text")) && currentBackground}
-                    {@const slideBackground = slideOffset === 0 ? currentBackground : slideOffset === 1 ? currentBackground.next : null}
-                    <!-- WIP this only includes "next" slide background -->
-                    {#if typeof slideBackground?.path === "string"}
-                        <div class="image" style="position: absolute;inset-inline-start: 0;top: 0;width: 100%;height: 100%;">
-                            <Media path={slideBackground.path} path2={slideBackground.filePath} mediaStyle={slideBackground.mediaStyle || {}} mirror bind:video on:loaded={loaded} />
+    {#if item}
+        <div bind:this={alignElem} class="align" style="--align: {item.align};--text-align: {item.alignX || 'center'};{item.type !== 'slide_text' || item.keepStyle ? 'height: 100%;' : ''}">
+            <span style="pointer-events: none;width: 100%;height: 100%;{item.type === 'current_output' ? 'position: relative;' : ''}">
+                {#if item.type === "current_output" || id.includes("current_output")}
+                    <!-- use PreviewCanvas only in remote StageShow -->
+                    <!-- {#if $currentWindow === "output" && !$special.optimizedMode} -->
+                    <!-- <PreviewCanvas capture={$previewBuffers[outputWindowId]} id={outputWindowId} fullscreen /> -->
+                    {#if ($outputs[outputWindowId] || $allOutputs[outputWindowId])?.stageOutput}
+                        <StageLayout outputId={outputWindowId} stageId={($outputs[outputWindowId] || $allOutputs[outputWindowId])?.stageOutput} edit={false} />
+                    {:else}
+                        <Output outputId={outputWindowId} mirror style="width: 100%; height: 100%;" />
+                    {/if}
+
+                    {#if item.currentOutput?.showLabel}
+                        <div class="label" style="position: absolute;top: unset;bottom: 10px;left: 50%;transform: translateX(-50%);pointer-events: none;font-size: 28px;background-color: rgba(0, 0, 0, 0.5);padding: 2px 6px;border-radius: 12px;height: 46px;width: 180px;display: flex;justify-content: center;align-items: center;">
+                            <p>{$outputs[outputWindowId]?.name || $allOutputs[outputWindowId]?.name || ""}</p>
                         </div>
                     {/if}
-                {/if}
-
-                <!-- refresh to update auto sizes -->
-                <!-- refresh auto size if changing stage layout with #key made item unmovable .. -->
-                {#key currentSlide?.id || currentSlide?.index}
-                    <SlideText
-                        {currentSlide}
-                        {slideOffset}
-                        stageItem={item}
-                        chords={typeof item.chords === "boolean" ? item.chords : item.chords?.enabled}
-                        ref={{ type: "stage", id }}
-                        autoSize={item.auto !== false}
-                        {fontSize}
-                        {textStyle}
-                        style={item.type ? item.keepStyle : false}
-                    />
-                {/key}
-            {:else if item.type === "slide_notes" || id.includes("notes")}
-                <SlideNotes {currentSlide} {slideOffset} autoSize={item.auto !== false ? autoSize : fontSize} />
-            {:else if item.type === "text"}
-                {#if edit}
-                    {#key $refreshEditSlide}
-                        <span class="edit_item" style="pointer-events: initial;--font-size: {fontSize}px;">
-                            <EditboxLines item={stageItemToItem(item)} ref={{ type: "stage", id }} index={-1} />
-                        </span>
-                    {/key}
-                {:else}
-                    <Textbox item={stageItemToItem(item)} ref={{ type: "stage", id }} {fontSize} stageAutoSize={item.auto} isStage />
-                {/if}
-            {:else if item.type}
-                <SlideItems item={stageItemToItem(newItem)} ref={{ type: "stage", id }} fontSize={item.auto !== false ? autoSize : fontSize} {preview} />
-            {:else}
-                <!-- OLD CODE -->
-                <div>
-                    {#if id.includes("slide_tracker")}
-                        <SlideProgress tracker={item.tracker || {}} autoSize={item.auto !== false ? autoSize : fontSize} />
-                    {:else if id.includes("clock")}
-                        <Clock style={false} autoSize={item.auto !== false ? autoSize : fontSize} seconds={item.clock?.seconds ?? true} dateFormat={item.clock?.show_date ? "DD/MM/YYYY" : "none"} />
-                    {:else if id.includes("video")}
-                        <VideoTime outputId={stageOutputId} autoSize={item.auto !== false ? autoSize : fontSize} reverse={id.includes("countdown")} />
-                    {:else if id.includes("first_active_timer")}
-                        <Timer item={stageItemToItem(item)} id={firstTimerId} {today} style="font-size: {item.auto !== false ? autoSize : fontSize}px;" />
-                    {:else if id.includes("timers")}
-                        {#if $timers[id.split("#")[1]]}
-                            <Timer item={stageItemToItem(item)} id={id.split("#")[1]} {today} style="font-size: {item.auto !== false ? autoSize : fontSize}px;" />
+                {:else if item.type === "slide_text" || id.includes("slide")}
+                    {#if (item.type ? item.includeMedia : !id.includes("_text")) && currentBackground}
+                        {@const slideBackground = slideOffset === 0 ? currentBackground : slideOffset === 1 ? currentBackground.next : slideOffset === 2 ? currentBackground.next2 : null}
+                        <!-- WIP this only includes "next" slide background -->
+                        {#if typeof slideBackground?.path === "string"}
+                            <div class="image" style="position: absolute;left: 0;top: 0;width: 100%;height: 100%;">
+                                <Media path={slideBackground.path} path2={slideBackground.filePath} mediaStyle={slideBackground.mediaStyle || {}} mirror bind:video on:loaded={loaded} />
+                            </div>
                         {/if}
-                    {:else if id.includes("variables")}
-                        {#if $variables[id.split("#")[1]]}
-                            <Variable id={id.split("#")[1]} style="font-size: {item.auto !== false ? autoSize : fontSize}px;" ref={{ type: "stage", id }} hideText={!!$currentWindow} />
-                        {/if}
-                    {:else}
-                        {id}
                     {/if}
-                </div>
-            {/if}
-        </span>
-    </div>
+
+                    <!-- refresh to update auto sizes -->
+                    <!-- refresh auto size if changing stage layout with #key made item unmovable .. -->
+                    <!-- For slide_text items, don't pass fontSize from item style (which is MAX_FONT_SIZE=800) -->
+                    <!-- Let Textbox's own autosize compute the correct value -->
+                    {#key currentSlide?.id || currentSlide?.index}
+                        <SlideText {currentSlide} {slideOffset} stageItem={item} chords={typeof item.chords === "boolean" ? item.chords : item.chords?.enabled} ref={{ type: "stage", id }} autoSize={item.textFit !== "none" && item.auto !== false} fontSize={0} {textStyle} style={item.type ? item.keepStyle : false} />
+                    {/key}
+                {:else if item.type === "slide_notes" || id.includes("notes")}
+                    <SlideNotes {currentSlide} {slideOffset} autoSize={item.auto !== false ? autoSize : fontSize} />
+                {:else if item.type === "text"}
+                    {#if edit}
+                        {#key $refreshEditSlide}
+                            <span class="edit_item" style="pointer-events: initial;--font-size: {fontSize}px;">
+                                <EditboxLines item={stageItemToItem(item)} ref={{ type: "stage", id }} index={-1} />
+                            </span>
+                        {/key}
+                    {:else}
+                        <Textbox item={stageItemToItem(item)} stageItem={item} ref={{ type: "stage", id }} {fontSize} stageAutoSize={item.auto || item.textFit !== "none"} isStage />
+                    {/if}
+                {:else if item.type}
+                    {#if newItem}
+                        <SlideItems item={stageItemToItem(newItem)} ref={{ type: "stage", id }} fontSize={item.auto !== false || item.textFit !== "none" ? autoSize : fontSize} {preview} outputId={stageOutputId} />
+                    {/if}
+                {:else}
+                    <!-- OLD CODE -->
+                    <div>
+                        {#if id.includes("slide_tracker")}
+                            <SlideProgress tracker={item.tracker || {}} autoSize={item.auto !== false ? autoSize : fontSize} outputId={stageOutputId} />
+                        {:else if id.includes("clock")}
+                            <Clock style={false} fontStyle={item.auto === false ? "" : `font-size: ${edit ? autoSize : fontSize}px;`} seconds={item.clock?.seconds ?? true} dateFormat={item.clock?.show_date ? "DD/MM/YYYY" : "none"} />
+                        {:else if id.includes("video")}
+                            <VideoTime outputId={stageOutputId} autoSize={item.auto !== false ? autoSize : fontSize} reverse={id.includes("countdown")} />
+                        {:else if id.includes("first_active_timer")}
+                            <Timer item={stageItemToItem(item)} id={firstTimerId} {today} style="font-size: {item.auto !== false ? autoSize : fontSize}px;" />
+                        {:else if id.includes("timers")}
+                            {#if $timers[id.split("#")[1]]}
+                                <Timer item={stageItemToItem(item)} id={id.split("#")[1]} {today} style="font-size: {item.auto !== false ? autoSize : fontSize}px;" />
+                            {/if}
+                        {:else if id.includes("variables")}
+                            {#if $variables[id.split("#")[1]]}
+                                <Variable id={id.split("#")[1]} style="font-size: {item.auto !== false ? autoSize : fontSize}px;" ref={{ type: "stage", id }} hideText={!!$currentWindow} />
+                            {/if}
+                        {:else}
+                            {id}
+                        {/if}
+                    </div>
+                {/if}
+            </span>
+        </div>
+    {/if}
 </div>
 
 <style>
@@ -318,6 +402,9 @@
 
         border-width: 0;
         border-style: solid;
+    }
+    .stage_item :global(.item) {
+        -webkit-text-stroke-color: unset;
     }
 
     .item.border {
@@ -412,7 +499,7 @@
     .actions {
         position: absolute;
         top: 0;
-        inset-inline-start: 0;
+        left: 0;
 
         display: flex;
         flex-direction: column;

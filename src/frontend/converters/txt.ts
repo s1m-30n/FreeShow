@@ -8,14 +8,15 @@ import { history } from "../components/helpers/history"
 import { checkName, getCustomMetadata, getLabelId } from "../components/helpers/show"
 import { _show } from "../components/helpers/shows"
 import { linesToTextboxes } from "../components/show/formatTextEditor"
-import { activePopup, activeProject, alertMessage, dictionary, drawerTabsData, formatNewShow, groupNumbers, groups, special, splitLines } from "../stores"
+import { activePopup, activeProject, activeShow, alertMessage, dictionary, drawerTabsData, formatNewShow, groupNumbers, groups, special, splitLines } from "../stores"
+import { translateText } from "../utils/language"
 import { setTempShows } from "./importHelpers"
 
 export function getQuickExample() {
-    const tip = get(dictionary).create_show?.quick_lyrics_example_tip || ""
-    const line = get(dictionary).create_show?.quick_lyrics_example_text || "Line"
-    const verse = get(dictionary).groups?.verse || "Verse"
-    const chorus = get(dictionary).groups?.chorus || "Chorus"
+    const tip = translateText("create_show.quick_lyrics_example_tip")
+    const line = translateText("create_show.quick_lyrics_example_text")
+    const verse = translateText("groups.verse")
+    const chorus = translateText("groups.chorus")
 
     // [Verse]\nLine 1\nLine 2\n\nLine 3\nLine 4\n\n[Chorus]\nLine 1\nLine 2\nx2
     return `${tip}...\n\n[${verse}]\n${line} 1\n${line} 2\n\n${line} 3\n${line} 4\n\n[${chorus}]\n${line} 1\n${line} 2\nx2`
@@ -76,9 +77,12 @@ export function convertText({ name = "", origin = "", category = null, text, noF
                 return
             }
 
-            const metadataKey = Object.keys(metadataKeys).find((key) => key.toLowerCase() === metaKey || get(dictionary).meta?.[key]?.toLowerCase() === metaKey)
+            const metadataKey = Object.keys(metadataKeys).find((key) => key.toLowerCase().replaceAll(" ", "") === metaKey || translateText("meta." + key).toLowerCase() === metaKey)
             if (!metadataKey) {
-                newLines.push(line)
+                // create slide with unknown metadata
+                // newLines.push(line)
+                // add unknown metadata to show, without adding it globally
+                plainTextMetadata[meta[0]] = meta[1]
                 return
             }
 
@@ -90,7 +94,7 @@ export function convertText({ name = "", origin = "", category = null, text, noF
 
     // get ccli
     let ccli = ""
-    if (!Object.keys(plainTextMetadata).length && sections[sections.length - 1].includes("www.ccli.com")) {
+    if (!Object.keys(plainTextMetadata).length && sections[sections.length - 1]?.includes("www.ccli.com")) {
         ccli = sections.pop()!
     }
 
@@ -99,10 +103,10 @@ export function convertText({ name = "", origin = "", category = null, text, noF
     // find chorus phrase
     const patterns = findPatterns(sections)
     sections = patterns.sections
-    labeled = patterns.indexes.map((a, i) => ({ type: a, text: sections[i] }))
+    labeled = patterns.indexes.map((a, i) => ({ type: a, text: sections[i] || "" }))
     labeled = checkRepeats(labeled)
 
-    if (!name) name = plainTextMetadata.title || trimNameFromString(labeled[0].text)
+    if (!name) name = plainTextMetadata.title || trimNameFromString(labeled[0]?.text)
 
     const layoutID: string = uid()
     const show: Show = new ShowObj(false, category, layoutID)
@@ -155,7 +159,8 @@ export function convertText({ name = "", origin = "", category = null, text, noF
         // WIP DON'T OPEN
     }
 
-    history({ id: "UPDATE", newData: { data: show, remember: { project: get(activeProject) } }, oldData: { id: showId }, location: { page: "show", id: "show" } })
+    const selectedIndex = get(activeShow)?.index === undefined ? undefined : get(activeShow)!.index! + 1
+    history({ id: "UPDATE", newData: { data: show, remember: { project: get(activeProject), index: selectedIndex } }, oldData: { id: showId }, location: { page: "show", id: "show" } })
 
     return { id: showId, show }
 }
@@ -250,7 +255,7 @@ function insertChordsIntoLyrics(chordLine: string, lyricLine: string): string {
     while ((match = chordRegex.exec(chordLine)) !== null) {
         // Adjust chord position to attach to words instead of spaces
         let position = match.index
-        
+
         // If chord position is at a space, move it to the next word
         if (position < lyricLine.length && lyricLine[position] === " ") {
             // Find the next non-space character
@@ -258,10 +263,10 @@ function insertChordsIntoLyrics(chordLine: string, lyricLine: string): string {
                 position++
             }
         }
-        
+
         chords.push({
             chord: match[0],
-            position: position,
+            position
         })
     }
 
@@ -299,7 +304,8 @@ function createSlides(labeled: { type: string; text: string }[], noFormatting) {
 
     // add children
     Object.entries(addedChildren).forEach(([parentId, children]) => {
-        slides[parentId].children = [...(slides[parentId].children || []), ...(children || [])]
+        if (!slides[parentId]) return
+        slides[parentId].children = [...(slides[parentId]?.children || []), ...(children || [])]
     })
 
     return removeSlideDuplicates(slides, layouts)
@@ -336,6 +342,7 @@ function createSlides(labeled: { type: string; text: string }[], noFormatting) {
 
         // split slide notes from text ("---")
         const slideTextAndNotes = slideText.split("---")
+        if (!slideTextAndNotes[0]?.length) return
 
         while (new Set(slideTextAndNotes[0].split("")).size === 1 && slideTextAndNotes[0][0] === "-") slideTextAndNotes.shift()
         let allLines: string[] = [slideTextAndNotes.shift() || ""]
@@ -362,6 +369,7 @@ function createSlides(labeled: { type: string; text: string }[], noFormatting) {
             if (!addedChildren[activeGroup.id]) addedChildren[activeGroup.id] = []
             addedChildren[activeGroup.id].push(...[id, ...children])
         } else {
+            if (!slides[id]) return
             if (children.length) slides[id].children = children
 
             layouts.push({ id })

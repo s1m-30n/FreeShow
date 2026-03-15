@@ -1,4 +1,4 @@
-import type { Bible } from "./Bible"
+import type { Bible } from "json-bible/lib/Bible"
 import type { Event } from "./Calendar"
 import type { History, HistoryNew } from "./History"
 import type { Media } from "./Main"
@@ -9,31 +9,7 @@ import type { StageLayouts } from "./Stage"
 
 export type SaveList = SaveListSettings | SaveListSyncedSettings | "themes" | "events" | "templates" | "overlays" | "driveKeys"
 
-export type SaveListSyncedSettings =
-    | "categories"
-    | "drawSettings"
-    | "overlayCategories"
-    | "templateCategories"
-    | "timers"
-    | "variables"
-    | "triggers"
-    | "audioStreams"
-    | "audioPlaylists"
-    | "scriptures"
-    | "scriptureSettings"
-    | "groups"
-    | "midiIn"
-    | "emitters"
-    | "playerVideos"
-    | "videoMarkers"
-    | "mediaTags"
-    | "actionTags"
-    | "variableTags"
-    | "customizedIcons"
-    | "companion"
-    | "globalTags"
-    | "customMetadata"
-    | "effects"
+export type SaveListSyncedSettings = "categories" | "drawSettings" | "overlayCategories" | "templateCategories" | "styles" | "profiles" | "timers" | "variables" | "triggers" | "audioStreams" | "audioPlaylists" | "scriptures" | "scriptureSettings" | "groups" | "midiIn" | "emitters" | "playerVideos" | "videoMarkers" | "mediaTags" | "actionTags" | "variableTags" | "customizedIcons" | "companion" | "globalTags" | "customMetadata" | "effects" | "deletedDefaults"
 
 export type SaveListSettings =
     | "initialized"
@@ -59,7 +35,6 @@ export type SaveListSettings =
     | "openedFolders"
     | "outputs"
     | "sorted"
-    | "styles"
     | "outLocked"
     | "ports"
     | "disabledServers"
@@ -72,22 +47,26 @@ export type SaveListSettings =
     | "transitionData"
     | "volume"
     | "gain"
+    | "audioChannelsData"
+    | "cloudSyncData"
     | "driveData"
     | "calendarAddShow"
     | "metronome"
+    | "equalizerConfig"
+    | "eqPresets"
     | "effectsLibrary"
     | "special"
-    | "chumsSyncCategories"
+    | "timeline"
+    | "timecode"
+    | "contentProviderData"
 
 export interface SaveData {
-    path: string
-    dataPath: string
     // SETTINGS
     SETTINGS: { [key in SaveListSettings]: any } | {}
     SYNCED_SETTINGS: { [key in SaveListSyncedSettings]: any } | {}
     // SHOWS
     SHOWS: TrimmedShows
-    STAGE_SHOWS: StageLayouts
+    STAGE: StageLayouts
     // STORES
     PROJECTS: { projects: Projects; folders: Folders; projectTemplates: Projects }
     OVERLAYS: Overlays
@@ -109,4 +88,4 @@ export interface SaveData {
     closeWhenFinished: boolean
     customTriggers: SaveActions
 }
-export type SaveActions = { backup?: boolean; isAutoBackup?: boolean; changeUserData?: any; autosave?: boolean; reset?: boolean }
+export type SaveActions = { backup?: boolean; isAutoBackup?: boolean; backupShows?: boolean; autosave?: boolean; reset?: boolean }

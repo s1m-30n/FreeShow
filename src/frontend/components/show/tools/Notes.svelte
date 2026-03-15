@@ -1,11 +1,12 @@
 <script lang="ts">
     import { createEventDispatcher } from "svelte"
-    import { dictionary } from "../../../stores"
+    import { translateText } from "../../../utils/language"
 
     export let value: string
     export let placeholder = ""
     export let disabled = false
     export let lines = 4
+    export let autofocus = false
 
     const TIME = 100
     let dispatch = createEventDispatcher()
@@ -28,7 +29,7 @@
 </script>
 
 <div class="paper">
-    <textarea placeholder={placeholder || $dictionary.empty?.text + "..."} class="edit {$$props.class}" name="" id="" cols="1" rows={lines} style={$$props.style || ""} bind:value on:input={input} on:change={change} {disabled} />
+    <textarea placeholder={placeholder || translateText("empty.text...")} class="edit {$$props.class}" name="" id="" cols="1" rows={lines} style={$$props.style || ""} bind:value on:input={input} on:change={change} on:keydown {disabled} {autofocus} />
 </div>
 
 <style>
@@ -41,8 +42,6 @@
         height: 100%;
         overflow: hidden;
         /* box-shadow: inset 0 0 10px 0px rgb(0 0 0 / 30%); */
-
-        border-radius: var(--border-radius);
     }
 
     .edit {

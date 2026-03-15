@@ -1,18 +1,18 @@
 import { get } from "svelte/store"
 import type { Event } from "../../../types/Calendar"
-import { OUTPUT, STAGE } from "../../../types/Channels"
-import { activeTimers, currentWindow, dictionary, events, nextActionEventPaused, nextActionEventStart, timers } from "../../stores"
-import { newToast } from "../../utils/common"
-import { translate } from "../../utils/language"
+import { STAGE } from "../../../types/Channels"
+import { activeTimers, dictionary, events, nextActionEventPaused, nextActionEventStart, timers } from "../../stores"
+import { isMainWindow, newToast } from "../../utils/common"
+import { translateText } from "../../utils/language"
 import { send } from "../../utils/request"
 import { actionData } from "../actions/actionData"
 import { customActionActivation, runAction } from "../actions/actions"
+import { sortByClosestMatch } from "../actions/apiHelper"
+import { getCurrentTimerValue, getTimerDynamicValue, playPauseGlobal } from "../drawer/timers/timers"
+import { getDynamicValue } from "../edit/scripts/itemHelpers"
 import { clone, keysToID, sortByTime } from "./array"
 import { loadShows } from "./setShow"
 import { checkNextAfterMedia } from "./showActions"
-import { sortByClosestMatch } from "../actions/apiHelper"
-import { getCurrentTimerValue, playPauseGlobal } from "../drawer/timers/timers"
-import { getDynamicValue } from "../edit/scripts/itemHelpers"
 
 const INTERVAL = 1000
 const TEN_SECONDS = 1000 * 10
@@ -21,14 +21,15 @@ const ONE_MINUTE = 1000 * 60
 let timeout: NodeJS.Timeout | null = null
 let customInterval = INTERVAL
 export function startTimer() {
-    if (get(currentWindow)) return
+    if (!isMainWindow()) return
+    // if (!get(activeTimers).length || timeout) return
     if (!get(activeTimers).filter((a) => a.paused !== true).length || timeout) return
 
     if (timeout) clearTimeout(timeout)
     timeout = setTimeout(() => {
         const newActiveTimers = clone(get(activeTimers)).map(increment)
 
-        send(OUTPUT, ["ACTIVE_TIMERS"], newActiveTimers)
+        // send(OUTPUT, ["ACTIVE_TIMERS"], newActiveTimers)
         send(STAGE, ["ACTIVE_TIMERS"], newActiveTimers)
         activeTimers.set(newActiveTimers)
 
@@ -63,22 +64,35 @@ export function stopTimers() {
 }
 
 function increment(timer: { id: string; start: number; end: number; [key: string]: any }, i: number) {
-    if (!timer.paused && (timer.start < timer.end ? timer.currentTime >= timer.end && timer.currentTime < timer.end + 1 : timer.currentTime <= timer.end && timer.currentTime > timer.end - 1)) {
+    if (timer.paused) {
+        // has ended
+        // if (timer.currentTime === timer.end && !timer.overflow) {
+        //     // stop timers that have ended and is not outputted
+        //     if (!isTimerOutputted(timer.id)) stopTimerById(timer.id)
+        // }
+
+        return timer
+    }
+
+    const startTime = timer.startDynamic !== undefined ? getTimerDynamicValue(timer.startDynamic) ?? 0 : timer.start || 0
+    const endTime = timer.endDynamic !== undefined ? getTimerDynamicValue(timer.endDynamic) ?? 0 : timer.end || 0
+
+    if (startTime < endTime ? timer.currentTime >= endTime && timer.currentTime < endTime + 1 : timer.currentTime <= endTime && timer.currentTime > endTime - 1) {
         if (!timer.overflow) timer.paused = true
 
         // ended
         checkNextAfterMedia(timer.id, "timer")
-        customActionActivation(`timer_end___` + timer.id)
+        customActionActivation("timer_end", timer.id)
     }
 
-    if ((timer.currentTime === timer.end && !timer.overflow) || timer.paused) return timer
+    if (timer.currentTime === endTime && !timer.overflow) return timer
 
     const currentTime = Date.now()
     // store timer start time (for accuracy)
     if (!timer.startTime) {
-        const timerIs = timer.currentTime - timer.start
+        const timerIs = timer.currentTime - startTime
         const timerStartShouldBe = timerIs * 1000 // - 1
-        if (timer.start < timer.end) timer.startTime = currentTime - timerStartShouldBe
+        if (startTime < endTime) timer.startTime = currentTime - timerStartShouldBe
         else timer.startTime = currentTime + timerStartShouldBe
     }
 
@@ -92,11 +106,36 @@ function increment(timer: { id: string; start: number; end: number; [key: string
         customInterval = Math.max(500, INTERVAL - differenceMs)
     }
 
-    if (timer.start < timer.end) timer.currentTime = timer.start + timerShouldBe
-    else timer.currentTime = timer.start - timerShouldBe
+    if (startTime < endTime) timer.currentTime = startTime + timerShouldBe
+    else timer.currentTime = startTime - timerShouldBe
 
     return timer
 }
+
+// auto stop any timer that is no longer in use
+// function isTimerOutputted(timerId: string) {
+//     const outputs = getAllActiveOutputs()
+//     const outputSlideHasTimer =
+//         outputs.some((output) => {
+//             const outSlide = output.out?.slide
+//             const outShow = get(showsCache)[outSlide?.id || ""]
+//             if (!outShow) return false
+
+//             const ref = getLayoutRef(outSlide?.id)
+//             const slide = outShow.slides[ref[outSlide?.index ?? -1]?.id]
+//             if (!slide) return false
+
+//             const hasTimer = slide.items.some((item) => item.type === "timer" && item.timerId === timerId)
+//             return hasTimer
+//         })
+//     if (outputSlideHasTimer) return true
+
+//     // check stage
+
+//     // might be in use by a dynamic value?
+
+//     return false
+// }
 
 // convert "show" to "action" <= 1.1.7
 let initialized = false
@@ -145,7 +184,7 @@ export function startEventTimer() {
             if (get(nextActionEventPaused)) return
 
             const actionId = event.action.id
-            const actionName = translate(actionData[actionId]?.name)
+            const actionName = translateText(actionData[actionId]?.name)
 
             const timeLeft: number = eventTime.getTime() - currentTime.getTime()
             if (i === 0) nextActionEventStart.set({ name: actionName, timeLeft })
@@ -199,7 +238,7 @@ export function checkTimers() {
 
         if (time < 0 && time >= -1) {
             checkNextAfterMedia(id, "timer")
-            customActionActivation(`timer_end___` + id)
+            customActionActivation("timer_end", id)
         }
     })
 

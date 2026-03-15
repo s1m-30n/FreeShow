@@ -2,22 +2,20 @@
     import { onMount } from "svelte"
     import { Main } from "../../../../types/IPC/Main"
     import { requestMain, sendMain } from "../../../IPC/main"
-    import { activePopup, dataPath, guideActive, showsPath, timeFormat } from "../../../stores"
+    import { activePopup, dataPath, dictionary, guideActive, language, popupData, timeFormat } from "../../../stores"
     import { createData } from "../../../utils/createData"
+    import { getLanguageList, setLanguage, translateText } from "../../../utils/language"
     import Icon from "../../helpers/Icon.svelte"
     import T from "../../helpers/T.svelte"
-    import Button from "../../inputs/Button.svelte"
-    import Checkbox from "../../inputs/Checkbox.svelte"
-    import CombinedInput from "../../inputs/CombinedInput.svelte"
-    import FolderPicker from "../../inputs/FolderPicker.svelte"
-    import LocaleSwitcher from "../../settings/LocaleSwitcher.svelte"
     import HRule from "../../input/HRule.svelte"
-
-    // const setAutoOutput = (e: any) => autoOutput.set(e.target.checked)
+    import InputRow from "../../input/InputRow.svelte"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
+    import MaterialDropdown from "../../inputs/MaterialDropdown.svelte"
+    import MaterialFolderPicker from "../../inputs/MaterialFolderPicker.svelte"
+    import MaterialToggleSwitch from "../../inputs/MaterialToggleSwitch.svelte"
 
     onMount(() => {
         if (!$dataPath) sendMain(Main.DATA_PATH)
-        if (!$showsPath) sendMain(Main.SHOWS_PATH)
 
         // check time format (based on browser language)
         const locale = navigator.language
@@ -25,78 +23,61 @@
         if (use12Hour === true) timeFormat.set("12")
     })
 
-    function create(e: any) {
-        if (e.target.closest(".main") && !e.target.closest(".start")) return
-
+    function create() {
         requestMain(Main.GET_PATHS, undefined, (a) => createData(a))
 
-        if ($showsPath) sendMain(Main.REFRESH_SHOWS, { path: $showsPath })
-        else sendMain(Main.SHOWS_PATH)
+        sendMain(Main.REFRESH_SHOWS)
 
         guideActive.set(true)
         activePopup.set(null)
     }
 
-    const inputs = {
-        timeFormat: (e: any) => timeFormat.set(e.target.checked ? "24" : "12")
+    function restore() {
+        popupData.set({ back: "initialize" })
+        activePopup.set("restore")
     }
 
-    function restore() {
-        sendMain(Main.RESTORE, { showsPath: $showsPath! })
+    $: languageText = translateText("settings.language", $dictionary)
+    $: languageLabel = `${languageText}${languageText === "Language" ? "" : "/Language"}`
+
+    // same as Files.svelte
+    function updateDataPath(e: any) {
+        const oldPath = $dataPath
+        const newPath = e.detail
+
+        sendMain(Main.UPDATE_DATA_PATH, { newPath, oldPath })
+        dataPath.set(newPath)
     }
 </script>
 
+<MaterialButton style="inset-inline-end: 0;" class="popup-options" icon="import" iconSize={1.3} title="setup.restore_data" on:click={restore} white />
+
 <div class="main">
     <p><T id="setup.good_luck" /></p>
-    <p><T id="setup.tips" /></p>
+    <p style="opacity: 0.8;"><T id="setup.tips" /></p>
 
-    <!-- <HRule /> -->
+    <HRule />
 
-    <p style="margin-top: 25px;margin-bottom: 10px;font-style: italic;opacity: 0.7;"><T id="setup.change_later" />:</p>
+    <p style="margin-bottom: 10px;font-style: italic;font-size: 0.8em;opacity: 0.5;"><T id="setup.change_later" />:</p>
 
-    <CombinedInput textWidth={30}>
-        <p><T id="settings.language" /></p>
-        <LocaleSwitcher />
-    </CombinedInput>
+    <InputRow>
+        <MaterialDropdown style="width: 50%;" label={languageLabel} value={$language} options={getLanguageList()} on:change={(e) => setLanguage(e.detail)} flags />
+        <MaterialToggleSwitch style="width: 50%;" label="settings.use24hClock" checked={$timeFormat === "24"} on:change={(e) => timeFormat.set(e.detail ? "24" : "12")} />
+    </InputRow>
 
-    <CombinedInput textWidth={30}>
-        <p><T id="settings.use24hClock" /></p>
-        <div class="alignRight">
-            <Checkbox checked={$timeFormat === "24"} on:change={inputs.timeFormat} />
-        </div>
-    </CombinedInput>
+    <MaterialFolderPicker PICK_ID="DATA_SHOWS" label={translateText("settings.data_location", $dictionary)} value={$dataPath} on:change={updateDataPath} openButton={false} />
 
-    <CombinedInput textWidth={30}>
-        <p style="overflow: visible;"><T id="settings.data_location" /></p>
-        <span class="showElem">
-            <FolderPicker style="width: 100%;" title={$dataPath || ""} id="DATA_SHOWS" center={false} path={$dataPath}>
-                <Icon id="folder" size={1.2} right />
-                {#if $dataPath}
-                    {$dataPath}
-                {:else}
-                    <T id="inputs.change_folder" />
-                {/if}
-            </FolderPicker>
-        </span>
-    </CombinedInput>
-    <!-- <div>
-    <p><T id="settings.auto_output" /></p>
-    <Checkbox checked={$autoOutput} on:change={setAutoOutput} />
-  </div> -->
-
-    <Button class="start" on:click={create} style="font-size: 2em;margin-top: 20px;" dark center>
-        <Icon id="check" size={2.5} right />
+    <MaterialButton variant="outlined" class="start" style="font-size: 1.8em;padding: 15px;margin-top: 20px;" on:click={create} white>
+        <Icon id="check" size={2.5} />
         <T id="setup.get_started" />
-    </Button>
+    </MaterialButton>
 
-    <HRule title="setup.or" />
+    <!-- <HRule title="setup.or" />
 
-    <Button style="padding: 8px !important;" disabled={!$showsPath} on:click={restore} center dark>
-        <span style="display: flex;align-items: center;">
-            <Icon id="import" style="margin-inline-start: 0.5em;" size={1.3} right />
-            <p><T id="setup.restore_data" /></p>
-        </span>
-    </Button>
+    <MaterialButton variant="outlined" style="padding: 8px;" on:click={restore} white>
+        <Icon id="import" style="margin-inline-start: 0.5em;" size={1.2} white />
+        <T id="setup.restore_data" />
+    </MaterialButton> -->
 </div>
 
 <style>
@@ -105,14 +86,5 @@
         flex-direction: column;
 
         width: 50vw;
-    }
-
-    .main .showElem {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-
-        overflow: hidden;
-        white-space: nowrap;
     }
 </style>

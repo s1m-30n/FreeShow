@@ -1,36 +1,43 @@
 <script lang="ts">
     import { createEventDispatcher } from "svelte"
     import type { Input } from "../../../types/Input"
-    import T from "../helpers/T.svelte"
-    import Checkbox from "../inputs/Checkbox.svelte"
-    import CombinedInput from "../inputs/CombinedInput.svelte"
-    import Dropdown from "../inputs/Dropdown.svelte"
-    import { commonInputs, customInputs, getDropdownValue, getValue } from "./inputs"
+    import { activePopup } from "../../stores"
+    import { translateText } from "../../utils/language"
+    import { select } from "../helpers/select"
+    import MaterialButton from "../inputs/MaterialButton.svelte"
+    import MaterialCheckbox from "../inputs/MaterialCheckbox.svelte"
+    import MaterialColorInput from "../inputs/MaterialColorInput.svelte"
+    import MaterialDropdown from "../inputs/MaterialDropdown.svelte"
+    import { commonInputs } from "./inputs"
 
     export let input: Input
 
+    $: label = input.label ?? input.name ?? ""
+
     let dispatch = createEventDispatcher()
     function changed(e: any) {
-        let value = getValue(e, input.type)
+        let value = e.detail
         dispatch("change", value)
     }
 </script>
 
 {#if input.type === "dropdown"}
-    <CombinedInput>
-        <p><T id={input.name} /></p>
-        <Dropdown value={getDropdownValue(input.options, input.value)} options={input.options} on:click={(e) => changed(e)} />
-    </CombinedInput>
+    <MaterialDropdown {label} {...input} options={input.options?.map((a) => ({ ...a, label: translateText(a.label) }))} on:change={changed} />
+
+    <!-- custom edit -->
+    {#if input.label === "items.timer" && input.value}
+        <MaterialButton
+            icon="edit"
+            on:click={() => {
+                select("timer", { id: input.value })
+                activePopup.set("timer")
+            }}
+        />
+    {/if}
 {:else if input.type === "checkbox"}
-    <CombinedInput>
-        <p><T id={input.name} /></p>
-        <Checkbox checked={input.value} on:change={(e) => changed(e)} />
-    </CombinedInput>
-{:else if customInputs[input.type]}
-    <svelte:component this={customInputs[input.type]} value={input.value} {...input.settings || {}} on:change={(e) => changed(e)} />
+    <MaterialCheckbox {label} checked={input.value} style="flex: 1;{input.style || ''}" on:change={changed} />
+{:else if input.type === "color"}
+    <MaterialColorInput {label} {...input} {...input.settings || {}} on:input={changed} />
 {:else}
-    <CombinedInput>
-        <p><T id={input.name} /></p>
-        <svelte:component this={commonInputs[input.type]} value={input.value} {...input.settings || {}} on:change={(e) => changed(e)} />
-    </CombinedInput>
+    <svelte:component this={commonInputs[input.type]} {label} {...input} {...input.settings || {}} on:change={changed} />
 {/if}

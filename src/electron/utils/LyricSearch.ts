@@ -1,4 +1,5 @@
 import axios from "axios"
+import { net } from "electron"
 import type { LyricSearchResult } from "../../types/Main"
 
 const lyricsSearchCache: Map<string, LyricSearchResult[]> = new Map()
@@ -7,7 +8,7 @@ export class LyricSearch {
         const cacheKey = artist + title
         if (lyricsSearchCache.has(cacheKey)) return lyricsSearchCache.get(cacheKey)!
 
-        const results = await Promise.all([LyricSearch.searchGenius(artist, title), LyricSearch.searchHymnary(title), LyricSearch.searchLetras(title)])
+        const results = await Promise.all([LyricSearch.searchGenius(artist, title), LyricSearch.searchUltimateGuitar(artist, title), LyricSearch.searchLetras(title), LyricSearch.searchHymnary(title)])
         const joinedResults: LyricSearchResult[] = results.flat()
 
         lyricsSearchCache.set(cacheKey, joinedResults)
@@ -18,6 +19,7 @@ export class LyricSearch {
         if (song.source === "Genius") return LyricSearch.getGenius(song)
         else if (song.source === "Hymnary") return LyricSearch.getHymnary(song)
         else if (song.source === "Letras") return LyricSearch.getLetras(song)
+        else if (song.source === "Ultimate Guitar") return LyricSearch.getUltimateGuitar(song)
         return Promise.resolve("")
     }
 
@@ -67,7 +69,7 @@ export class LyricSearch {
             key: geniusResult.id.toString(),
             artist: geniusResult.artist.name,
             title: geniusResult.title,
-            originalQuery,
+            originalQuery
         } as LyricSearchResult
     }
 
@@ -94,7 +96,7 @@ export class LyricSearch {
         const response = await axios.get(url)
         const html = await response.data
         if (typeof html !== "string") return ""
-        return this.getLyricFromHtml(html, /<div property=\"text\">(.*?)<\/div>/gs)
+        return this.getLyricFromHtml(html, /<div property=['"]text['"]>([\s\S]*?)<\/div>/g)
     }
 
     private static convertHymnaryToResult = (hymnaryResult: any, originalQuery: string) => {
@@ -103,7 +105,7 @@ export class LyricSearch {
             key: hymnaryResult[4],
             artist: hymnaryResult[6],
             title: hymnaryResult[0],
-            originalQuery,
+            originalQuery
         } as LyricSearchResult
     }
 
@@ -129,7 +131,7 @@ export class LyricSearch {
             key: `${letrasResult.dns}/${letrasResult.url}`,
             artist: letrasResult.art,
             title: letrasResult.txt,
-            originalQuery,
+            originalQuery
         } as LyricSearchResult
     }
 
@@ -138,7 +140,7 @@ export class LyricSearch {
         const response = await axios.get(url)
         const html = await response.data
         if (typeof html !== "string") return ""
-        return this.getLyricFromHtml(html, /<div class=\"lyric-original\">(.*?)<\/div>/gs)
+        return this.getLyricFromHtml(html, /<div class=\"lyric-original\">([\s\S]*?)<\/div>/g)
     }
 
     private static getLyricFromHtml = (songHtml: string, regex: RegExp) => {
@@ -163,6 +165,73 @@ export class LyricSearch {
             result = newLines.join("\n").trim()
         }
         return result
+    }
+
+    // ULTIMATE GUITAR
+    private static ugHeaders = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    private static parseUGStore = (html: string) => {
+        const match = html.match(/class=['"]js-store['"][^>]*data-content=['"]([^'"]+)['"]/)
+        if (!match) return null
+        try {
+            return JSON.parse(match[1].replace(/&quot;/g, '"').replace(/&#039;/g, "'").replace(/&amp;/g, "&"))
+        } catch {
+            return null
+        }
+    }
+
+    private static ugFetch = async (url: string) => {
+        const response = await net.fetch(url, { headers: LyricSearch.ugHeaders })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return response.text()
+    }
+
+    private static searchUltimateGuitar = async (artist: string, title: string) => {
+        try {
+            const query = artist ? `${title} ${artist}` : title
+            const url = `https://www.ultimate-guitar.com/search.php?title=${encodeURIComponent(title)}&type=300`
+            const html = await LyricSearch.ugFetch(url)
+            const store = LyricSearch.parseUGStore(html)
+            let results: any[] = store?.store?.page?.data?.results
+            if (!Array.isArray(results)) return []
+
+            results = results.filter((r: any) => r.type?.toLowerCase() !== "pro" && r.marketing_type === undefined)
+            if (artist) {
+                const artistRegex = new RegExp(artist, "gi")
+                results = results.filter((r: any) => r.artist_name && artistRegex.test(r.artist_name))
+            }
+
+            return results.slice(0, 3).map((song: any) => LyricSearch.convertUltimateGuitarToResult(song, query))
+        } catch (err) {
+            console.error("Ultimate Guitar search error:", err)
+            return []
+        }
+    }
+
+    private static getUltimateGuitar = async (song: LyricSearchResult) => {
+        try {
+            const html = await LyricSearch.ugFetch(song.key)
+            const store = LyricSearch.parseUGStore(html)
+            const content: string = store?.store?.page?.data?.tab_view?.wiki_tab?.content
+            if (content) return content.replace(/(\[\/ch\]|\[\/tab\]|\[tab\]|\[ch\])/gi, "").replace(/^[ \t]+/gm, "")
+            return ""
+        } catch (err) {
+            console.error(err)
+            return ""
+        }
+    }
+
+    private static convertUltimateGuitarToResult = (ultimateGuitarResult: any, originalQuery: string) => {
+        return {
+            source: "Ultimate Guitar",
+            key: ultimateGuitarResult.tab_url || ultimateGuitarResult.url || "",
+            artist: ultimateGuitarResult.artist_name || ultimateGuitarResult.artist || "",
+            title: ultimateGuitarResult.song_name || ultimateGuitarResult.title || "",
+            originalQuery
+        } as LyricSearchResult
     }
 
     // ref: http://stackoverflow.com/a/1293163/2343

@@ -1,4 +1,4 @@
-import type { ShowType } from "./Show"
+import type { ShowType, Timeline } from "./Show"
 
 export interface Projects {
     [key: string]: Project
@@ -13,6 +13,10 @@ export interface Project {
     used?: number // used to create startup "last used" list
     parent: string
     shows: ProjectShowRef[]
+    timeline?: Timeline
+    archived?: boolean
+    sectionsLocked?: boolean // if true, sections cannot be edited or removed
+    sourcePath?: string // used to save directly to file import location
 }
 
 export interface ProjectShowRef extends ShowRef {
@@ -26,6 +30,7 @@ export interface ProjectShowRef extends ShowRef {
     icon?: string // focus mode
     data?: any // section settings
     scheduleLength?: number // currently only from PCO import
+    played?: boolean
 }
 
 export interface ShowRef {
@@ -51,8 +56,12 @@ export interface Folder {
     type?: "folder"
 }
 
-export interface Tree extends Folder {
-    shows?: []
+export interface Tree extends Project {
+    id: string
+    shows: any[]
     index?: number
     path?: string
+    readOnly?: boolean
+    type?: "project" | "folder"
+    // created: number
 }

@@ -1,8 +1,9 @@
-import { get } from "svelte/store"
 import { uid } from "uid"
 import { ShowObj } from "../classes/Show"
+import { DEFAULT_ITEM_STYLE } from "../components/edit/scripts/itemHelpers"
 import { checkName, getGlobalGroup } from "../components/helpers/show"
-import { activePopup, alertMessage, dictionary } from "../stores"
+import { activePopup, alertMessage } from "../stores"
+import { translateText } from "../utils/language"
 import { createCategory, setTempShows } from "./importHelpers"
 
 // interface Songbook {
@@ -60,13 +61,17 @@ export function convertSoftProjector(data: any) {
         show.meta = {
             number: song.number || "",
             title: song.title || "",
+            author: song.words || "",
+            composer: song.music || "",
+            note: song.notes || "",
+            key: song.tune || ""
         }
         if (show.meta.number !== undefined) show.quickAccess = { number: show.meta.number }
 
         const { slides, layout }: any = createSlides(song)
 
         show.slides = slides
-        show.layouts = { [layoutID]: { name: get(dictionary).example?.default || "", notes: "", slides: layout } }
+        show.layouts = { [layoutID]: { name: translateText("example.default"), notes: "", slides: layout } }
 
         tempShows.push({ id: uid(), show })
     }
@@ -90,9 +95,9 @@ function createSlides(song: Song) {
 
         const items = [
             {
-                style: "inset-inline-start:50px;top:120px;width:1820px;height:840px;",
-                lines: lines.map((text: any) => ({ align: "", text: [{ style: "", value: text }] })),
-            },
+                style: DEFAULT_ITEM_STYLE,
+                lines: lines.map((text: any) => ({ align: "", text: [{ style: "", value: text }] }))
+            }
         ]
 
         slides[id] = {
@@ -100,7 +105,7 @@ function createSlides(song: Song) {
             color: null,
             settings: {},
             notes: "",
-            items,
+            items
         }
 
         const globalGroup = getGlobalGroup(groupName)

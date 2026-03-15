@@ -1,29 +1,34 @@
 <script lang="ts">
     import { Main } from "../../../../types/IPC/Main"
     import { requestMain } from "../../../IPC/main"
-    import { activeRecording, activeShow, drawerTabsData } from "../../../stores"
+    import { activeRecording, activeShow, drawerTabsData, special } from "../../../stores"
     import { videoExtensions } from "../../../values/extensions"
     import { formatBytes } from "../../helpers/bytes"
+    import Icon from "../../helpers/Icon.svelte"
     import { getExtension, getFileName, getMediaInfo, removeExtension } from "../../helpers/media"
-    import T from "../../helpers/T.svelte"
-    import Date from "../../system/Date.svelte"
+    import FloatingInputs from "../../input/FloatingInputs.svelte"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
+    import MaterialToggleSwitch from "../../inputs/MaterialToggleSwitch.svelte"
     import LiveInfo from "../live/LiveInfo.svelte"
+    import InfoMetadata from "./InfoMetadata.svelte"
     import PlayerInfo from "./PlayerInfo.svelte"
 
     $: name = $activeShow?.name || ""
-    let info: { extension?: string; [key: string]: any } = {}
+    let mediaData: { extension?: string; [key: string]: any } = {}
 
-    $: if ($activeShow?.id && ["media", "image", "video"].includes($activeShow.type || "") && !$activeShow?.id.includes("http") && !$activeShow?.id.includes("data:")) {
-        info = {}
+    $: if ($activeShow?.id && ["media", "image", "video"].includes($activeShow.type || "") && !$activeShow?.id.startsWith("http") && !$activeShow?.id.startsWith("data:")) {
+        mediaData = {}
         codecInfo = {}
 
         requestMain(Main.FILE_INFO, $activeShow?.id, (data) => {
             if (!data) return
-            info = { ...data.stat, extension: data.extension }
+            mediaData = { ...data.stat, extension: data.extension }
             if (!name) name = removeExtension(getFileName(data.path))
         })
         getCodecInfo()
     }
+
+    $: console.log(mediaData)
 
     let codecInfo: { codecs?: string[]; mimeType?: string; mimeCodec?: string } = {}
     async function getCodecInfo() {
@@ -35,6 +40,27 @@
     // $: accessed = info.atime
 
     $: subTab = $drawerTabsData.media?.activeSubTab
+
+    $: info = [
+        { label: "info.extension", value: mediaData.extension?.toUpperCase() || "-" },
+        { label: "info.size", value: formatBytes(mediaData.size || 0) },
+        { label: "info.created", value: mediaData.birthtimeMs, type: "date" },
+        { label: "info.modified", value: mediaData.mtimeMs, type: "date" },
+        { label: "info.changed", value: mediaData.ctimeMs, type: "date" },
+        ...(codecInfo.codecs ? [{ label: "info.codecs", value: codecInfo.codecs?.join(", ") }] : [])
+        // ...(codecInfo.mimeType ? [{ label: "info.mimeType", value: codecInfo.mimeType }] : [])
+    ]
+
+    let settingsOpened = false
+
+    function updateSpecial(value: any, key: string, allowEmpty = false) {
+        special.update((a) => {
+            if (!allowEmpty && !value) delete a[key]
+            else a[key] = value
+
+            return a
+        })
+    }
 </script>
 
 {#if subTab === "screens" || $activeRecording}
@@ -42,86 +68,26 @@
 {:else if subTab === "online"}
     <PlayerInfo />
 {:else}
-    <main style="overflow-y: auto;">
-        <h2 style="text-align: center;padding: 10px;" title={name}>
-            {#if name.length}
-                {name}
-            {:else}
-                <span style="opacity: 0.5">
-                    <T id={"main.unnamed"} />
-                </span>
-            {/if}
-        </h2>
-        <p>
-            <span class="title"><T id={"info.extension"} /></span>
-            <span style="text-transform: uppercase;">{info.extension || "-"}</span>
-        </p>
-        <p>
-            <span class="title"><T id={"info.size"} /></span>
-            <span>{formatBytes(info.size || 0)}</span>
-        </p>
-        <p>
-            <span class="title"><T id={"info.created"} /></span>
-            {#if info.birthtime}
-                <span><Date d={info.birthtime} /></span>
-            {:else}
-                <span>-</span>
-            {/if}
-        </p>
-        <p>
-            <span class="title"><T id={"info.modified"} /></span>
-            {#if info.mtime}
-                <span><Date d={info.mtime} /></span>
-            {:else}
-                <span>-</span>
-            {/if}
-        </p>
-        <p>
-            <span class="title"><T id={"info.changed"} /></span>
-            {#if info.ctime}
-                <!-- format="d,m,y" -->
-                <span><Date d={info.ctime} /></span>
-            {:else}
-                <span>-</span>
-            {/if}
-        </p>
-        {#if codecInfo.codecs}
-            <p>
-                <span class="title"><T id="info.codecs" /></span>
-                <span>{codecInfo.codecs?.join(", ") || "—"}</span>
-            </p>
+    <div class="scroll">
+        {#if settingsOpened}
+            <main style="overflow-x: hidden;padding: 10px;">
+                <MaterialToggleSwitch label="settings.clear_media_when_finished" checked={$special.clearMediaOnFinish ?? true} defaultValue={true} on:change={(e) => updateSpecial(e.detail, "clearMediaOnFinish", true)} />
+                <MaterialToggleSwitch label="settings.auto_locate_missing_media_files" checked={$special.autoLocateMedia ?? true} defaultValue={true} on:change={(e) => updateSpecial(e.detail, "autoLocateMedia", true)} />
+            </main>
+        {:else if $activeShow?.type === "video" || $activeShow?.type === "image"}
+            <InfoMetadata title={name} {info} />
         {/if}
-        <!-- {#if codecInfo.mimeType}
-            <p>
-                <span class="title"><T id="info.mimeType" /></span>
-                <span>{codecInfo.mimeType || "—"}</span>
-            </p>
-        {/if} -->
-    </main>
+    </div>
+
+    <FloatingInputs round>
+        <MaterialButton isActive={settingsOpened} title="edit.options" on:click={() => (settingsOpened = !settingsOpened)}>
+            <Icon size={1.1} id="options" white={!settingsOpened} />
+        </MaterialButton>
+    </FloatingInputs>
 {/if}
 
 <style>
-    main {
-        overflow-y: auto;
-    }
-
-    main p {
-        display: flex;
-        justify-content: space-between;
-        padding: 2px 10px;
-        gap: 5px;
-    }
-    main p:nth-child(even) {
-        background-color: rgb(0 0 20 / 0.15);
-    }
-
-    .title {
-        font-weight: 600;
-    }
-    main p span:not(.title) {
-        opacity: 0.8;
-
-        overflow: hidden;
-        /* direction: rtl; */
+    .scroll {
+        flex: 1;
     }
 </style>

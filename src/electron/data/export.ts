@@ -2,20 +2,20 @@
 // Export as TXT or PDF
 // When exporting as PDF we create a new window and capture its content
 
-import AdmZip from "adm-zip"
-import { BrowserWindow, ipcMain } from "electron"
+import { BrowserWindow } from "electron"
 import fs, { type WriteFileOptions } from "fs"
-import { join } from "path"
+import { basename, dirname, extname, join } from "path"
 import { EXPORT, STARTUP } from "../../types/Channels"
-import { Main } from "../../types/IPC/Main"
 import { ToMain } from "../../types/IPC/ToMain"
 import type { Show, Slide, Template } from "../../types/Show"
 import type { Message } from "../../types/Socket"
 import { isProd } from "../index"
-import { sendMain, sendToMain } from "../IPC/main"
-import { createFolder, dataFolderNames, doesPathExist, getDataFolder, getShowsFromIds, getTimePointString, makeDir, openSystemFolder, parseShow, readFile, selectFolderDialog } from "../utils/files"
+import { sendToMain } from "../IPC/main"
+import { doesPathExist, getDataFolderPath, getShowsFromIds, getTimePointString, makeDir, openInSystem, parseShow, readFile } from "../utils/files"
 import { getAllShows } from "../utils/shows"
 import { exportOptions } from "../utils/windowOptions"
+import { filePathHashCode } from "./thumbnails"
+import { compressToZip } from "./zip"
 
 // SHOW: .show, PROJECT: .project, BIBLE: .fsb
 const customJSONExtensions = {
@@ -24,17 +24,22 @@ const customJSONExtensions = {
 }
 
 export function startExport(_e: Electron.IpcMainEvent, msg: Message) {
-    if (!msg.data) return
-    let dataPath: string = msg.data.path
-
-    if (!dataPath) {
-        dataPath = selectFolderDialog()
-        if (!dataPath) return
-
-        sendMain(Main.DATA_PATH, dataPath)
+    // PDF
+    if (msg.channel === "DONE") {
+        const exportFolderPath = getDataFolderPath("exports")
+        doneWritingFile(null, exportFolderPath)
+        return
     }
 
-    msg.data.path = getDataFolder(dataPath, dataFolderNames.exports)
+    if (!msg.data) return
+
+    // PDF
+    if (msg.channel === "EXPORT") {
+        if (!msg.data.name) return
+        sendToMain(ToMain.ALERT, msg.data.name)
+        const exportFolderPath = getDataFolderPath("exports")
+        if (msg.data.type === "pdf") generatePDF(join(exportFolderPath, msg.data.name), msg.data.options)
+    }
 
     if (msg.channel === "TEMPLATE") {
         exportTemplate(msg.data)
@@ -43,13 +48,14 @@ export function startExport(_e: Electron.IpcMainEvent, msg: Message) {
 
     const customExt = customJSONExtensions[msg.channel as keyof typeof customJSONExtensions]
     if (customExt) {
-        exportJSON(msg.data.content, customExt, msg.data.path)
+        const exportFolder = getDataFolderPath("exports")
+        exportJSON(msg.data.content, customExt, exportFolder)
         return
     }
 
     if (msg.channel === "USAGE") {
-        const path = createFolder(join(msg.data.path, "Usage"))
-        exportJSONFile(msg.data.content, path, getTimePointString())
+        const usageFolder = getDataFolderPath("exports", "Usage")
+        exportJSONFile(msg.data.content, usageFolder, getTimePointString())
         return
     }
 
@@ -60,15 +66,20 @@ export function startExport(_e: Electron.IpcMainEvent, msg: Message) {
 
     if (msg.channel !== "GENERATE") return
 
-    if (msg.data.showIds && msg.data.showsPath) {
+    if (msg.data.showIds) {
         // load shows
-        msg.data.shows = getShowsFromIds(msg.data.showIds, msg.data.showsPath)
+        msg.data.shows = getShowsFromIds(msg.data.showIds)
     }
 
-    if (msg.data.type === "pdf") createPDFWindow(msg.data)
-    else if (msg.data.type === "show") exportShow(msg.data)
-    else if (msg.data.type === "txt") exportTXT(msg.data)
-    else if (msg.data.type === "project") exportProject(msg.data)
+    if (msg.data.type === "project") exportProject(msg.data)
+    else if (msg.data.type === "pdf") createPDFWindow(msg.data)
+
+    const exportFolder = getDataFolderPath("exports")
+    const showNames: string[] = msg.data.showNames || []
+    const shows = getShowContent(showNames.map((name) => name + ".show"))
+
+    if (msg.data.type === "show") exportShow({ shows, path: exportFolder })
+    else if (msg.data.type === "txt") exportTXT({ shows, path: exportFolder })
 }
 
 // only open once per session
@@ -78,7 +89,7 @@ function doneWritingFile(err: NodeJS.ErrnoException | null, exportFolder: string
 
     // open export location in system when completed
     if (!err && !systemOpened) {
-        openSystemFolder(exportFolder)
+        openInSystem(exportFolder, true)
         systemOpened = true
     } else if (err) msg = err.toString()
 
@@ -89,13 +100,25 @@ function doneWritingFile(err: NodeJS.ErrnoException | null, exportFolder: string
 
 const PDFOptions = {
     margins: { top: 0, bottom: 0, left: 0, right: 0 },
+    // margins: { marginType: "none" }, // prevent default white borders
     pageSize: "A4" as const,
     printBackground: true,
     landscape: false
 }
 
-export function generatePDF(path: string) {
-    exportWindow?.webContents.printToPDF(PDFOptions).then(savePdf).catch(exportMessage)
+export function generatePDF(path: string, options: any = {}) {
+    const pageOptions: Electron.PrintToPDFOptions = PDFOptions
+
+    if (options.type === "media") {
+        // landscape 16:9
+        pageOptions.pageSize = {
+            // about 8.25 x 4.64 microns
+            width: 297000 / 10000 / 3.6, // 297mm
+            height: 167062 / 10000 / 3.6 // ~167mm
+        }
+    }
+
+    exportWindow?.webContents.printToPDF(pageOptions).then(savePdf).catch(exportMessage)
 
     function savePdf(data: Buffer) {
         writeFile(path, ".pdf", data, undefined, doneWritingPDF)
@@ -130,20 +153,6 @@ export function createPDFWindow(data: any) {
     }
 }
 
-ipcMain.on(EXPORT, (_e, msg: any) => {
-    if (!msg.data?.path) return
-
-    if (msg.channel === "DONE") {
-        doneWritingFile(null, msg.data.path)
-        return
-    }
-    if (msg.channel !== "EXPORT") return
-
-    if (!msg.data?.name) return
-    sendToMain(ToMain.ALERT, msg.data.name)
-    if (msg.data.type === "pdf") generatePDF(join(msg.data.path, msg.data.name))
-})
-
 // ----- JSON -----
 
 export function exportJSON(content: any, extension: string, path: string, name = "") {
@@ -157,6 +166,7 @@ export function exportJSONFile(content: any, path: string, name: string) {
 // ----- SHOW -----
 
 export function exportShow(data: { path: string; shows: Show[] }) {
+    console.log(data.path, data.shows.length)
     data.shows.forEach((show, i) => {
         const id = show.id
         delete show.id
@@ -198,7 +208,7 @@ function getSlidesText(show: Show) {
             if (!item.lines) return
 
             item.lines.forEach((line) => {
-                if (!line.text) return
+                if (!Array.isArray(line?.text)) return
 
                 line.text.forEach((txt) => {
                     text += txt.value
@@ -220,29 +230,35 @@ function getSlidesText(show: Show) {
 
 // ----- ALL SHOWS -----
 
-function exportAllShows(data: { type: string; showsPath: string; path: string }) {
+function getShowContent(showNames: string[]) {
+    const showsData: Show[] = []
+    const showsPath = getDataFolderPath("shows")
+
+    for (const showName of showNames) {
+        const showFilePath = join(showsPath, showName)
+        const showContent = parseShow(readFile(showFilePath))
+
+        if (showContent?.[1]) showsData.push({ ...showContent[1], id: showContent[0] })
+    }
+
+    return showsData
+}
+
+function exportAllShows(data: { type: string }) {
     const type = data.type
 
     const supportedTypes = ["txt", "show"]
     if (!supportedTypes.includes(type)) return
 
-    const allShows: string[] = getAllShows({ path: data.showsPath })
-    const shows: Show[] = []
-    for (const showName of allShows) {
-        const showFilePath = join(data.showsPath, showName)
-        // WIP override existing instead of creating new?
-        const showContent = parseShow(readFile(showFilePath))
-
-        if (showContent?.[1]) shows.push({ ...showContent[1], id: showContent[0] })
-    }
-
+    const shows = getShowContent(getAllShows())
     if (shows.length) {
+        const exportFolder = getDataFolderPath("exports")
         // create custom folder to organize the amount of files
-        data.path = join(data.path, getTimePointString())
-        makeDir(data.path)
+        const showsExportFolder = join(exportFolder, getTimePointString())
+        makeDir(showsExportFolder)
 
-        if (type === "show") exportShow({ ...data, shows })
-        else if (type === "txt") exportTXT({ ...data, shows })
+        if (type === "show") exportShow({ shows, path: showsExportFolder })
+        else if (type === "txt") exportTXT({ shows, path: showsExportFolder })
     } else {
         sendToMain(ToMain.ALERT, "Exported 0 shows!")
     }
@@ -250,69 +266,67 @@ function exportAllShows(data: { type: string; showsPath: string; path: string })
 
 // ----- PROJECT -----
 
-export function exportProject(data: { type: "project"; path: string; name: string; file: any }) {
+export function exportProject(data: { type: "project"; name: string; file: any; path?: string }) {
     sendToMain(ToMain.ALERT, "export.exporting")
+    const exportFolder = getDataFolderPath("exports")
 
     const files: string[] = data.file.files || []
     if (!files.length) {
+        const exportPath = data.path ? data.path.replace(".project", "") : join(exportFolder, data.name)
         // export as plain JSON
-        writeFile(join(data.path, data.name), ".project", JSON.stringify(data.file), "utf-8", (err) => doneWritingFile(err, data.path))
+        writeFile(exportPath, ".project", JSON.stringify(data.file), "utf-8", (err) => doneWritingFile(err, data.path ? "" : exportFolder))
         return
     }
 
-    // create archive
-    const zip = new AdmZip()
-
-    // copy files
-    files.forEach((path) => {
-        try {
-            // file might not exist
-            zip.addLocalFile(path)
-        } catch (err) {
-            console.error("Could not add a file to project:", err)
-        }
-    })
-
-    // add project file
-    zip.addFile("data.json", Buffer.from(JSON.stringify(data.file)))
-
-    const outputPath = join(data.path, data.name)
-    const filePath = getUniquePath(outputPath, ".project")
-    zip.writeZip(filePath, (err) => doneWritingFile(err, data.path))
+    // create archive with hashed filenames
+    const folderPath = data.path ? dirname(data.path) : exportFolder
+    const name = data.path ? basename(data.path).replace(".project", "") : data.name
+    compressWithMedia(
+        files,
+        data.file,
+        name,
+        ".project",
+        folderPath,
+        (path, extension) => {
+            return `${basename(path, extension)}__${filePathHashCode(path)}${extension}`
+        },
+        !!data.path
+    )
 }
 
 // ----- TEMPLATE -----
 
-export function exportTemplate(data: { file: { template: Template; files?: string[] }; name: string; path: string }) {
+export function exportTemplate(data: { file: { template: Template; files?: string[] }; name: string }) {
     sendToMain(ToMain.ALERT, "export.exporting")
+    const exportFolder = getDataFolderPath("exports")
 
     const files: string[] = data.file.files || []
     if (!files.length) {
         // export as plain JSON
         delete data.file.files
-        exportJSON(data.file, customJSONExtensions.TEMPLATE, data.path, data.name)
+        exportJSON(data.file, customJSONExtensions.TEMPLATE, exportFolder, data.name)
         return
     }
 
-    // create archive
-    const zip = new AdmZip()
+    // create archive with original filenames
+    compressWithMedia(files, data.file, data.name, customJSONExtensions.TEMPLATE, exportFolder, (path) => basename(path))
+}
 
-    // copy files
-    files.forEach((path) => {
-        try {
-            // file might not exist
-            zip.addLocalFile(path)
-        } catch (err) {
-            console.error("Could not add a file to project:", err)
-        }
-    })
+function compressWithMedia(files: string[], fileData: any, name: string, extension: string, exportFolder: string, getFileName: (path: string, ext: string) => string, canOverwrite = false) {
+    const entries: { name: string; content?: Buffer | string; filePath?: string }[] = files
+        .filter((filePath) => fs.existsSync(filePath))
+        .map((filePath) => ({
+            name: getFileName(filePath, extname(filePath)),
+            filePath
+        }))
 
-    // add project file
-    zip.addFile("data.json", Buffer.from(JSON.stringify(data.file)))
+    entries.push({ name: "data.json", content: Buffer.from(JSON.stringify(fileData)) })
 
-    const outputPath = join(data.path, data.name)
-    const filePath = getUniquePath(outputPath, customJSONExtensions.TEMPLATE)
-    zip.writeZip(filePath, (err) => doneWritingFile(err, data.path))
+    const filePath = canOverwrite ? join(exportFolder, name) + extension : getUniquePath(join(exportFolder, name), extension)
+
+    compressToZip(entries, filePath)
+        .then(() => doneWritingFile(null, exportFolder))
+        .catch((err) => doneWritingFile(err, exportFolder))
 }
 
 // ----- HELPERS -----

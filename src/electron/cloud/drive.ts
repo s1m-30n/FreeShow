@@ -5,9 +5,9 @@ import { isProd } from ".."
 import { Main } from "../../types/IPC/Main"
 import type { DriveData } from "../../types/Main"
 import type { Show, TrimmedShow } from "../../types/Show"
-import { stores } from "../data/store"
+import { _store, getStore, storeFilesData } from "../data/store"
 import { sendMain } from "../IPC/main"
-import { checkShowsFolder, dataFolderNames, deleteFile, doesPathExist, getDataFolder, getFileStats, loadShows, readFileAsync, writeFile } from "../utils/files"
+import { deleteFile, doesPathExist, getDataFolderPath, getFileStats, loadShows, readFileAsync, writeFile } from "../utils/files"
 import { trimShow } from "../utils/shows"
 import type { BibleCategories } from "./../../types/Tabs"
 
@@ -43,6 +43,8 @@ export async function listFolders(pageSize = 20, sort = "modified") {
             pageSize,
             q: "mimeType='application/vnd.google-apps.folder'",
             fields: "nextPageToken, files(id, name, modifiedTime)",
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true
         })
     } catch (err) {
         console.error(err)
@@ -71,6 +73,8 @@ export async function listFiles(pageSize = 50, query = "") {
             pageSize,
             q: query,
             fields: "nextPageToken, files(id, name, mimeType)",
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true
         })
     } catch (err) {
         console.error(err)
@@ -85,7 +89,7 @@ export const types = {
     png: "image/png",
     json: "application/json",
     txt: "application/txt",
-    folder: "application/vnd.google-apps.folder",
+    folder: "application/vnd.google-apps.folder"
 }
 
 export function createFile(parent: string, { type, name }: { type: keyof typeof types; name: string }, body: string) {
@@ -106,7 +110,7 @@ export async function getFile(id: string) {
     if (!id || !driveClient) return null
 
     // fileId: id
-    const data: drive_v3.Params$Resource$Files$Get = { fields: "id,modifiedTime" }
+    const data: drive_v3.Params$Resource$Files$Get = { fields: "id,modifiedTime", supportsAllDrives: true }
     if (id) data.fileId = id
     // if (q) data.q = q
 
@@ -132,9 +136,9 @@ export async function uploadFile(data: any, updateId = "") {
     try {
         if (updateId) {
             delete data.resource.parents
-            response = await driveClient.files.update({ fileId: updateId, ...data, fields: "id" })
+            response = await driveClient.files.update({ fileId: updateId, ...data, fields: "id", supportsAllDrives: true })
         } else {
-            response = await driveClient.files.create({ ...data, fields: "id" })
+            response = await driveClient.files.create({ ...data, fields: "id", supportsAllDrives: true })
         }
     } catch (err: any) {
         response = null
@@ -167,7 +171,7 @@ export async function downloadFile(fileId: string): Promise<any> {
     // https://developers.google.com/drive/api/guides/manage-downloads#node.js
 
     return new Promise((resolve) => {
-        driveClient!.files.get({ fileId, alt: "media" }, (err, res) => {
+        driveClient!.files.get({ fileId, alt: "media", supportsAllDrives: true }, (err, res) => {
             if (err) {
                 console.error("The API returned an error:", err)
                 resolve(null)
@@ -181,8 +185,6 @@ export async function downloadFile(fileId: string): Promise<any> {
 
 const SHOWS_CONTENT = "SHOWS_CONTENT"
 const combineLocations = ["PROJECTS"]
-const storesToSave: (keyof typeof stores)[] = ["EVENTS", "OVERLAYS", "PROJECTS", "SYNCED_SETTINGS", "STAGE_SHOWS", "TEMPLATES", "THEMES", "MEDIA"]
-// don't upload: settings.json, config.json, cache.json, history.json
 
 export let currentlyDeletedShows: string[] = []
 export async function syncDataDrive(data: DriveData) {
@@ -203,11 +205,16 @@ export async function syncDataDrive(data: DriveData) {
     let bibles: { [key: string]: BibleCategories } | null = null
 
     // CONFIGS
-    await Promise.all(storesToSave.map(syncStores))
+    await Promise.all(
+        Object.entries(storeFilesData).map(([id, data]) => {
+            if (!data.portable) return
+            syncStores(id as keyof typeof _store)
+        })
+    )
 
     // SCRIPTURE
-    if (bibles === null) bibles = stores.SYNCED_SETTINGS.store?.scriptures
-    if (bibles) await syncBibles(data.dataPath)
+    if (bibles === null) bibles = getStore("SYNCED_SETTINGS")?.scriptures
+    if (bibles) await syncBibles()
 
     // SHOWS
     const syncStates: { [key: string]: number } = {}
@@ -218,12 +225,17 @@ export async function syncDataDrive(data: DriveData) {
 
     /// //
 
-    async function syncStores(id: keyof typeof stores) {
-        const store = stores[id]
+    async function syncStores(id: keyof typeof _store) {
+        const store = _store[id]
+        if (!store) return
+
         const storeData: any = store.store
         const name = id + ".json"
 
-        const driveFileId = files.find((a) => a.name === name)?.id || ""
+        let driveFileId = files.find((a) => a.name === name)?.id || ""
+
+        // pre 1.5.3
+        if (!driveFileId && id === "STAGE") driveFileId = files.find((a) => a.name === "STAGE_SHOWS.json")?.id || ""
 
         const driveFile = await getFile(driveFileId)
 
@@ -241,7 +253,7 @@ export async function syncDataDrive(data: DriveData) {
             const project = () => ({
                 projects: combineFiles(driveContent?.projects, storeData.projects, newest),
                 folders: combineFiles(driveContent?.folders, storeData.folders, newest),
-                projectTemplates: combineFiles(driveContent?.projectTemplates, storeData.projectTemplates, newest),
+                projectTemplates: combineFiles(driveContent?.projectTemplates, storeData.projectTemplates, newest)
             })
             const combined = id === "PROJECTS" ? project() : combineFiles(driveContent, storeData, newest)
 
@@ -295,7 +307,7 @@ export async function syncDataDrive(data: DriveData) {
         // responses.push(response)
     }
 
-    async function syncBibles(dataPath: string) {
+    async function syncBibles() {
         const localBibles: string[] = Object.values(bibles!)
             .filter((a) => !a.api && !a.collection)
             .map((a) => a.name + ".fsb")
@@ -315,7 +327,7 @@ export async function syncDataDrive(data: DriveData) {
         // this sets a limit to 100 bibles downloaded from cloud
         const driveBibles = await listFiles(100, "'" + driveBiblesFolderId + "' in parents")
 
-        const localBiblesFolder: string = getDataFolder(dataPath, dataFolderNames.scriptures)
+        const localBiblesFolder = getDataFolderPath("scriptures")
 
         await Promise.all(localBibles.map(syncBible))
 
@@ -365,10 +377,9 @@ export async function syncDataDrive(data: DriveData) {
     }
 
     async function syncAllShows() {
-        const showsPath = checkShowsFolder(data.path || "")
+        const showsPath = getDataFolderPath("shows")
         if (!showsPath) return
 
-        if (DEBUG) console.info("Path:", data.path)
         if (DEBUG) console.info("Method:", data.method)
 
         const name = SHOWS_CONTENT + ".json"
@@ -378,7 +389,7 @@ export async function syncDataDrive(data: DriveData) {
         // download shows
         const driveContent = driveFile ? await downloadFile(driveFileId) : null
 
-        const localShows = loadShows({ showsPath }, true)
+        const localShows = loadShows(true)
         // some might have the same id
         const shows: { [key: string]: TrimmedShow | Show } = { ...localShows, ...(driveContent || {}) }
         if (DEBUG) console.info("Local shows count:", Object.keys(localShows).length)

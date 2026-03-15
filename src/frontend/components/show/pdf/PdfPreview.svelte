@@ -1,21 +1,29 @@
 <script lang="ts">
     import { getDocument, GlobalWorkerOptions, type PDFDocumentLoadingTask } from "pdfjs-dist"
     import { onDestroy, onMount } from "svelte"
-    import { slide } from "svelte/transition"
     import { Main } from "../../../../types/IPC/Main"
     import { sendMain } from "../../../IPC/main"
-    import { dataPath, dictionary, labelsDisabled, outLocked, outputs, slidesOptions, styles } from "../../../stores"
+    import { activePopup, activeProject, focusMode, labelsDisabled, outLocked, outputs, popupData, projects, slidesOptions, styles } from "../../../stores"
+    import { triggerClickOnEnterSpace } from "../../../utils/clickable"
     import { newToast, wait } from "../../../utils/common"
+    import { translateText } from "../../../utils/language"
     import Icon from "../../helpers/Icon.svelte"
-    import { getFileName, removeExtension } from "../../helpers/media"
-    import { getActiveOutputs, setOutput } from "../../helpers/output"
+    import { encodeFilePath, getFileName, removeExtension } from "../../helpers/media"
+    import { getActiveOutputs, setOutput, startFolderTimer } from "../../helpers/output"
     import T from "../../helpers/T.svelte"
-    import Button from "../../inputs/Button.svelte"
+    import FloatingInputs from "../../input/FloatingInputs.svelte"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
+    import MaterialZoom from "../../inputs/MaterialZoom.svelte"
     import Loader from "../../main/Loader.svelte"
     import { clearBackground } from "../../output/clear"
 
     export let show
-    $: path = show.id
+    export let index: number
+
+    let data: { timer?: number } | undefined
+    $: data = $projects[$activeProject || ""]?.shows?.[index]?.data
+
+    $: path = encodeFilePath(show.id)
 
     $: activeOutput = getActiveOutputs($outputs, false, true, true)[0]
 
@@ -39,21 +47,32 @@
         setOutput("slide", { type: "pdf", id: path, page, pages: pageCount, name })
 
         clearBackground()
+
+        if (timer) startFolderTimer(path, { type: "pdf", path: "" })
     }
 
-    // WIP duplicate of Slides.svelte
-    let nextScrollTimeout: NodeJS.Timeout | null = null
-    function wheel(e: any) {
-        if (!e.ctrlKey && !e.metaKey) return
-        if (nextScrollTimeout) return
+    // AUTO SCROLL TO ACTIVE PAGE
+    let isScrolling: any = null
+    $: if (active !== -1) scrollToActive()
+    function scrollToActive() {
+        if (isScrolling) clearTimeout(isScrolling)
+        isScrolling = setTimeout(() => {
+            const slide = document.getElementById("id_" + getId(path) + "_" + active)
+            if (!slide) return
 
-        slidesOptions.set({ ...$slidesOptions, columns: Math.max(2, Math.min(10, $slidesOptions.columns + (e.deltaY < 0 ? -1 : 1))) })
+            const scrollElem = slide.closest(".grid")
+            const slideTop = slide.offsetTop
+            const slideHeight = slide.clientHeight
 
-        // don't start timeout if scrolling with mouse
-        if (e.deltaY >= 100 || e.deltaY <= -100) return
-        nextScrollTimeout = setTimeout(() => {
-            nextScrollTimeout = null
-        }, 500)
+            scrollElem?.scrollTo({ top: slideTop - slideHeight * 0.8, behavior: "smooth" })
+
+            isScrolling = null
+        }, 50)
+    }
+
+    function getId(text: string) {
+        if (typeof text !== "string") return ""
+        return text.replace(/[^a-zA-Z0-9]+/g, "")
     }
 
     /////
@@ -64,60 +83,116 @@
     let pageCount = 0
     let canvases: (HTMLCanvasElement | undefined)[] = []
 
-    let zoomOpened = false
-    function mousedown(e: any) {
-        if (e.target.closest(".zoom_container") || e.target.closest("button")) return
-
-        zoomOpened = false
-    }
-
     let loading = true
     let loadingTask: PDFDocumentLoadingTask | null = null
+    let renderTasks: any[] = []
+    let currentPath = ""
+
+    const workerErrors = ["RenderingCancelledException", "Transport destroyed", "Worker was destroyed", "Worker was terminated", "sendWithPromise"]
+    const isWorkerError = (error: any) => error?.name === "RenderingCancelledException" || workerErrors.some((msg) => error?.message?.includes(msg))
+
     onMount(loadPages)
-    onDestroy(() => loadingTask?.destroy())
+    onDestroy(() => {
+        renderTasks.forEach((task) => task?.cancel())
+        try {
+            loadingTask?.destroy()
+        } catch {}
+    })
+
     async function loadPages() {
         loading = true
+        renderTasks.forEach((task) => task?.cancel())
+        renderTasks = []
+
+        if (loadingTask) {
+            try {
+                loadingTask.destroy()
+            } catch {}
+            loadingTask = null
+            await wait(50)
+        }
+
         if (!path) {
             loading = false
             return
         }
 
-        loadingTask = getDocument(path)
-        const pdfDoc = await loadingTask.promise
-        pageCount = pdfDoc.numPages
+        const loadPath = path
+        currentPath = path
 
-        // Wait for canvases to bind
-        await wait(10)
+        try {
+            loadingTask = getDocument(path)
+            const pdfDoc = await loadingTask.promise
+            if (currentPath !== loadPath) return
 
-        for (let i = 0; i < pageCount; i++) {
-            const page = await pdfDoc.getPage(i + 1)
-            const viewport = page.getViewport({ scale: 1.5 })
-            const canvas = canvases[i]
-            const context = canvas?.getContext("2d")
-            if (!context) break
+            pageCount = pdfDoc.numPages
+            await wait(10)
 
-            canvas!.height = viewport.height
-            canvas!.width = viewport.width
+            for (let i = 0; i < pageCount; i++) {
+                if (currentPath !== loadPath) return
 
-            await page.render({ canvasContext: context, viewport }).promise
+                try {
+                    const page = await pdfDoc.getPage(i + 1)
+                    if (currentPath !== loadPath) return
 
-            // display when the first page has loaded
+                    const viewport = page.getViewport({ scale: 1.5 })
+                    const canvas = canvases[i]
+                    const context = canvas?.getContext("2d")
+                    if (!context) break
+
+                    canvas!.height = viewport.height
+                    canvas!.width = viewport.width
+
+                    const renderTask = page.render({ canvas: canvas!, canvasContext: context, viewport })
+                    renderTasks[i] = renderTask
+
+                    try {
+                        await renderTask.promise
+                    } catch (error: any) {
+                        if (error?.name === "RenderingCancelledException") continue
+                        throw error
+                    }
+
+                    // display when the first page has loaded
+                    loading = false
+                } catch (error: any) {
+                    if (isWorkerError(error)) return
+                    throw error
+                }
+            }
+        } catch (error: any) {
+            if (!isWorkerError(error)) console.error("PDF loading error:", error)
             loading = false
         }
     }
 
     function convertToImages() {
-        newToast("$actions.converting")
-        sendMain(Main.PDF_TO_IMAGE, { dataPath: $dataPath, filePath: path })
+        newToast("actions.converting")
+        sendMain(Main.PDF_TO_IMAGE, { filePath: path })
     }
+
+    $: timer = data?.timer || 0
+    $: totalTime = pageCount * timer
 </script>
 
-<svelte:window on:mousedown={mousedown} />
-
-<div class="grid" on:wheel={wheel}>
+<div class="grid">
     {#each { length: pageCount } as _page, i}
-        <div class="main" class:active={active === i} style="{output?.color ? 'outline: 2px solid ' + output.color + ';' : ''}width: {100 / (pageCount > 1 ? $slidesOptions.columns : 1)}%;">
-            <div class="slide" style={transparentOutput ? "" : `background-color: ${currentStyle.background};`} tabindex={0} on:click={(e) => outputPdf(e, i)}>
+        <div id={"id_" + getId(path) + "_" + i} class="main" class:active={active === i} style="{output?.color ? 'outline: 2px solid ' + output.color + ';' : ''}width: {100 / (pageCount > 1 ? $slidesOptions.columns : 1)}%;">
+            <!-- icons -->
+            <div class="icons">
+                {#if timer}
+                    <div>
+                        <div class="button">
+                            <div style="padding: 3px;" data-title={translateText("preview.nextTimer")}>
+                                <Icon id="clock" size={0.9} white />
+                            </div>
+                        </div>
+                        <span><p>{timer}</p></span>
+                    </div>
+                {/if}
+            </div>
+
+            <div class="slide" style={transparentOutput ? "" : `background-color: ${currentStyle.background};`} tabindex={0} role="button" on:click={(e) => outputPdf(e, i)} on:keydown={triggerClickOnEnterSpace}>
                 <canvas bind:this={canvases[i]} />
             </div>
         </div>
@@ -130,35 +205,35 @@
     {/if}
 </div>
 
-<div class="actionbar">
-    <div>
-        <p>PDF</p>
+{#if !$focusMode}
+    <!-- <FloatingInputs side="left">
+    <span style="min-width: 60px;display: flex;align-items: center;justify-content: center;opacity: 0.8;">PDF</span>
+</FloatingInputs> -->
 
-        <div class="buttons">
-            <Button on:click={convertToImages} style="white-space: nowrap;">
-                <Icon id="image" right={!$labelsDisabled} />
-                {#if !$labelsDisabled}<T id="actions.convert_to_images" />{/if}
-            </Button>
+    <FloatingInputs>
+        <MaterialButton icon="image" on:click={convertToImages} style="white-space: nowrap;">
+            {#if !$labelsDisabled}<T id="actions.convert_to_images" />{/if}
+        </MaterialButton>
 
-            <Button on:click={() => (zoomOpened = !zoomOpened)} title={$dictionary.actions?.zoom}>
-                <Icon size={1.3} id="zoomIn" white />
-            </Button>
-            {#if zoomOpened}
-                <div class="zoom_container" transition:slide={{ duration: 150 }}>
-                    <Button style="padding: 0 !important;" on:click={() => slidesOptions.set({ ...$slidesOptions, columns: 4 })} bold={false} center>
-                        <p class="text" title={$dictionary.actions?.resetZoom}>{(100 / $slidesOptions.columns).toFixed()}%</p>
-                    </Button>
-                    <Button disabled={$slidesOptions.columns <= 2} on:click={() => slidesOptions.set({ ...$slidesOptions, columns: Math.max(2, $slidesOptions.columns - 1) })} title={$dictionary.actions?.zoomIn} center>
-                        <Icon size={1.3} id="add" white />
-                    </Button>
-                    <Button disabled={$slidesOptions.columns >= 10} on:click={() => slidesOptions.set({ ...$slidesOptions, columns: Math.min(10, $slidesOptions.columns + 1) })} title={$dictionary.actions?.zoomOut} center>
-                        <Icon size={1.3} id="remove" white />
-                    </Button>
-                </div>
-            {/if}
-        </div>
-    </div>
-</div>
+        <div class="divider"></div>
+
+        <MaterialButton
+            disabled={pageCount < 2}
+            on:click={() => {
+                popupData.set({ type: "pdf", value: timer, totalTime, count: pageCount })
+                activePopup.set("next_timer")
+            }}
+            title="popup.next_timer{totalTime !== 0 ? `: ${totalTime}s` : ''}"
+        >
+            <Icon size={1.1} id="clock" white={totalTime === 0} />
+            <!-- {joinTime(secondsToTime(totalTime))} -->
+        </MaterialButton>
+
+        <div class="divider"></div>
+
+        <MaterialZoom columns={$slidesOptions.columns} on:change={(e) => slidesOptions.set({ ...$slidesOptions, columns: e.detail })} />
+    </FloatingInputs>
+{/if}
 
 <style>
     canvas {
@@ -173,7 +248,7 @@
     .load {
         position: absolute;
         top: 0;
-        inset-inline-start: 0;
+        left: 0;
         width: 100%;
         height: 100%;
 
@@ -236,60 +311,37 @@
         outline-offset: -1px;
     }
 
-    /* action bar */
+    /* icons */
 
-    .actionbar {
+    .icons {
+        pointer-events: none;
         display: flex;
-        justify-content: space-between;
-        width: 100%;
-        background-color: var(--primary-darkest);
-    }
-
-    /* fixed height for consistent heights */
-    .actionbar :global(button) {
-        min-height: 28px;
-        padding: 0 0.8em !important;
-    }
-    .actionbar :global(button.active) {
-        /* color: var(--secondary) !important; */
-        /* color: rgb(255 255 255 /0.5) !important; */
-        background-color: var(--primary) !important;
-    }
-
-    .actionbar div {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        width: 100%;
-    }
-
-    .actionbar p {
-        padding: 0 10px;
-        opacity: 0.8;
-    }
-
-    .actionbar div.buttons {
-        position: relative;
-        width: initial;
-
-        display: flex;
-        align-items: center;
-    }
-
-    /* zoom */
-    .zoom_container {
-        position: absolute;
-        inset-inline-end: 0;
-        top: 0;
-        transform: translateY(-100%);
-        overflow: hidden;
-
         flex-direction: column;
-        width: auto;
-        /* border-left: 3px solid var(--primary-lighter); */
+        position: absolute;
+        z-index: 1;
+        font-size: 0.9em;
 
-        z-index: 2;
+        height: 80%;
+        flex-wrap: wrap;
+        place-items: start;
+        left: 0;
+    }
 
-        background-color: var(--primary-darkest);
+    .icons div {
+        opacity: 0.9;
+        display: flex;
+    }
+    .icons .button {
+        background-color: rgb(0 0 0 / 0.6);
+        pointer-events: all;
+    }
+    .icons span {
+        pointer-events: all;
+        background-color: rgb(0 0 0 / 0.6);
+        padding: 3px;
+        font-size: 0.75em;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
     }
 </style>

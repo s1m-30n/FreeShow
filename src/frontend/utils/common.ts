@@ -2,31 +2,11 @@ import { get } from "svelte/store"
 import { OUTPUT } from "../../types/Channels"
 import { Main } from "../../types/IPC/Main"
 import type { ErrorLog } from "../../types/Main"
-import { keysToID, removeDuplicates, sortByName } from "../components/helpers/array"
-import { getActiveOutputs } from "../components/helpers/output"
+import { removeDuplicates } from "../components/helpers/array"
+import { getContrast } from "../components/helpers/color"
+import { getActiveOutputs, toggleOutputs } from "../components/helpers/output"
 import { sendMain } from "../IPC/main"
-import {
-    activeDrawerTab,
-    activeEdit,
-    activePage,
-    activeShow,
-    activeTriggerFunction,
-    allOutputs,
-    autosave,
-    currentWindow,
-    disabledServers,
-    drawer,
-    errorHasOccured,
-    focusedArea,
-    os,
-    outputDisplay,
-    outputs,
-    quickSearchActive,
-    resized,
-    serverData,
-    toastMessages,
-    version,
-} from "../stores"
+import { activePopup, activeTriggerFunction, autosave, currentWindow, disabledServers, drawer, errorHasOccurred, focusedArea, os, outputs, quickSearchActive, resized, serverData, statusIndicator, theme, themes, toastMessages, version } from "../stores"
 import { convertAutosave } from "../values/autosave"
 import { send } from "./request"
 import { save } from "./save"
@@ -35,10 +15,31 @@ export const DEFAULT_WIDTH = 290 // --navigation-width (global.css) | resized (s
 export const DEFAULT_DRAWER_HEIGHT = 300
 export const MENU_BAR_HEIGHT = 25 // main (ManuBar.svelte) - Windows
 
+export function isMainWindow() {
+    return get(currentWindow) === null
+}
+export function isOutputWindow() {
+    return get(currentWindow) === "output"
+}
+
 // create toast popup
 export function newToast(msg: string) {
     if (!msg) return
     toastMessages.set(removeDuplicates([...get(toastMessages), msg]))
+}
+
+// set status indicator, set timeout in seconds (max 60 seconds)
+let statusTimeout: NodeJS.Timeout | null = null
+export function setStatus(id: string, timeout: number = 60) {
+    statusIndicator.set(id)
+
+    if (statusTimeout) clearTimeout(statusTimeout)
+    if (!timeout) return
+
+    statusTimeout = setTimeout(() => {
+        statusIndicator.set("")
+        statusTimeout = null
+    }, timeout * 1000)
 }
 
 // async wait (instead of timeouts)
@@ -77,18 +78,14 @@ export async function waitUntilValueIsDefined(value: () => any, intervalTime = 5
 }
 
 // hide output window
-export function hideDisplay(ctrlKey = true) {
-    if (!ctrlKey) return
-    outputDisplay.set(false)
-
-    const outputsList = getActiveOutputs(get(allOutputs), false)
-    outputsList.forEach((id) => {
-        const output = { id, ...get(allOutputs)[id] }
-        send(OUTPUT, ["DISPLAY"], { enabled: false, output })
-    })
+export function hideDisplay() {
+    toggleOutputs(null, { state: false })
 }
 
+export let lastClickTime = 0
 export function mainClick(e: any) {
+    lastClickTime = Date.now()
+
     // open links externally
     if (e.target?.closest("a.open")) {
         e.preventDefault()
@@ -102,17 +99,27 @@ export function focusArea(e: any) {
     if (get(quickSearchActive) && !e.target.closest(".quicksearch")) quickSearchActive.set(false)
 
     if (e.target.closest(".menus") || e.target.closest(".contextMenu")) return
-    focusedArea.set(e.target.closest(".selectElem")?.id || e.target.querySelector(".selectElem")?.id || "")
+
+    const id = e.target.closest(".selectElem")?.id || e.target.querySelector(".selectElem")?.id
+    if (id) focusedArea.set(id)
+
+    // custom area without select elems
+    if (!id) {
+        if (e.target.closest(".editArea")) focusedArea.set("edit_items")
+        else if (e.target.closest(".scripture")) focusedArea.set("scripture")
+        else if (e.target.closest(".timeline")) focusedArea.set("timeline")
+    }
 }
 
 // auto save
 let autosaveTimeout: NodeJS.Timeout | null = null
-export let previousAutosave: number = 0
+export let previousAutosave = 0
 export function startAutosave() {
-    if (get(currentWindow)) return
+    if (!isMainWindow()) return
     if (autosaveTimeout) clearTimeout(autosaveTimeout)
 
-    const saveInterval = convertAutosave[get(autosave)]
+    const as = get(autosave) || "15min"
+    const saveInterval = convertAutosave[as]
     if (!saveInterval) {
         autosaveTimeout = null
         return
@@ -120,32 +127,23 @@ export function startAutosave() {
 
     previousAutosave = Date.now()
     autosaveTimeout = setTimeout(() => {
-        save(false, { autosave: true })
+        const skip = get(activePopup) === "initialize" || get(activePopup) === "cloud_method"
+        if (!skip) save(false, { autosave: true })
         startAutosave()
     }, saveInterval)
 }
 
-// get dropdown list
-export function getList(object: any, addEmptyValue = false) {
-    let list = sortByName(keysToID(object))
-    if (addEmptyValue) list = [{ id: null, name: "—" }, ...list]
-
-    return list
-}
-
 // error logger
-const ERROR_FILTER = [
+export const ERROR_FILTER = [
     "Failed to execute 'drawImage' on 'CanvasRenderingContext2D'", // canvas media cache
     "Failed to construct 'ImageData'", // invalid image size
     "Failed to load because no supported source was found.", // media file doesn't exists
     "The element has no supported sources.", // audio error
-    "The play() request was interrupted by a call to pause().", // video transitions
-    "The play() request was interrupted because the media was removed from the document.", // video transitions
-    "The play() request was interrupted because video-only background media was paused to save power.", // video issue
+    "The play() request was interrupted", // video transition "issue"
     "Failed to fetch", // probably offline
     "Uncaught IndexSizeError: Failed to execute 'setStart' on 'Range'", // caret update/reset (pos larger than content)
     "Uncaught IndexSizeError: Failed to execute 'setEnd' on 'Range'", // caret update/reset (pos larger than content)
-    " is not defined\n    at eval", // inputting text into number input
+    " is not defined\n    at eval" // inputting text into number input
 ]
 export function logerror(err) {
     const msg = err.type === "unhandledrejection" ? err.reason?.message : err.message
@@ -155,22 +153,20 @@ export function logerror(err) {
         time: new Date(),
         os: get(os).platform || "Unknown",
         version: get(version),
-        active: { window: get(currentWindow) || "main", page: get(activePage), show: get(activeShow), edit: get(activeEdit) },
-        drawer: { active: get(drawer)?.height > 40 ? get(activeDrawerTab) : "CLOSED" },
-        // lastUndo: get(undoHistory)[get(undoHistory).length - 1],
         type: err.type,
         source: err.type === "unhandledrejection" ? "See stack" : `${err.filename} - ${err.lineno}:${err.colno}`,
         message: msg,
-        stack: err.reason?.stack || err.error?.stack,
+        stack: err.reason?.stack || err.error?.stack
     }
 
-    errorHasOccured.set(true) // always show close popup if this has happened (so the user can choose to not save)
+    errorHasOccurred.set(true) // always show close popup if this has happened (so the user can choose to not save)
     sendMain(Main.LOG_ERROR, log)
 }
 
 // stream to OutputShow
 export function toggleRemoteStream() {
-    if (get(currentWindow)) return
+    // get(special).optimizedMode
+    if (!isMainWindow()) return
 
     const value = { key: "server", value: false }
     let captureOutputId = get(serverData)?.output_stream?.outputId
@@ -214,12 +210,57 @@ export function togglePanels() {
 }
 
 // trigger functions in .svelte files (used to trigger big and old functions still in .svelte files)
-const triggerTimeout: NodeJS.Timeout | null = null
+let triggerTimeout: NodeJS.Timeout | null = null
 export function triggerFunction(id: string) {
     activeTriggerFunction.set(id)
 
     if (triggerTimeout) clearTimeout(triggerTimeout)
-    setTimeout(() => {
+    triggerTimeout = setTimeout(() => {
         activeTriggerFunction.set("")
+        triggerTimeout = null
     }, 100)
+}
+
+// get theme contrast color
+// WIP similar to "secondary" in App.svelte
+export function isDarkTheme() {
+    const contrastColor = getContrast(get(themes)[get(theme)]?.colors?.primary || "")
+    return contrastColor === "#FFFFFF"
+}
+
+const throttled: { [key: string]: any } = {}
+export function throttle(id: string, value: any, callback: (v: any) => void, maxUpdatesPerSecond: number) {
+    // value = clone(value)
+
+    if (throttled[id] !== undefined) {
+        throttled[id] = value
+        return
+    }
+
+    callback(value)
+    throttled[id] = "WAITING"
+
+    setTimeout(() => {
+        if (throttled[id] !== "WAITING") callback(throttled[id])
+        delete throttled[id]
+    }, 1000 / maxUpdatesPerSecond)
+}
+
+const limited: Record<string, { timeout: NodeJS.Timeout; pending: (v: boolean) => void }> = {}
+export function hasNewerUpdate(id: string, maxUpdatesMs = 0): Promise<boolean> {
+    // resolve any existing updates as false as there is a newer one
+    if (limited[id]) {
+        clearTimeout(limited[id].timeout)
+        limited[id].pending(true)
+    }
+
+    return new Promise((resolve) => {
+        limited[id] = {
+            timeout: setTimeout(() => {
+                delete limited[id]
+                resolve(false)
+            }, maxUpdatesMs),
+            pending: resolve
+        }
+    })
 }

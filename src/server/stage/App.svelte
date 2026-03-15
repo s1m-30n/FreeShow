@@ -118,11 +118,22 @@
 {/if}
 
 <style>
+<<<<<<< HEAD
   :global(*) {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
     user-select: none;
+=======
+    :global(*) {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        user-select: none;
+        -webkit-user-select: none; /* Safari/iOS specific */
+        -webkit-touch-callout: none; /* Prevents iOS callout menu */
+        -webkit-tap-highlight-color: transparent; /* Removes tap highlight on iOS */
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 
     outline-offset: -4px;
     outline-color: var(--secondary);
@@ -142,10 +153,19 @@
 
     height: 100%;
 
+<<<<<<< HEAD
     /* width: 100vw;
+=======
+        /* iOS Safari touch optimizations */
+        touch-action: manipulation;
+        -webkit-text-size-adjust: 100%; /* Prevents iOS Safari from auto-zooming */
+
+        /* width: 100vw;
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
   height: 100vh; */
   }
 
+<<<<<<< HEAD
   :root {
     --primary: #292c36;
     --primary-lighter: #363945;
@@ -156,6 +176,18 @@
     --secondary: #27a8f5;
     --secondary-opacity: #27a9f55e;
     --secondary-text: #f0f0ff;
+=======
+    :root {
+        --primary: #242832;
+        --primary-lighter: #2f3542;
+        --primary-darker: #191923;
+        --primary-darkest: #12121c;
+        --text: #f0f0ff;
+        --textInvert: #131313;
+        --secondary: #f0008c;
+        --secondary-opacity: rgba(240, 0, 140, 0.5);
+        --secondary-text: #f0f0ff;
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 
     --hover: rgb(255 255 255 / 0.05);
     --focus: rgb(255 255 255 / 0.1);
@@ -190,6 +222,7 @@
     padding-bottom: 20px;
   }
 
+<<<<<<< HEAD
   .clicked {
     position: absolute;
     bottom: 0;
@@ -202,4 +235,18 @@
     gap: 10px;
     background-color: var(--primary);
   }
+=======
+    .clicked {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: calc(100% - 20px);
+        margin: 10px;
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        background-color: var(--primary);
+    }
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 </style>

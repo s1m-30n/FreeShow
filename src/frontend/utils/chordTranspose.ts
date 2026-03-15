@@ -16,7 +16,7 @@ const ENHARMONIC: Record<string, string> = {
     "D#": "Eb",
     "F#": "Gb",
     "G#": "Ab",
-    "A#": "Bb",
+    "A#": "Bb"
 }
 
 function normalizeRoot(root: string, preferSharps: boolean): string {
@@ -27,10 +27,13 @@ function normalizeRoot(root: string, preferSharps: boolean): string {
 }
 
 function transposeChord(chord: string, step: number, preferSharps = true): string {
-    const match = chord.match(/^([A-G][b#]?)(.*)$/)
+    // Accept both ASCII and Unicode flat/sharp symbols (b, #, ♭, ♯)
+    const match = chord.match(/^([A-G][b#♭♯]?)(.*)$/)
     if (!match) return chord
     // eslint-disable-next-line prefer-const
     let [, root, rest] = match
+    // Normalize any unicode flat/sharp to ASCII so our scales/enharmonic map match
+    root = root.replace(/♭/g, "b").replace(/♯/g, "#")
     // Normalize to sharp or flat
     root = normalizeRoot(root, preferSharps)
     const scale = preferSharps ? SHARP_SCALE : FLAT_SCALE
@@ -58,8 +61,20 @@ function transposeFullChord(chord: string, step: number, preferSharps = true): s
 export function transposeText(text: string, step: number): string {
     // Prefer sharps when transposing up, flats when down
     const preferSharps = step >= 0
-    // Regex matches chords in brackets, with optional slash chords and modifiers
-    return text.replace(/\[([A-G][b#]?m?(?:aug|dim|sus|add)?\d*(?:\/[A-G][b#]?)?)\]/g, (_unused, p1) => {
+    // Regex matches chords in brackets. It should capture a root note with optional
+    // accidental, then any common chord descriptors (maj, min, m, aug, dim, sus,
+    // add, numbers, parenthesis, extensions) and optional slash bass notes.
+    // Examples matched: C, D7, Bm7, Gmaj7, Asus4, F#(add9), Bbmaj7/G
+    // Allow ASCII and Unicode flats/sharps in the root and in slash bass notes
+    // This regex is more specific to avoid matching section labels like [Chorus], [Verse], etc.
+    const chordInBrackets = /\[([A-G][b#♭♯]?(?:maj|min|m|aug|dim|sus|add|\d|\(|\)|\/[A-G][b#♭♯]?)*)\]/g
+    return text.replace(chordInBrackets, (match, p1) => {
+        // Chord notation uses: note names (A-G), accidentals (b#♭♯), numbers, and specific extensions
+        // If it's longer than 8 chars or contains letters other than standard chord notation, likely not a chord
+        if (p1.length > 8 || /[a-z]{4,}/i.test(p1.replace(/^[A-G][b#♭♯]?(maj|min|aug|dim|sus|add)/i, ""))) {
+            return match // Return unchanged if it looks like a section label
+        }
+
         return "[" + transposeFullChord(p1, step, preferSharps) + "]"
     })
 }

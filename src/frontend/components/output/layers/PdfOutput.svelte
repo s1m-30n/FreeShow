@@ -36,14 +36,14 @@
 
         const page = await loadedDoc.getPage(pageNumber)
 
-        const context = canvasElem.getContext("2d")
+        const context = canvasElem?.getContext("2d")
         if (!context) return
 
         const viewport = page.getViewport({ scale: 4 })
         canvasElem.height = viewport.height
         canvasElem.width = viewport.width
 
-        page.render({ canvasContext: context, viewport })
+        page.render({ canvas: canvasElem, canvasContext: context, viewport })
     }
 
     let update = 0

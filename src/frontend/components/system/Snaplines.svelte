@@ -1,5 +1,6 @@
 <script lang="ts">
     import { outputs } from "../../stores"
+    import { throttle } from "../../utils/common"
     import { DEFAULT_BOUNDS, getActiveOutputs, getOutputResolution, getStageResolution } from "../helpers/output"
     import { getRadius, moveBox, resizeBox, rotateBox } from "./textbox"
 
@@ -22,10 +23,12 @@
 
         // TODO: move multiple!
 
-        let moveCondition: boolean = mouse.e.target.closest(".line") || ((!mouse.e.target.closest(".edit") || notTextBox || mouse.e.altKey) && !mouse.e.target.closest(".square")) || mouse.e.ctrlKey || mouse.e.metaKey || mouse.e.buttons === 4
+        let control = mouse.e.ctrlKey || mouse.e.metaKey
+        let moveCondition: boolean = mouse.e.target.closest(".line") || ((!mouse.e.target.closest(".edit") || notTextBox || mouse.e.altKey) && !mouse.e.target.closest(".square")) || (control && !mouse.e.target.closest(".square")) || mouse.e.buttons === 4
 
-        let square = e.shiftKey
-        if (mouse.item.type === "icon") square = true
+        let keepAspectRatio = e.shiftKey
+        // WIP square option currently not working well (also custom SVG icons can be any ratio)
+        const square = false // mouse.item.type === "icon"
 
         if (mouse.e.target.closest(".rotate")) {
             let rotation = rotateBox(e, mouse, ratio)
@@ -38,13 +41,30 @@
             styles = moved.styles
             lines = moved.lines
         } else if (mouse.e.target.closest(".square")) {
-            styles = resizeBox(e, mouse, square, ratio)
+            styles = resizeBox(e, mouse, keepAspectRatio, ratio, control, square)
             if (!e.altKey) {
                 const moved = moveBox(e, mouse, ratio, active, lines, styles)
                 styles = moved.styles
                 lines = moved.lines
             }
         }
+
+        // remove all lines that are too close to each other (with same orientation)
+        const MAX_DISTANCE = 12 / ratio
+        lines = lines.filter((line, index, arr) => {
+            for (let i = 0; i < arr.length; i++) {
+                if (i === index) continue
+                if (line[0][0] !== arr[i][0][0] && line[0] !== arr[i][0]) continue
+                if (Math.abs(line[1] - arr[i][1]) <= MAX_DISTANCE) return false
+            }
+            return true
+        })
+
+        // show max 3 lines of each orientation at once
+        const MAX_LINES = 3
+        let xLines = lines.filter((line) => line[0] === "x" || line[0] === "xc").slice(0, MAX_LINES)
+        let yLines = lines.filter((line) => line[0] === "y" || line[0] === "yc").slice(0, MAX_LINES)
+        lines = [...xLines, ...yLines]
 
         // percentage scale
         let outputId = isStage ? "" : getActiveOutputs($outputs, true, true, true)[0]
@@ -65,7 +85,7 @@
             styles[key] = Number(styles[key]).toFixed(2) + "px"
         })
 
-        newStyles = styles
+        throttle("EDIT_ITEM_MOVE", styles, (value) => (newStyles = value), 50)
     }
 
     function mouseup() {

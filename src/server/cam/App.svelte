@@ -23,6 +23,7 @@
   import { io } from "socket.io-client"
   let socket = io()
 
+<<<<<<< HEAD
   function viewVideo(video: any, context: any) {
     context.drawImage(video, 0, 0, context.width, context.height)
     // const base64 = this.result.replace(/.*base64,/, '');
@@ -39,6 +40,24 @@
     height: { min: 576, ideal: 720, max: 1080 },
     facingMode: "environment",
   }
+=======
+    function viewVideo(video: any, context: any) {
+        context.drawImage(video, 0, 0, context.width, context.height)
+        // const base64 = this.result.replace(/.*base64,/, '');
+        socket.emit("CAM", {
+            channel: "STREAM",
+            data: canvas.toDataURL("image/webp")
+        })
+        // const base64 = canvas.toString("base64")
+        // socket.emit("stream", base64)
+    }
+
+    const constraints: any = {
+        width: { min: 1024, ideal: 1280, max: 1920 },
+        height: { min: 576, ideal: 720, max: 1080 },
+        facingMode: "environment"
+    }
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 
   let errors: any[] = []
 
@@ -99,6 +118,7 @@
 
     console.log(navigator, navigator.mediaDevices)
 
+<<<<<<< HEAD
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
@@ -108,6 +128,17 @@
       },
     })
     video.srcObject = stream
+=======
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+                facingMode: "user",
+                height: { ideal: 1920 },
+                width: { ideal: 1920 }
+            }
+        })
+        video.srcObject = stream
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 
     // Handle the video stream once it loads.
     return new Promise((resolve) => {
@@ -171,6 +202,7 @@
   height: 100vh; */
   }
 
+<<<<<<< HEAD
   :root {
     --primary: #292c36;
     --primary-lighter: #363945;
@@ -181,6 +213,18 @@
     --secondary: #27a8f5;
     --secondary-opacity: #27a9f55e;
     --secondary-text: #f0f0ff;
+=======
+    :root {
+        --primary: #242832;
+        --primary-lighter: #2f3542;
+        --primary-darker: #191923;
+        --primary-darkest: #12121c;
+        --text: #f0f0ff;
+        --textInvert: #131313;
+        --secondary: #f0008c;
+        --secondary-opacity: rgba(240, 0, 140, 0.5);
+        --secondary-text: #f0f0ff;
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 
     --hover: rgb(255 255 255 / 0.05);
     --focus: rgb(255 255 255 / 0.1);

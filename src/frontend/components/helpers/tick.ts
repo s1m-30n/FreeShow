@@ -3,8 +3,9 @@ import { outputs, slideTimers } from "../../stores"
 import { clone } from "./array"
 import { nextSlide } from "./showActions"
 import { playFolder } from "../../utils/shortcuts"
+import { startFolderTimer } from "./output"
 
-export function newSlideTimer(timerId: string, duration: number, folderPath: string = "") {
+export function newSlideTimer(timerId: string, duration: number, folderPath = "") {
     if (duration <= 0) return
 
     if (get(slideTimers)[timerId]) {
@@ -21,20 +22,12 @@ export function newSlideTimer(timerId: string, duration: number, folderPath: str
     }, 10)
 
     function timerEnded(id: string) {
-        // get and reset active element
-        const activeElem = document.activeElement
-        if (activeElem) {
-            setTimeout(() => {
-                ;(activeElem as HTMLElement).focus()
-            }, 10)
-        }
-
         if (!get(slideTimers)[id]) return
 
         const data = get(slideTimers)[id].data || ""
 
         outputs.update((a) => {
-            if (a[id].out) a[id].out!.transition = null
+            if (a[id]?.out) a[id].out.transition = null
             return a
         })
 
@@ -44,11 +37,17 @@ export function newSlideTimer(timerId: string, duration: number, folderPath: str
         })
 
         if (data) {
-            playFolder(data)
+            const isPDF = data.endsWith(".pdf")
+            if (isPDF) {
+                startFolderTimer(data, { type: "pdf", path: "" })
+                nextSlide(null, false, false, true, true, id, true)
+            } else {
+                playFolder(data)
+            }
             return
         }
 
-        nextSlide(null, false, false, true, true, id)
+        nextSlide(null, false, false, true, true, id, false, true)
     }
 }
 
@@ -101,7 +100,7 @@ const Timer: any = function (this: any, callback: (id: string) => void, delay: n
 
     function update() {
         slideTimers.update((a) => {
-            a[timerId] = { ...a, ...options, start }
+            a[timerId] = { ...options, start }
             return a
         })
     }

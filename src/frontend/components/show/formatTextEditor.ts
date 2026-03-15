@@ -10,19 +10,17 @@ import { history } from "../helpers/history"
 import { isEmpty } from "../helpers/output"
 import { getGlobalGroup } from "../helpers/show"
 import { _show } from "../helpers/shows"
+import { VIRTUAL_BREAK_CHAR } from "../../show/slides"
 
 export function formatText(text: string, showId = "") {
     if (!showId) showId = get(activeShow)?.id || ""
     const show: Show = clone(_show(showId).get())
     if (!show) return
 
-    // const allowEmpty = get(includeEmptySlides)
-
     const newSlidesText = text.split("\n\n")
 
     const slides: Slide[] = newSlidesText.map(getSlide)
     let newSlides: { [key: string]: Slide } = clone(show.slides)
-    // console.log(clone(slides))
 
     // sort oldSlides by their children
     const oldSlideParents: Slide[] = keysToID(show.slides).filter((a) => a.group)
@@ -44,7 +42,6 @@ export function formatText(text: string, showId = "") {
 
     const groupedOldSlides = groupSlides(oldSlides)
     const groupedNewSlides = groupSlides(slides)
-    // console.log(groupedOldSlides, groupedNewSlides)
 
     let newLayoutSlides: SlideData[] = []
 
@@ -134,14 +131,14 @@ export function formatText(text: string, showId = "") {
             const oldSlideChildren: string[] = show.slides[oldLayoutSlide2.id]?.children || []
 
             // find children data
-            if (oldLayoutSlide2.children) {
+            if (oldSlideChildren.length) {
                 const newChildrenData: { [key: string]: any } = {}
                 oldSlideChildren.forEach((oldChildId, childIndex) => {
                     const newChildId = newSlides[id].children?.[childIndex]
                     if (!newChildId) return
 
                     replacedIds[newChildId] = oldChildId
-                    newChildrenData[newChildId] = oldLayoutSlide2.children![oldChildId]
+                    if (oldLayoutSlide2.children?.[oldChildId]) newChildrenData[newChildId] = oldLayoutSlide2.children[oldChildId]
                 })
                 oldLayoutSlide2.children = newChildrenData
             }
@@ -173,7 +170,7 @@ export function formatText(text: string, showId = "") {
     allOldSlideIds.forEach((slideId) => {
         if (oldLayoutSlideIds.includes(slideId) && !allUsedSlidesIds.includes(slideId)) {
             // delete children
-            const children = newSlides[slideId].children || []
+            const children = newSlides[slideId]?.children || []
             children.forEach((childId) => {
                 delete newSlides[childId]
             })
@@ -182,16 +179,23 @@ export function formatText(text: string, showId = "") {
         }
     })
 
+    const parentStyles: { [key: string]: string } = {}
+    const parentItemAlign: { [key: string]: string } = {}
+    const parentAlign: { [key: string]: string } = {}
     Object.keys(newSlides).forEach((slideId) => {
-        const slide = newSlides[slideId]
+        let slide = newSlides[slideId]
         const oldSlideId = replacedIds[slideId] || slideId
 
         // add back previous textbox styles
         const oldSlide = clone(show.slides[oldSlideId] || {})
         const oldTextboxes = getTextboxes(oldSlide.items || [])
+
         if (oldTextboxes.length && oldSlideId !== slideId) {
             slide.items.forEach((item, i) => {
                 const b = oldTextboxes[i]
+                if (!b) return
+
+                if (b.align) item.align = b.align
                 if (b.style) item.style = b.style
                 ;(item.lines || []).forEach((line, j) => {
                     const c = b.lines?.[j] || b.lines?.[0]
@@ -199,8 +203,17 @@ export function formatText(text: string, showId = "") {
 
                     // remove customType
                     const filteredText = (c?.text || []).filter((a) => !a.customType)
-                    if (filteredText[0] && line.text?.[0]) {
-                        if (filteredText[0].style) line.text[0].style = filteredText[0]?.style
+                    if (filteredText[0]?.style && line.text?.[0]) {
+                        line.text[0].style = filteredText[0].style
+
+                        // store style for new children
+                        if (i === 0 && j === 0) {
+                            slide.children?.forEach((id) => {
+                                parentItemAlign[id] = b.align || ""
+                                parentStyles[id] = filteredText[0].style
+                                parentAlign[id] = line.align
+                            })
+                        }
                     }
                 })
 
@@ -211,6 +224,23 @@ export function formatText(text: string, showId = "") {
                 })
             })
             // newSlides[slideId].items = slide.items
+        } else if (show.slides[slideId]) {
+            // add back full old slide including its style
+            // only if text content is the same ??
+            slide = clone(show.slides[slideId])
+            newSlides[slideId] = slide
+        } else if (parentStyles[slideId]) {
+            // newly split and created slide
+            // add same style as parent
+            slide.items.forEach((item) => {
+                item.align = parentItemAlign[slideId]
+                item.lines?.forEach((line) => {
+                    line.align = parentAlign[slideId]
+                    line.text?.forEach((txt) => {
+                        txt.style = parentStyles[slideId]
+                    })
+                })
+            })
         }
 
         // remove "id" key
@@ -226,7 +256,7 @@ export function formatText(text: string, showId = "") {
             // let textboxItemIndex = getFirstNormalTextboxIndex(oldItems)
             const textboxItemIndexes = getTextboxesIndexes(oldItems)
             if (!textboxItemIndexes.length) {
-                items = [...removeEmptyTextboxes(oldItems), ...newItems]
+                items = [...removeEmptyTextboxes(oldItems).filter((a) => (a.type || "text") === "text"), ...newItems]
             } else {
                 textboxItemIndexes
                     .sort((a, b) => b - a)
@@ -239,7 +269,7 @@ export function formatText(text: string, showId = "") {
                 if (newItems.length) {
                     items.push(...newItems)
                     // remove empty items
-                    items = items.filter((item) => getItemText(item).length)
+                    items = items.filter((item) => (item.type || "text") !== "text" || getItemText(item).length)
                 }
             }
         }
@@ -250,7 +280,7 @@ export function formatText(text: string, showId = "") {
 
     // remove first slide if no content
     if (!text && Object.keys(newSlides).length === 1) {
-        const textItem = Object.values(newSlides)[0].items?.find((a) => (a.type || "text") === "text")
+        const textItem = Object.values(newSlides)[0]?.items?.find((a) => (a.type || "text") === "text")
         if (textItem) {
             const fullOldSlideText = getItemText(textItem)
             if (!fullOldSlideText) {
@@ -260,7 +290,17 @@ export function formatText(text: string, showId = "") {
         }
     }
 
-    show.slides = newSlides
+    // order slides object based on current layout order
+    // this is to ensure correct "Verse 1", "Verse 2" order with multiple layouts
+    const newSlidesOrdered: typeof newSlides = {}
+    allUsedSlidesIds.forEach((id) => {
+        newSlidesOrdered[id] = newSlides[id]
+    })
+    Object.keys(newSlides).forEach((id) => {
+        if (!newSlidesOrdered[id]) newSlidesOrdered[id] = newSlides[id]
+    })
+
+    show.slides = newSlidesOrdered
     // if (!show.settings.template) show.settings.template = "default"
 
     history({ id: "UPDATE", newData: { data: show }, oldData: { id: showId }, location: { page: "show", id: "show_key" } })
@@ -340,7 +380,7 @@ function getChords(line: string) {
 
         if (char === "]") {
             currentlyInChord = false
-            if (currentChord.length > 12)
+            if (currentChord.length > 12 || `[${currentChord}]` === VIRTUAL_BREAK_CHAR)
                 text += `[${currentChord}]` // probably not a chord
             else chords.push(createChord(text.length, currentChord))
             return
@@ -363,6 +403,8 @@ function groupSlides(slides: Slide[]) {
     let currentIndex = -1
 
     slides.forEach((slide, i) => {
+        if (!slide) return
+
         if (i === 0 && !slide.group) {
             slide.group = "Verse"
             slide.globalGroup = "verse"
@@ -385,7 +427,7 @@ function groupSlides(slides: Slide[]) {
             })
         })
         const fullOldSlideText = textContent + Array.from(chords).sort().join("")
-        
+
         if (!fullOldSlideText) return
 
         // adding length so line breaks with no text changes works

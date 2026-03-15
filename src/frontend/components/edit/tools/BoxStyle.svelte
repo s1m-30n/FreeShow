@@ -1,18 +1,18 @@
 <script lang="ts">
     import { onDestroy, onMount } from "svelte"
-    import { uid } from "uid"
     import type { Item, ItemType, Slide } from "../../../../types/Show"
-    import { activeEdit, activeShow, overlays, selected, showsCache, templates, theme, themes, timers } from "../../../stores"
+    import { activeEdit, activePopup, activeShow, alertMessage, categories, styles as outputStyles, overlays, selected, shownTips, showsCache, special, templates, theme, themes, timers } from "../../../stores"
     import { newToast } from "../../../utils/common"
     import { clone } from "../../helpers/array"
-    import { hexToRgb, splitRgb } from "../../helpers/color"
     import { history } from "../../helpers/history"
-    import { getLayoutRef, getListOfShows, getStageList } from "../../helpers/show"
+    import { getExtension, getMediaType } from "../../helpers/media"
+    import { getAllEnabledOutputs } from "../../helpers/output"
+    import { getLayoutRef } from "../../helpers/show"
     import { _show } from "../../helpers/shows"
     import { getStyles } from "../../helpers/style"
     import { MAX_FONT_SIZE } from "../scripts/autosize"
     import { addFilterString, addStyle, addStyleString, getItemStyleAtPos, getItemText, getLastLineAlign, getLineText, getSelectionRange, setCaret } from "../scripts/textStyle"
-    import { boxes, setBoxInputValue } from "../values/boxes"
+    import { itemBoxes, setBoxInputValue } from "../values/boxes"
     import EditValues from "./EditValues.svelte"
 
     export let id: ItemType
@@ -50,6 +50,11 @@
         else selection = getSelectionRange() // range
     }
 
+    function mousedown(e: any) {
+        // store if going to a text input in the tools
+        if (e.target.closest(".tools")) getTextSelection(e)
+    }
+
     function keyup(e: KeyboardEvent) {
         if (e.key.includes("Arrow") || e.key.toUpperCase() === "A") getTextSelection(e)
     }
@@ -85,97 +90,65 @@
 
     const setItemStyle = ["list", "timer", "clock", "icon", "events", "camera", "variable", "web", "slide_tracker"]
 
-    const setBox = () => clone(boxes[id])
-    let box = setBox()!
-    $: if ($activeEdit.id || $activeShow?.id || $activeEdit.slide) box = setBox()!
+    const setBox = () => clone(itemBoxes[id])!
+    let box = setBox()
+    $: if ($activeEdit.id || $activeShow?.id || $activeEdit.slide) box = setBox()
 
     // get item values
     $: style = item?.lines ? getItemStyleAtPos(item.lines, selection) : item?.style || ""
     let styles: any = {}
     $: if (style !== undefined) styles = getStyles(style, true)
 
-    $: if (box?.edit?.CSS) {
-        if (box.edit.CSS[0].id !== "text") box.edit.CSS[0].value = getItemValue(box.edit.CSS[0].id || "")
-        else if (style) box.edit.CSS[0].value = style
-    }
-
-    // WIP use this more
-    function getItemValue(id: string) {
-        if (!item) return null
-
-        let divideIndex = id.indexOf(".")
-        if (divideIndex > -1) {
-            let firstKey = id.slice(0, divideIndex)
-            let secondKey = id.slice(divideIndex + 1)
-
-            return item[firstKey]?.[secondKey] || null
-        }
-
-        return item[id] || null
-    }
-
     $: lineAlignStyle = item?.lines ? getStyles(getLastLineAlign(item, selection)) : getStyles(item?.align)
     $: alignStyle = item?.align ? getStyles(item.align) : {}
+
+    $: customValues = {
+        "text-align": lineAlignStyle["text-align"] || "center",
+        "align-items": alignStyle["align-items"] || "center"
+    }
 
     /// SET INPUT VALUES ///
 
     // remove chord options
-    $: if ($activeEdit.type === "overlay" && box?.edit?.chords) {
-        delete box.edit.chords
+    $: if ($activeEdit.type === "overlay" && box?.sections?.chords) {
+        delete box.sections.chords
+    }
+
+    $: if (box?.sections?.CSS && id !== "captions") {
+        setBoxInputValue(box, "CSS", "CSS_text", "value", style)
+    }
+
+    $: if (box?.sections?.font) {
+        setBoxInputValue(box, "font", "font-size", "disabled", item?.textFit !== "none")
+        setBoxInputValue(box, "font", "textFit", "value", item?.textFit || "growToFit") // other items (like clock, timer)
+        // setBoxInputValue(box2, "font", "auto", "value", item.auto ?? true)
     }
 
     $: if (id === "text") {
         setBoxInputValue(box, "default", "font-family", "styleValue", getStyles(style)["font"] || "")
-        setBoxInputValue(box, "default", "textFit", "hidden", !item?.auto)
-
-        // text
+        // setBoxInputValue(box2, "default", "textFit", "hidden", !item?.auto)
         setBoxInputValue(box, "text", "nowrap", "value", !!styles["white-space"]?.includes("nowrap"))
+        setBoxInputValue(box, "lines", "specialStyle.lineRadius", "hidden", !item?.specialStyle?.lineRadius && !item?.specialStyle?.lineBg)
 
-        // lines
-        setBoxInputValue(box, "lines", "specialStyle.lineGap", "value", item?.specialStyle?.lineGap || 0)
-        setBoxInputValue(box, "lines", "specialStyle.lineRadius", "value", item?.specialStyle?.lineRadius || 0)
-        let lineBg = item?.specialStyle?.lineBg || ""
-        setBoxInputValue(box, "lines", "specialStyle.lineBg", "value", lineBg)
-        let backgroundValue = splitRgb(lineBg)
-        setBoxInputValue(box, "lines", "specialStyle.opacity", "value", backgroundValue.a)
-        setBoxInputValue(box, "lines", "specialStyle.opacity", "hidden", lineBg.includes("gradient") || !lineBg)
-
-        // list
-        setBoxInputValue(box, "list", "list.enabled", "value", item?.list?.enabled || false)
-        setBoxInputValue(box, "list", "list.style", "value", item?.list?.style || "disc")
-        setBoxInputValue(box, "list", "list.style", "hidden", !item?.list?.enabled)
-        // setBoxInputValue(box, "list", "list.interval", "value", item?.list?.interval || 0)
-        // setBoxInputValue(box, "list", "list.interval", "hidden", !item?.list?.enabled)
-
-        // chords
-        setBoxInputValue(box, "chords", "chords.enabled", "value", item?.chords?.enabled || false)
-        setBoxInputValue(box, "chords", "chords.color", "value", item?.chords?.color || "#FF851B")
-        setBoxInputValue(box, "chords", "chords.size", "value", item?.chords?.size || 60)
-        setBoxInputValue(box, "chords", "chords.offsetY", "value", item?.chords?.offsetY || 0)
-        setBoxInputValue(box, "chords", "chords.color", "hidden", !item?.chords?.enabled)
-        setBoxInputValue(box, "chords", "chords.size", "hidden", !item?.chords?.enabled)
-        setBoxInputValue(box, "chords", "chords.offsetY", "hidden", !item?.chords?.enabled)
-
-        // special
-        setBoxInputValue(box, "special", "scrolling.type", "value", item?.scrolling?.type || "none")
-        setBoxInputValue(box, "special", "button.press", "value", item?.button?.press || "")
-        setBoxInputValue(box, "special", "button.release", "value", item?.button?.release || "")
+        setBoxInputValue(box, "default", "textFit", "value", item?.auto ? "shrinkToFit" : "none") // text items
+        // WIP disabled auto size -- don't disable if all text is selected
+        // setBoxInputValue(box, "default", "font-size", "disabled", selection?.length)
     }
+
     $: if (id === "media" && item) {
-        setBoxInputValue(box, "default", "src", "value", item.src || "")
-        // WIP does not update:
-        // setBoxInputValue(box, "default", "muted", "hidden", getMediaType(item.src || "") !== "video")
+        const extension = getExtension(item.src || "")
+        const isVideo = getMediaType(extension) === "video"
+        setBoxInputValue(box, "default", "muted", "hidden", !isVideo)
+        setBoxInputValue(box, "default", "loop", "hidden", !isVideo)
+        setBoxInputValue(box, "default", "speed", "hidden", !isVideo)
     }
-    $: if (id === "web" && item) {
-        setBoxInputValue(box, "default", "web.src", "value", item?.web?.src || "")
-    }
+
     $: if (id === "timer" && item) {
         setBoxInputValue(box, "default", "timer.circleMask", "hidden", item.timer?.viewType !== "circle")
-        setBoxInputValue(box, "default", "timer.showHours", "value", item.timer?.showHours !== false)
         const timer = $timers[item.timer?.id || ""]
         const timerLength = Math.abs((timer?.start || 0) - (timer?.end || 0))
+        setBoxInputValue(box, "default", "timer.showHours", "value", item.timer?.showHours !== false)
         setBoxInputValue(box, "default", "timer.showHours", "hidden", (item.timer?.viewType || "time") !== "time" || timerLength < 3600)
-        setBoxInputValue(box, "font", "auto", "value", item.auto ?? true)
     }
     $: if (id === "clock" && item) {
         const clockType = item.clock?.type || "digital"
@@ -185,97 +158,24 @@
         setBoxInputValue(box, "default", "clock.showTime", "hidden", clockType !== "digital" || dateFormat === "none")
         setBoxInputValue(box, "default", "clock.seconds", "hidden", clockType === "custom" || (clockType === "digital" && item.clock?.showTime === false && dateFormat !== "none"))
         setBoxInputValue(box, "default", "clock.customFormat", "hidden", clockType !== "custom")
+        setBoxInputValue(box, "default", "tip", "hidden", clockType !== "custom")
     }
     $: if (id === "camera" && item) {
         if (item.device?.name) setBoxInputValue(box, "default", "device", "name", item.device.name)
-        // WIP this does not update name when chosen
     }
     $: if (id === "slide_tracker" && item) {
-        if (item.tracker?.type) setBoxInputValue(box, "default", "tracker.type", "value", item.tracker.type)
         setBoxInputValue(box, "default", "tracker.accent", "value", item.tracker?.accent || $themes[$theme]?.colors?.secondary || "#F0008C")
 
         setBoxInputValue(box, "default", "tracker.childProgress", "hidden", item.tracker?.type !== "group")
         setBoxInputValue(box, "default", "tracker.oneLetter", "hidden", item.tracker?.type !== "group")
     }
     $: if (id === "events" && item) {
+        setBoxInputValue(box, "default", "events.startDaysFromToday", "disabled", !!item.events?.enableStartDate)
         setBoxInputValue(box, "default", "events.startDate", "hidden", !item.events?.enableStartDate)
         setBoxInputValue(box, "default", "events.startTime", "hidden", !item.events?.enableStartDate)
     }
-    $: if (id === "mirror" && item) {
-        getMirrorValues()
-    }
 
-    // moved to textbox, but keep if someone still have old items
-    $: if (id === "list" && item) {
-        setBoxInputValue(box, "default", "list.items", "value", item.list?.items || [])
-    }
-    $: if (id === "variable" && item) {
-        setBoxInputValue(box, "default", "variable.id", "value", item.variable?.id)
-    }
-
-    function getMirrorValues() {
-        if (!item?.mirror) return
-
-        let enableStage = item.mirror.enableStage || false
-        let nextSlide = item.mirror.nextSlide || false
-        let useSlideIndex = item.mirror.useSlideIndex
-        let index = item.mirror.index
-
-        setBoxInputValue(box, "default", "mirror.enableStage", "value", true)
-        setBoxInputValue(box, "default", "mirror.nextSlide", "value", true)
-        setBoxInputValue(box, "default", "mirror.show", "value", true)
-        setBoxInputValue(box, "default", "mirror.useSlideIndex", "value", true)
-        setBoxInputValue(box, "default", "mirror.index", "value", true)
-
-        if (nextSlide) {
-            setBoxInputValue(box, "default", "mirror.enableStage", "hidden", true)
-            setBoxInputValue(box, "default", "mirror.show", "hidden", true)
-            setBoxInputValue(box, "default", "mirror.useSlideIndex", "hidden", true)
-            setBoxInputValue(box, "default", "mirror.index", "hidden", true)
-        } else if (enableStage) {
-            setBoxInputValue(box, "default", "mirror.show", "name", "select_stage")
-            setBoxInputValue(box, "default", "mirror.show", "values", { options: getStageList() })
-            setBoxInputValue(box, "default", "mirror.show", "id", "mirror.stage")
-
-            setBoxInputValue(box, "default", "mirror.nextSlide", "hidden", true)
-            setBoxInputValue(box, "default", "mirror.useSlideIndex", "hidden", true)
-            setBoxInputValue(box, "default", "mirror.index", "hidden", true)
-        } else {
-            setBoxInputValue(box, "default", "mirror.show", "name", "popup.select_show")
-            setBoxInputValue(box, "default", "mirror.show", "values", { options: getListOfShows(!$activeEdit.id) })
-            setBoxInputValue(box, "default", "mirror.show", "id", "mirror.show")
-
-            setBoxInputValue(box, "default", "mirror.enableStage", "hidden", false)
-            setBoxInputValue(box, "default", "mirror.nextSlide", "hidden", false)
-            setBoxInputValue(box, "default", "mirror.show", "hidden", false)
-            setBoxInputValue(box, "default", "mirror.useSlideIndex", "hidden", false)
-            setBoxInputValue(box, "default", "mirror.index", "hidden", false)
-        }
-
-        setBoxInputValue(box, "default", "mirror.enableStage", "value", enableStage)
-        setBoxInputValue(box, "default", "mirror.nextSlide", "value", nextSlide)
-        if (useSlideIndex !== undefined) setBoxInputValue(box, "default", "mirror.useSlideIndex", "value", useSlideIndex)
-        if (index !== undefined) setBoxInputValue(box, "default", "mirror.index", "value", index)
-    }
-
-    // background opacity
-    // WIP duplicate of ItemStyle.svelte
-    function getBackgroundOpacity() {
-        let backgroundValue = item?.specialStyle?.lineBg || ""
-        if (!backgroundValue.includes("rgb") || !box?.edit?.lines) return
-
-        let rgb = splitRgb(backgroundValue)
-        let boIndex = box.edit.lines.findIndex((a) => a.id === "specialStyle.opacity")
-        if (boIndex < 0) return
-        box.edit.lines[boIndex].value = rgb.a
-    }
-    function getOldOpacity() {
-        let backgroundValue = item?.specialStyle?.lineBg || ""
-        if (!backgroundValue.includes("rgb")) return 1
-
-        let rgb = splitRgb(backgroundValue)
-        return rgb.a
-    }
+    ///
 
     function setValue(input: any, allItems: any[]) {
         let value: any = input.value
@@ -283,25 +183,11 @@
         else if (input.key === "text-align") value = `text-align: ${value};`
         else if (input.key) value = { ...((item as any)?.[input.key] || {}), [input.key]: value }
 
-        // WIP duplicate of ItemStyle.svelte
-        const lineStyleChanged = input.id === "specialStyle.opacity" || (input.value && input.id === "specialStyle.lineBg" && !input.value.includes("gradient"))
-        if (lineStyleChanged) setBackgroundOpacity()
-        function setBackgroundOpacity() {
-            let backgroundColor = input.id === "specialStyle.lineBg" ? input.value || "" : item?.specialStyle?.lineBg || "rgb(0 0 0);"
-            let rgb = backgroundColor.includes("rgb") ? splitRgb(backgroundColor) : hexToRgb(backgroundColor)
-            let opacity = input.id === "specialStyle.opacity" ? input.value : getOldOpacity()
-            let newColor = "rgb(" + [rgb.r, rgb.g, rgb.b].join(" ") + " / " + opacity + ");"
-
-            input.id = "specialStyle.lineBg"
-            input.value = newColor
-
-            setTimeout(getBackgroundOpacity, 100)
-        }
-
         // set nested value
         if (input.id.includes(".")) {
             let splitted = input.id.split(".")
             let item = getSelectedItem()
+            if (!item) return
 
             input.id = splitted[0]
             value = item[splitted[0]] || {}
@@ -323,15 +209,21 @@
             return slide.items[allItems[0]]
         }
 
-        let newFontSize = 0
-        if (input.id === "textFit") {
-            // change font size to more clearly indicate what the different text fit does
-            newFontSize = input.value === "shrinkToFit" ? 100 : MAX_FONT_SIZE
-        } else if (input.id === "auto" && item?.textFit === "growToFit") {
-            if (input.value && Number(styles["font-size"]) < MAX_FONT_SIZE) newFontSize = MAX_FONT_SIZE
-            else if (!input.value && Number(styles["font-size"]) === MAX_FONT_SIZE) newFontSize = 100
+        if (id === "text") {
+            let newFontSize = 0
+            if (input.id === "textFit") {
+                // change font size to more clearly indicate what the different text fit does
+                if (input.value !== "growToFit" && Number(styles["font-size"]) < 200) {
+                    newFontSize = 0
+                } else {
+                    newFontSize = input.value !== "growToFit" ? 100 : MAX_FONT_SIZE
+                }
+            } else if (input.id === "auto" && item?.textFit === "growToFit") {
+                if (input.value && Number(styles["font-size"]) < MAX_FONT_SIZE) newFontSize = MAX_FONT_SIZE
+                else if (!input.value && Number(styles["font-size"]) === MAX_FONT_SIZE) newFontSize = 100
+            }
+            if (newFontSize) updateValue({ detail: { name: "font_size", id: "style", key: "font-size", value: newFontSize + "px" } })
         }
-        if (newFontSize) updateValue({ detail: { name: "font_size", id: "style", key: "font-size", value: newFontSize + "px" } })
 
         // UPDATE
 
@@ -349,11 +241,13 @@
         })
 
         // update values
-        box = box
+        // box2 = box2
 
         return
 
         function updateItemValues(a: any) {
+            if (!a[$activeEdit.id!]?.items) return a
+
             allItems.forEach((i: number) => {
                 if (!a[$activeEdit.id!].items[i]) return
 
@@ -367,6 +261,7 @@
                 a[$activeEdit.id!].items[i][splitted[0]][splitted[1]] = value
             })
 
+            a[$activeEdit.id!].modified = Date.now()
             return a
         }
     }
@@ -374,6 +269,12 @@
     function updateValue(e: any) {
         let input = e.detail
         console.log("BOX INPUT:", input)
+
+        // does not work for partial text when auto size is enabled
+        // WIP doesn't need to show if disabled works correctly
+        if (id === "text" && input.key === "font-size" && selection?.length && (item?.textFit || "none") !== "none") {
+            newToast("edit.auto_size settings.enabled!")
+        }
 
         let allItems: number[] = $activeEdit.items
         // update all items if nothing is selected
@@ -389,14 +290,14 @@
 
         if (input.id === "nowrap") input = { ...input, id: "style", key: "white-space", value: input.value ? "nowrap" : undefined }
 
-        if (input.id !== "style" && input.id !== "CSS") {
+        if (input.id !== "style" && !input.id.includes("CSS")) {
             setValue(input, allItems)
             return
         }
 
         let aligns: boolean = input.key === "align-items" || input.key === "text-align"
 
-        if (input.id === "CSS") allItems = [allItems[0]]
+        if (input.id.includes("CSS")) allItems = [allItems[0]]
 
         /////
 
@@ -407,7 +308,7 @@
         let showSlides = $showsCache[$activeShow?.id || ""]?.slides || {}
 
         // get all selected slides
-        if (slides[0] && $selected.id === "slide") {
+        if (slides[0] && $selected.id === "slide" && Array.isArray($selected.data)) {
             let selectedSlides = $selected.data.filter(({ index }) => index !== $activeEdit.slide!)
             slides.push(...selectedSlides.map(({ index }) => ref[index]?.id))
 
@@ -434,7 +335,7 @@
 
         let values: { [key: string]: any[] } = {}
         slides.forEach((slide, i) => {
-            if (!slideItems[i].length) return
+            if (!slideItems[i]?.length) return
             values[slide] = []
             slideItems[i].forEach((i) => getNewItemValues(clone(showSlides[slide]?.items?.[i] || allSlideItems[i]), slide))
         })
@@ -452,20 +353,20 @@
 
             if (input.key === "text-align") {
                 let newAligns: any[] = []
-                currentSlideItem.lines?.forEach((_a, line) => {
-                    if (!selection?.length || selection[line]?.start !== undefined) newAligns.push(`${input.key}: ${input.value};`)
-                    else newAligns.push(currentSlideItem.lines![line].align)
+                currentSlideItem.lines?.forEach((line, linePos) => {
+                    if (!selection?.length || selection[linePos]?.start !== undefined) newAligns.push(`${input.key}: ${input.value};`)
+                    else newAligns.push(line.align)
                 })
                 values[slideId].push(newAligns)
             } else if (currentSlideItem.lines) {
-                if (input.id === "CSS") {
-                    values[slideId].push(addStyle(selected, currentSlideItem, input.value.replaceAll("\n", "")).lines!.map((a) => a.text))
+                if (input.id.includes("CSS")) {
+                    values[slideId].push(addStyle(selected, currentSlideItem, input.value).lines!.map((a) => a.text))
                 } else {
                     values[slideId].push(aligns ? addStyleString(currentSlideItem.align || "", [input.key, input.value]) : addStyle(selected, clone(currentSlideItem), [input.key, input.value]).lines!.map((a) => a.text))
                 }
             } else {
-                if (input.id === "CSS") {
-                    values[slideId] = [input.value.replaceAll("\n", "")]
+                if (input.id.includes("CSS")) {
+                    values[slideId] = [input.value]
                 } else {
                     // TODO: don't replace full item style (position) when changing multiple (Like EditTools.svelte:152)
                     values[slideId] = [addStyleString(item?.style || "", [input.key, input.value])]
@@ -497,6 +398,8 @@
             // WIP changing the default "Name" overlay causes textbox swapping....
 
             allItems.forEach((_itemIndex, i) => {
+                if (!currentItems[i]) return
+
                 let allValues: any = Object.values(values)[0]
                 let currentValue: any = allValues[i] ?? allValues[0]
                 // some textboxes don't have lines, this will break things, so make sure it has lines!
@@ -518,7 +421,7 @@
             if (currentItems[0].lines) {
                 let textLength = currentItems.reduce((length, item) => (length += getItemText(item).length), 0)
                 if (!textLength) {
-                    newToast("$empty.text")
+                    newToast("empty.text")
                     return
                 }
             }
@@ -553,7 +456,7 @@
         // values: {key: [[[]]]}
         let textLength = Object.values(values).reduce((length: number, value: any) => length + value.flat(2).reduce((value, text) => value + (text?.value || ""), "").length, 0)
         if (input.key !== "text-align" && !aligns && !textLength) {
-            newToast("$empty.text")
+            newToast("empty.text")
             return
         }
 
@@ -569,21 +472,87 @@
         })
     }
 
-    let sessionId = ""
-    if (item) sessionId = uid()
+    $: boxSections = box?.sections || {}
+    function updateValue2(e: any) {
+        const input = e.detail
+        input.value = input.values.value
+        input.input = input.type
+
+        if (input.id === "textFit") updateValue({ detail: { id: "auto", value: input.value !== "none" } })
+        // unset transparent color
+        if (input.key === "text-shadow" && input.value.includes("rgb(0 0 0 / 0)") && input.value.includes("px")) {
+            input.value = input.value.replace("rgb(0 0 0 / 0)", "rgb(0 0 0 / 0.4)")
+        }
+
+        // store changes for detection
+        if (!$activeEdit.id) {
+            const id = `${input.id}${input.key || ""}`
+            if (!changes[$activeEdit.slide || 0]) changes[$activeEdit.slide || 0] = {}
+            changes[$activeEdit.slide || 0][id] = JSON.stringify(input)
+            changes = changes
+        }
+
+        updateValue({ detail: input })
+    }
 
     // don't load right away (because that will load content twice)
     let loaded = false
     onMount(() => {
         loaded = true
     })
+
+    // check if the same changes are made to multiple slides, and notify the user to consider using templates
+    let changes: { [key: string]: { [key: string]: string } } = {}
+    $: if (changes) checkChanges()
+    let shownTemplateTip = false
+    function checkChanges() {
+        // alert if category has template
+        if (!shownTemplateTip && ($activeEdit.type || "show") === "show") {
+            const categoryId = $showsCache[$activeShow?.id || ""]?.category || ""
+            const categoryTemplate = $categories[categoryId]?.template || ""
+            if (categoryTemplate) {
+                alertMessage.set("tips.category_template")
+                activePopup.set("alert")
+                shownTemplateTip = true
+                return
+            }
+        }
+
+        // alert if all outputs has style templates
+        if (!shownTemplateTip && $special.styleTemplatePreview !== false) {
+            const outputsHasStyleTemplate = getAllEnabledOutputs().every((output) => {
+                return !!$outputStyles[output?.style || ""]?.template
+            })
+            if (outputsHasStyleTemplate) {
+                alertMessage.set("tips.style_template_active")
+                activePopup.set("alert")
+                shownTemplateTip = true
+                return
+            }
+        }
+
+        if ($shownTips.includes("consider_templates")) return
+
+        const SLIDES = 3
+        const allValues: string[] = Object.values(changes).flatMap((slide) => Object.values(slide))
+        const valueCounts = new Map<string, number>()
+
+        allValues.forEach((value) => {
+            valueCounts.set(value, (valueCounts.get(value) || 0) + 1)
+        })
+
+        const duplicates = Array.from(valueCounts.entries()).filter(([_value, count]) => count > SLIDES)
+        if (duplicates.length > 0) {
+            // openDrawer("templates")
+            alertMessage.set("tips.consider_templates")
+            activePopup.set("alert")
+            shownTips.set([...$shownTips, "consider_templates"])
+        }
+    }
 </script>
 
-<svelte:window on:keyup={keyup} on:keydown={keydown} on:mouseup={getTextSelection} />
+<svelte:window on:keyup={keyup} on:keydown={keydown} on:mouseup={getTextSelection} on:mousedown={mousedown} />
 
 {#if loaded}
-    <!-- WIP edit checkbox does not animate because of this refresh -->
-    {#key id !== "media" && box}
-        <EditValues edits={box?.edit} defaultEdits={clone(boxes[id])?.edit} {item} on:change={updateValue} {styles} {lineAlignStyle} {alignStyle} {sessionId} />
-    {/key}
+    <EditValues sections={boxSections} {item} {styles} {customValues} on:change={updateValue2} />
 {/if}

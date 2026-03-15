@@ -84,7 +84,7 @@
         "@typescript-eslint/unified-signatures": "error",
         "@typescript-eslint/no-floating-promises": "off",
         "@typescript-eslint/no-misused-promises": "off",
-        "@typescript-eslint/no-unused-vars": "off",
+        "@typescript-eslint/no-unused-vars": ["error", { "varsIgnorePattern": "^_", "argsIgnorePattern": "^_" }],
         "--TEMPORARILY-DISABLED": "off",
         "@typescript-eslint/restrict-plus-operands": "off",
         "@typescript-eslint/no-non-null-assertion": "off",
@@ -155,6 +155,9 @@
             }
         ],
         "use-isnan": "error",
-        "valid-typeof": "off"
+        "valid-typeof": "off",
+        "object-curly-newline": "off",
+        "object-curly-spacing": "off",
+        "object-property-newline": "off"
     }
 }

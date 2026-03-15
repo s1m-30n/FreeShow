@@ -41,7 +41,8 @@
         if (src.includes("embed")) return
 
         // if preview is fullscreen, don't set ratio
-        let isFullscreen = (webview.closest(".previewOutput")?.offsetWidth || 0) > 450
+        // temporary set to always fullscreen as the scaling does not always work in the preview, if there's video streams, etc.
+        let isFullscreen = true || (webview.closest(".previewOutput")?.offsetWidth || 0) > 450
         const inverse = isFullscreen ? 100 : Math.round(100 / ratio)
 
         if (loaded) setStyle()
@@ -57,6 +58,8 @@
         function setStyle() {
             if (!webview) return
             loaded = true
+
+            if ($currentWindow !== "output") webview.setAudioMuted(true)
 
             webview.executeJavaScript(`
             document.body.style.transform = 'scale(${isFullscreen ? 1 : ratio})';
@@ -109,7 +112,7 @@
     }
 </script>
 
-<div class="website" class:clickable on:mouseover={mouseover} on:mouseleave={mouseleave}>
+<div class="website" class:clickable on:mouseover={mouseover} on:focus={mouseover} on:mouseleave={mouseleave}>
     {#if navigation && hover && $currentWindow === "output"}
         <div class="controls" style="zoom: {1 / ratio};">
             {#if !backDisabled || !forwardDisabled}
@@ -149,7 +152,7 @@
         z-index: 1;
         position: absolute;
         bottom: 0;
-        inset-inline-start: 0;
+        left: 0;
 
         background-color: black;
         border-start-end-radius: 3px;

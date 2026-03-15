@@ -10,18 +10,17 @@ import { transitionData } from "../stores"
 // export const [send, receive] = crossfade
 
 export const transitionTypes: { id: TransitionType; name: string }[] = [
-    { id: "none", name: "$:transition.none:$" },
-    { id: "fade", name: "$:transition.fade:$" },
-    // { id: "crossfade", name: "$:transition.crossfade:$" },
-    { id: "blur", name: "$:transition.blur:$" },
-    { id: "spin", name: "$:transition.spin:$" },
-    { id: "scale", name: "$:transition.scale:$" },
-    { id: "slide", name: "$:transition.slide:$" },
+    { id: "none", name: "transition.none" },
+    { id: "fade", name: "transition.fade" },
+    // { id: "crossfade", name: "transition.crossfade" },
+    { id: "blur", name: "transition.blur" },
+    { id: "spin", name: "transition.spin" },
+    { id: "scale", name: "transition.scale" },
+    { id: "slide", name: "transition.slide" }
 ]
 
 export const transitions: { [key in TransitionType]: any } = {
-    // eslint-disable-next-line
-    none: () => {},
+    none: (node, data) => fade(node, { ...data, duration: 0 }),
     blur,
     fade,
     crossfade,
@@ -43,7 +42,7 @@ export const transitions: { [key in TransitionType]: any } = {
                 if (direction === "top_bottom") return `transform: translateY(-${pos}%);`
 
                 return ""
-            },
+            }
         }
     },
     spin: (node: any) => {
@@ -52,28 +51,28 @@ export const transitions: { [key in TransitionType]: any } = {
             // easing: elasticInOut,
             // css: (t: any) => `transform: translateX(${t}%);`,
             // scale(${t})
-            css: (t: any) => `opacity: ${t * o}; transform: rotate(${t * 360}deg);`,
+            css: (t: any) => `opacity: ${t * o}; transform: rotate(${t * 360}deg);`
         }
-    },
+    }
 }
 
 export const easings: any[] = [
-    { id: "linear", name: "$:easings.linear:$", data: linear },
-    { id: "back", name: "$:easings.back:$", data: backInOut },
-    { id: "sine", name: "$:easings.sine:$", data: sineInOut },
-    { id: "circ", name: "$:easings.circ:$", data: circInOut },
-    { id: "cubic", name: "$:easings.cubic:$", data: cubicInOut },
-    { id: "elastic", name: "$:easings.elastic:$", data: elasticInOut },
-    { id: "bounce", name: "$:easings.bounce:$", data: bounceInOut },
-    // { id: "expo", name: "$:easings.expo:$", data: expoInOut },
-    // { id: "quad", name: "$:easings.quad:$", data: quadInOut },
-    // { id: "quart", name: "$:easings.quart:$", data: quartInOut },
-    // { id: "quint", name: "$:easings.quint:$", data: quintInOut },
+    { value: "linear", label: "easings.linear", function: linear },
+    { value: "back", label: "easings.back", function: backInOut },
+    { value: "sine", label: "easings.sine", function: sineInOut },
+    { value: "circ", label: "easings.circ", function: circInOut },
+    { value: "cubic", label: "easings.cubic", function: cubicInOut },
+    { value: "elastic", label: "easings.elastic", function: elasticInOut },
+    { value: "bounce", label: "easings.bounce", function: bounceInOut }
+    // { value: "expo", label: "easings.expo", function: expoInOut },
+    // { value: "quad", label: "easings.quad", function: quadInOut },
+    // { value: "quart", label: "easings.quart", function: quartInOut },
+    // { value: "quint", label: "easings.quint", function: quintInOut },
 ]
 
 // : Transition
 export function custom(node: any, { type = "fade", duration = 500, easing = "sine", delay = 0, custom: customData = {} }: any) {
-    const customTransition = { ...transitions[type as TransitionType](node, customData), duration: type === "none" ? 0 : duration, easing: easings.find((a) => a.id === easing)?.data || linear, delay }
+    const customTransition = { ...transitions[type as TransitionType](node, customData), duration: type === "none" ? 0 : duration, easing: easings.find((a) => a.value === easing)?.function || linear, delay }
     // if (type === "crossfade") customTransition.key = "a"
     return customTransition
 }
@@ -83,7 +82,7 @@ export function updateTransition(data: API_transition) {
         a[data.id || "text"] = {
             type: data.type || "fade",
             duration: data.duration ?? 500,
-            easing: data.easing || "sine",
+            easing: data.easing || "sine"
         }
 
         return a

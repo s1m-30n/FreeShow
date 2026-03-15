@@ -1,28 +1,37 @@
 <script lang="ts">
     import { getDocument, GlobalWorkerOptions } from "pdfjs-dist"
-    import type { MediaStyle } from "../../../types/Main"
+    import type { ClickEvent, MediaStyle } from "../../../types/Main"
     import { AudioPlayer } from "../../audio/audioPlayer"
-    import { activeEdit, activeFocus, activePage, activeProject, activeShow, categories, focusMode, media, notFound, outLocked, outputs, overlays, playerVideos, playingAudio, projects, refreshEditSlide, shows, showsCache, styles } from "../../stores"
+    import { activeEdit, activeFocus, activePage, activeProject, activeShow, categories, focusMode, globalTags, media, notFound, outLocked, outputs, overlays, playerVideos, playingAudio, projects, refreshEditSlide, shows, showsCache, special, styles } from "../../stores"
+    import { getAccess } from "../../utils/profile"
     import { historyAwait } from "../helpers/history"
     import Icon from "../helpers/Icon.svelte"
-    import { getFileName, getMediaStyle, removeExtension } from "../helpers/media"
+    import { encodeFilePath, getExtension, getFileName, getMedia, getMediaLayerType, getMediaStyle, getMediaType, mediaSize, removeExtension } from "../helpers/media"
     import { findMatchingOut, getActiveOutputs, setOutput } from "../helpers/output"
     import { loadShows } from "../helpers/setShow"
     import { checkName, getLayoutRef } from "../helpers/show"
     import { swichProjectItem, updateOut } from "../helpers/showActions"
     import { joinTime, secondsToTime } from "../helpers/time"
-    import { clearBackground } from "../output/clear"
-    import Button from "./Button.svelte"
+    import { clearBackground, clearSlide } from "../output/clear"
     import HiddenInput from "./HiddenInput.svelte"
+    import MaterialButton from "./MaterialButton.svelte"
+    import T from "../helpers/T.svelte"
 
     export let id: string
     export let show: any // ShowList | ShowRef
     export let data: null | string = null
     export let index: null | number = null
+    export let isFirst: boolean = false
+    export let isProject: boolean = false
     $: type = show.type || "show"
-    $: name = type === "show" ? $shows[show.id]?.name : type === "overlay" ? $overlays[show.id]?.name : type === "player" ? ($playerVideos[id] ? $playerVideos[id].name : setNotFound(id)) : show.name
+    $: name = type === "show" ? $shows[show.id]?.name : type === "overlay" ? $overlays[show.id]?.name : type === "player" ? ($playerVideos[id] || show.data?.id ? $playerVideos[id]?.name || show.data?.name || show.data?.id : setNotFound(id)) : show.name
     // export let page: "side" | "drawer" = "drawer"
     export let match: null | number = null
+    $: showNumber = isProject ? "" : show?.quickAccess?.number || show?.meta?.number || ""
+    $: showDuration = isProject ? $shows[show.id]?.quickAccess?.duration || show?.scheduleLength || 0 : 0
+
+    let profile = getAccess("shows")
+    let readOnly = profile.global === "read" || profile[show.category] === "read"
 
     // search
     $: style = match !== null ? `background: linear-gradient(to right, var(--primary-lighter) ${match}%, transparent ${match}%);` : ""
@@ -41,7 +50,7 @@
     let iconID: null | string = null
     let custom = false
     $: {
-        // WIP simular to focus.ts
+        // WIP similar to focus.ts
         if (icon) {
             custom = false
             if (type === "show") {
@@ -64,23 +73,25 @@
     }
 
     $: selectedItem = $focusMode ? $activeFocus : $activeShow
-    $: active = index !== null ? selectedItem?.index === index : selectedItem?.id === id
+    $: isActive = index !== null ? selectedItem?.index === index : selectedItem?.id === id
 
+    // WIP partly duplicate of openShow() in show.ts
     let editActive = false
-    function click(e: any) {
-        if (editActive || e.ctrlKey || e.metaKey || e.shiftKey || active || e.target.closest("input")) return
+    function click(e: ClickEvent) {
+        const { ctrl, shift, target } = e.detail
+        if (editActive || ctrl || shift || isActive || target.closest("input")) return
 
         // set active show
         let pos = index
         if (index === null && $activeProject !== null) {
-            let i = $projects[$activeProject].shows.findIndex((p) => p.id === id)
+            let i = $projects[$activeProject]?.shows?.findIndex((p) => p.id === id) ?? -1
             if (i > -1) pos = i
         }
 
         let newShow: any = { id, type }
 
         if ($focusMode) {
-            let inProject = $projects[$activeProject || ""]?.shows.find((p) => p.id === id)
+            let inProject = $projects[$activeProject || ""]?.shows?.find((p) => p.id === id)
             if (inProject) {
                 activeFocus.set({ id, index: pos ?? undefined })
                 return
@@ -110,16 +121,16 @@
         if ($activePage === "edit") refreshEditSlide.set(true)
     }
 
-    async function doubleClick(e: any) {
-        if (editActive || $outLocked || e.target.closest("input")) return
+    async function doubleClick(e: ClickEvent) {
+        if (editActive || $outLocked || e.detail.target.closest("input")) return
 
         let outputId: string = getActiveOutputs($outputs, false, true, true)[0]
         let currentOutput = $outputs[outputId] || {}
 
-        if (type === "show" && $showsCache[id] && $showsCache[id].layouts[$showsCache[id].settings.activeLayout]?.slides?.length) {
+        if (type === "show" && $showsCache[id]?.settings && $showsCache[id].layouts[$showsCache[id].settings.activeLayout]?.slides?.length) {
             let layoutRef = getLayoutRef()
-            let firstEnabledIndex: number = layoutRef.findIndex((a) => !a.data.disabled) || 0
-            updateOut("active", firstEnabledIndex, layoutRef, !e.altKey)
+            let firstEnabledIndex = layoutRef.findIndex((a) => !a.data.disabled)
+            updateOut("active", firstEnabledIndex, layoutRef, !e.detail.alt)
 
             let slide = currentOutput.out?.slide || null
             if (slide?.id === id && slide?.index === firstEnabledIndex && slide?.layout === $showsCache[id].settings.activeLayout) return
@@ -127,11 +138,17 @@
             setOutput("slide", { id, layout: $showsCache[id].settings.activeLayout, index: firstEnabledIndex })
         } else if (type === "image" || type === "video") {
             let outputStyle = $styles[currentOutput.style || ""]
-            let mediaStyle: MediaStyle = getMediaStyle($media[id], outputStyle)
-            let out = { path: id, muted: show.muted || false, loop: show.loop || false, startAt: 0, type: type, ...mediaStyle }
+            const mediaData = $media[id] || {}
+            let mediaStyle: MediaStyle = getMediaStyle(mediaData, outputStyle)
 
-            // remove active slide
-            if ($activeProject && $projects[$activeProject].shows.find((a) => a.id === out.path)) setOutput("slide", null)
+            const videoType = getMediaLayerType(id, mediaStyle)
+            const shouldLoop = videoType === "background" ? show.loop || true : false
+            const shouldBeMuted = videoType === "background" ? show.muted || true : false
+
+            let out = { path: id, muted: shouldBeMuted, loop: shouldLoop, startAt: 0, type: type, ...mediaStyle }
+
+            // clear slide
+            if (videoType === "foreground" || (videoType !== "background" && (type === "image" || !shouldLoop))) clearSlide()
 
             setOutput("background", out)
         } else if (type === "pdf") {
@@ -151,63 +168,240 @@
     }
 
     function rename(e: any) {
+        if (readOnly) return
+
         const name = checkName(e.detail.value, id)
         historyAwait([id], { id: "SHOWS", newData: { data: [{ id, show: { name } }], replace: true }, location: { page: "drawer" } })
         // WIP this does not update in the shows drawer before refresh (if checkName updates the name)
     }
 
     let activeOutput: string | null = null
-    $: if ($outputs) activeOutput = findMatchingOut(id)
+    $: if ($outputs) {
+        activeOutput = findMatchingOut(id)
+
+        // only highlight if the set layout is outputted
+        if (activeOutput && show.layoutInfo?.name) {
+            const outputId = getActiveOutputs($outputs, true, true, true)[0]
+            const selectedLayoutId = Object.entries($showsCache[id]?.layouts || {}).find(([_id, a]) => a.name === show.layoutInfo.name)?.[0]
+            if ($outputs[outputId]?.out?.slide?.layout !== selectedLayoutId) activeOutput = null
+        }
+    }
 
     $: outline = activeOutput !== null || !!$playingAudio[id]
+
+    let thumbnailPath: string | null = null
+    $: isMedia = type === "image" || type === "video" || type === "player"
+    $: mediaStyle = isMedia ? getMediaStyle($media[id], undefined) : {} // , $styles[getFirstActiveOutput($outputs)?.style || ""]
+    $: mediaStyleString = `pointer-events: none;filter: ${mediaStyle.filter || ""};transform: scale(${mediaStyle.flipped ? "-1" : "1"}, ${mediaStyle.flippedY ? "-1" : "1"});`
+    $: if (id && isMedia) getThumbnail()
+    else thumbnailPath = ""
+    async function getThumbnail() {
+        thumbnailPath = ""
+
+        if (type === "player") {
+            const player = $playerVideos[id] || show.data
+            if (player?.type === "youtube") {
+                thumbnailPath = `https://i.ytimg.com/vi/${player.id}/sddefault.jpg`
+                return
+            }
+            if (player?.type === "vimeo") {
+                thumbnailPath = `https://vumbnail.com/${player.id}_medium.jpg`
+                return
+            }
+            return
+        }
+
+        const media = await getMedia(id, mediaSize.small)
+        if (media) thumbnailPath = media.thumbnail || media.altPath || media.path
+        // online videos (Pixabay) might not have a thumbnail ready
+        if (getMediaType(getExtension(thumbnailPath)) === "video") thumbnailPath = ""
+    }
 </script>
 
-<div id="show_{id}" class="main">
-    <Button on:click={click} on:dblclick={doubleClick} {active} outlineColor={activeOutput} {outline} class="context {$$props.class}" {style} bold={false} border red={$notFound.show?.includes(id)}>
-        <span style="display: flex;align-items: center;flex: 1;overflow: hidden;">
-            {#if icon || show.locked}
-                <Icon id={iconID ? iconID : show.locked ? "locked" : "noIcon"} {custom} box={iconID === "ppt" ? 50 : 24} right />
+<div id="show_{id}" class="main" class:played={show.played}>
+    <MaterialButton on:click={click} on:dblclick={doubleClick} {isActive} showOutline={outline} class="context {$$props.class}{readOnly ? '_readonly' : ''}" style="font-weight: normal;--outline-color: {activeOutput || 'var(--secondary)'};{$notFound.show?.includes(id) ? 'background-color: rgb(255 0 0 / 0.2);' : ''}{style}{$$props.style || ''}" tab>
+        <div class="row">
+            <span class="cell" style={isProject ? `width: 100%;max-width: ${show.layoutInfo?.name || show.scheduleLength ? 92 : 100}%;` : `width: 75%;min-width: 120px;max-width: calc(100% ${showNumber ? "- var(--number-width)" : ""} - var(--modified-width, 0px));`}>
+                <div class="icon" class:isMedia>
+                    {#if thumbnailPath}
+                        <img class="thumbnail" src={encodeFilePath(thumbnailPath)} alt="thumbnail" style={mediaStyleString} />
+                    {:else if icon || show.locked}
+                        <Icon id={show.played ? "check" : iconID ? iconID : show.locked ? "locked" : "noIcon"} custom={!show.played && custom} box={iconID === "ppt" ? 50 : 24} white={show.played} right={!isMedia} />
+                    {/if}
+                </div>
+
+                <HiddenInput value={newName} id={index !== null ? "show_" + id + "#" + index : "show_drawer_" + id} on:edit={rename} bind:edit={editActive} allowEmpty={false} allowEdit={(!show.type || show.type === "show") && !readOnly} />
+
+                {#if isProject}
+                    {#if show.layoutInfo?.name}
+                        <span class="layout" style="opacity: 0.6;font-style: italic;font-size: 0.9em;">{show.layoutInfo.name}</span>
+                    {/if}
+
+                    {#if showDuration && Number(showDuration)}
+                        <span class="layout">{joinTime(secondsToTime(showDuration))}</span>
+                    {/if}
+                {:else}
+                    <!-- shows drawer list -->
+                    {#if match !== null && ($activeShow?.data?.searchInput ? $activeShow?.id === id : isFirst)}
+                        <span style="opacity: 0.4;font-size: 0.9em;padding: 0 10px;max-width: 40%;"><T id="tips.show_add_project" /></span>
+                    {/if}
+                {/if}
+            </span>
+
+            {#if isProject}
+                {#if isActive}
+                    <span class="arrow">
+                        <Icon id="next" white />
+                    </span>
+                {/if}
+            {:else}
+                <span class="cell">
+                    <!-- tags -->
+                    {#if $special.displayTags}
+                        <span class="tags">
+                            {#each $shows[show.id]?.quickAccess?.tags || [] as tagId}
+                                {@const tag = $globalTags[tagId]}
+                                {#if tag}
+                                    <span class="tag" style="--color: {tag.color || 'white'};">
+                                        <p style="margin: 0;">{tag.name || "—"}</p>
+                                    </span>
+                                {/if}
+                            {/each}
+                        </span>
+                    {/if}
+
+                    {#if showNumber || $special.displayTags}
+                        <span class="number">{showNumber || ""}</span>
+                    {/if}
+
+                    <span class="date">{data || ""}</span>
+                </span>
             {/if}
-
-            {#if show.quickAccess?.number}
-                <span style="color: var(--secondary);font-weight: bold;margin: 3px 5px;padding-inline-end: 3px;white-space: nowrap;">{show.quickAccess.number}</span>
-            {/if}
-
-            <HiddenInput value={newName} id={index !== null ? "show_" + id + "#" + index : "show_drawer_" + id} on:edit={rename} bind:edit={editActive} allowEmpty={false} allowEdit={!show.type || show.type === "show"} />
-
-            {#if show.layoutInfo?.name}
-                <span class="layout" style="opacity: 0.6;font-style: italic;font-size: 0.9em;">{show.layoutInfo.name}</span>
-            {/if}
-
-            {#if show.scheduleLength !== undefined}
-                <span class="layout">{joinTime(secondsToTime(show.scheduleLength))}</span>
-            {/if}
-        </span>
-
-        {#if data}
-            <span style="opacity: 0.5;padding-inline-start: 10px;font-size: 0.9em;">{data}</span>
-        {/if}
-    </Button>
+        </div>
+    </MaterialButton>
 </div>
 
 <style>
+    .main {
+        width: 100%;
+
+        display: flex;
+    }
+
     .main :global(button) {
         width: 100%;
-        justify-content: space-between;
         padding: 0.15em 0.8em;
+    }
+
+    .row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 5px;
+        width: 100%;
+    }
+
+    .cell {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+
+        max-width: 75%;
+    }
+
+    .cell .number,
+    .cell .date {
+        font-size: 0.9em;
+        white-space: nowrap;
+        text-align: right;
+        color: var(--text);
+        opacity: 0.75;
+    }
+
+    .cell .number {
+        font-weight: 600;
+        text-align: center;
+
+        min-width: var(--number-width);
+    }
+
+    .cell .date {
+        font-variant-numeric: tabular-nums;
+
+        /* remove button padding & scrollbar width */
+        min-width: calc(var(--modified-width) - 0.8em - 8px);
     }
     .main :global(button p) {
         margin: 3px 5px;
+    }
+
+    .main.played :global(button:not(.isActive)) {
+        border-left: 4px double rgb(255 255 255 / 0.2) !important;
     }
 
     .layout {
         opacity: 0.8;
         font-size: 0.8em;
         padding-inline-start: 5px;
-
-        /* overflow: hidden;
-        text-overflow: ellipsis; */
         white-space: nowrap;
-        max-width: 40%;
+        max-width: 45%;
+    }
+
+    .icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .icon.isMedia {
+        min-width: 35px;
+        min-height: 35px;
+        width: 35px;
+        height: 35px;
+        margin-right: 10px;
+    }
+
+    .thumbnail {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        border-radius: 4px;
+
+        /* hide alt text */
+        text-indent: 100%;
+        white-space: nowrap;
+        overflow: hidden;
+    }
+
+    .arrow {
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+
+        opacity: 0.4;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    /* tags */
+
+    .tags {
+        display: flex;
+        gap: 5px;
+        padding-left: 10px;
+    }
+
+    .tag {
+        --color: white;
+
+        display: flex;
+        padding: 0px 5px;
+
+        color: var(--color);
+        font-weight: 600;
+
+        border-radius: 20px;
+        border: 2px solid var(--color);
     }
 </style>

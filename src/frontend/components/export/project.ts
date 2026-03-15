@@ -6,14 +6,16 @@ import { EXPORT } from "../../../types/Channels"
 import type { Effects } from "../../../types/Effects"
 import type { Project, ProjectShowRef } from "../../../types/Projects"
 import type { Action, Overlays, Shows, SlideData } from "../../../types/Show"
-import { actions as actionsStores, dataPath, effects as effectsStores, folders, media, overlays as overlayStores, showsCache, special } from "../../stores"
+import { actions as actionsStores, effects as effectsStores, folders, media, overlays as overlayStores, showsCache, special } from "../../stores"
 import { send } from "../../utils/request"
 import { clone } from "../helpers/array"
 import { loadShows } from "../helpers/setShow"
 import { formatToFileName } from "../helpers/show"
 import { _show } from "../helpers/shows"
 
-export async function exportProject(project: Project, projectId: string) {
+export async function exportProject(project: Project, projectId: string, savePath?: string) {
+    if (!project) return
+
     const shows: Shows = {}
     let files: string[] = []
     const overlays: Overlays = {}
@@ -25,6 +27,7 @@ export async function exportProject(project: Project, projectId: string) {
     const parentFolder = get(folders)[project.parent]?.name || ""
     if (projectId) project.id = projectId
     project.parent = "/" // place on root
+    delete project.sourcePath
 
     // project items
     const getProjectItems = {
@@ -55,10 +58,10 @@ export async function exportProject(project: Project, projectId: string) {
             })
 
             // get media file paths
-            const mediaData = _show(showRef.id).get("media")
+            const mediaData = _show(showRef.id).get("media") || {}
             mediaIds.forEach((id) => {
                 const path = mediaData[id]?.path || mediaData[id]?.id
-                if (!path || path.includes("http")) return
+                if (!path || path.startsWith("http")) return
                 getFile(path)
             })
 
@@ -101,7 +104,7 @@ export async function exportProject(project: Project, projectId: string) {
     files = [...new Set(files)]
 
     // set data
-    let projectData: any = { project, parentFolder, shows }
+    const projectData: any = { project, parentFolder, shows }
     if (Object.keys(overlays).length) projectData.overlays = overlays
     if (Object.keys(effects).length) projectData.effects = effects
     if (Object.keys(actions).length) projectData.actions = actions
@@ -114,14 +117,17 @@ export async function exportProject(project: Project, projectId: string) {
             if (!get(media)[path]) return
 
             const data = clone(get(media)[path])
+
             // delete data.info
+            delete data.creationTime // no need to transport this
+
             mediaData[path] = data
         })
         if (Object.keys(mediaData).length) projectData.media = mediaData
     }
 
     // export to file
-    send(EXPORT, ["GENERATE"], { type: "project", path: get(dataPath), name: formatToFileName(project.name), file: projectData })
+    send(EXPORT, ["GENERATE"], { type: "project", name: formatToFileName(project.name), file: projectData, path: savePath })
 
     function getItem(showRef: ProjectShowRef) {
         const type = showRef.type || "show"

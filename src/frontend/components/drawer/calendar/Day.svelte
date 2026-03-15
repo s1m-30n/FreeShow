@@ -1,5 +1,7 @@
 <script lang="ts">
-    import { activeDays, activePopup, dictionary, eventEdit, events } from "../../../stores"
+    import { activeDays, activePopup, eventEdit, events } from "../../../stores"
+    import { triggerClickOnEnterSpace } from "../../../utils/clickable"
+    import { translateText } from "../../../utils/language"
     import { actionData } from "../../actions/actionData"
     import { getActionName } from "../../actions/actions"
     import { sortByTime } from "../../helpers/array"
@@ -38,7 +40,7 @@
 {#if $activeDays.length}
     <div class="main">
         <span class="date">
-            {current.getDate()}. {$dictionary.month?.[current.getMonth() + 1]}
+            {current.getDate()}. {translateText("month." + (current.getMonth() + 1))}
             {current.getFullYear()}
         </span>
 
@@ -52,11 +54,14 @@
                         class="event context #event"
                         style="color: {event.color || 'unset'}"
                         id={event.id}
-                        title={customName}
+                        data-title={customName}
+                        role="button"
+                        tabindex="0"
                         on:click={() => {
                             eventEdit.set(event.id)
                             activePopup.set("edit_event")
                         }}
+                        on:keydown={triggerClickOnEnterSpace}
                     >
                         {#if event.time}
                             <span class="time">
@@ -136,6 +141,10 @@
     }
     .event:hover {
         background-color: var(--hover);
+    }
+    .event:focus {
+        outline: 2px solid var(--secondary);
+        outline-offset: 2px;
     }
 
     .time {

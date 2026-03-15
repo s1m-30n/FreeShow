@@ -1,22 +1,26 @@
 <script lang="ts">
-    import { activeFocus, activePage, activePopup, alertMessage, cachedShowsData, focusMode, lessonsLoaded, notFound, outLocked, outputs, outputSlideCache, showsCache, slidesOptions, special } from "../../stores"
+    import { onDestroy, onMount } from "svelte"
+    import { activeEdit, activeFocus, activePage, activePopup, alertMessage, cachedShowsData, categories, focusMode, lessonsLoaded, notFound, outLocked, outputs, outputSlideCache, showsCache, slidesOptions, special, templates } from "../../stores"
+    import { hasNewerUpdate, wait } from "../../utils/common"
+    import { getAccess } from "../../utils/profile"
     import { videoExtensions } from "../../values/extensions"
     import { customActionActivation } from "../actions/actions"
+    import { loadCustomFonts } from "../helpers/fonts"
     import { history } from "../helpers/history"
-    import Icon from "../helpers/Icon.svelte"
     import { encodeFilePath, getExtension } from "../helpers/media"
     import { getActiveOutputs, refreshOut, setOutput } from "../helpers/output"
     import { getCachedShow } from "../helpers/show"
     import { checkActionTrigger, getFewestOutputLines, getFewestOutputLinesReveal, getItemWithMostLines, updateOut } from "../helpers/showActions"
     import { _show } from "../helpers/shows"
-    import { getClosestRecordingSlide } from "../helpers/slideRecording"
     import T from "../helpers/T.svelte"
-    import Button from "../inputs/Button.svelte"
+    import MaterialButton from "../inputs/MaterialButton.svelte"
     import Loader from "../main/Loader.svelte"
+    import SkeletonSlide from "../slide/SkeletonSlide.svelte"
     import Slide from "../slide/Slide.svelte"
     import Autoscroll from "../system/Autoscroll.svelte"
     import Center from "../system/Center.svelte"
     import DropArea from "../system/DropArea.svelte"
+    import ShowHeader from "./ShowHeader.svelte"
 
     export let showId: string
     export let layout = ""
@@ -25,6 +29,20 @@
     $: currentShow = $showsCache[showId]
     $: activeLayout = layout || $showsCache[showId]?.settings?.activeLayout
     $: layoutSlides = currentShow ? getCachedShow(showId, activeLayout, $cachedShowsData)?.layout || [] : []
+
+    let hasMounted = false
+    onMount(() => {
+        // don't double render all slides on first load because of cachedShowsData update
+        setTimeout(() => (hasMounted = true), 80)
+
+        // custom fonts
+        if (currentShow?.settings?.customFonts) loadCustomFonts(currentShow.settings.customFonts)
+    })
+
+    onDestroy(() => {
+        if (timeout && typeof timeout !== "boolean") clearTimeout(timeout)
+        if (loadingTimeout) clearTimeout(loadingTimeout)
+    })
 
     // fix broken media
     $: if (showId) fixBrokenMedia()
@@ -43,32 +61,28 @@
         })
     }
 
+    let shouldSkipSmooth = 0
+    $: if (showId) {
+        offset = 0
+        shouldSkipSmooth++
+    }
+
     let scrollElem: HTMLElement | undefined
     let offset = -1
-    $: {
+    $: setTimeout(() => updateOffset({ $outputs, showId }))
+    async function updateOffset(_updater: any) {
+        if (!scrollElem) return
+        if (await hasNewerUpdate("SHOWS_SCROLL_OFFSET", 10)) return
+
         let output = $outputs[activeOutputs[0]] || {}
-        if (loaded && scrollElem && showId === output.out?.slide?.id && activeLayout === output.out?.slide?.layout) {
-            let columns = $slidesOptions.mode === "grid" ? ($slidesOptions.columns > 2 ? $slidesOptions.columns : 0) : 1
+        if (showId === output.out?.slide?.id && activeLayout === output.out?.slide?.layout) {
+            let columns = mode === "grid" ? ($slidesOptions.columns > 2 ? $slidesOptions.columns : 0) : 1
             let index = Math.max(0, (output.out.slide.index || 0) - columns)
-            offset = ((scrollElem.querySelector(".grid")?.children[index] as HTMLElement)?.offsetTop || 5) - 5
+            offset = ((scrollElem?.querySelector(".grid")?.children[index] as HTMLElement)?.offsetTop || 5) - 5
         }
     }
 
     let nextScrollTimeout: NodeJS.Timeout | null = null
-    function wheel({ detail }: any) {
-        let e: any = detail.event
-        if (!e.ctrlKey && !e.metaKey) return
-        if (nextScrollTimeout) return
-
-        slidesOptions.set({ ...$slidesOptions, columns: Math.max(2, Math.min(10, $slidesOptions.columns + (e.deltaY < 0 ? -1 : 1))) })
-
-        // don't start timeout if scrolling with mouse
-        if (e.deltaY >= 100 || e.deltaY <= -100) return
-        nextScrollTimeout = setTimeout(() => {
-            nextScrollTimeout = null
-        }, 500)
-    }
-
     let disableAutoScroll = false
     function slideClick(e: any, index: number) {
         // TODO: duplicate function of "preview:126 - updateOut"
@@ -76,7 +90,7 @@
 
         customActionActivation("slide_click")
 
-        let slideRef = _show(showId).layouts([activeLayout]).ref()[0]
+        let slideRef = _show(showId).layouts([activeLayout]).ref()[0] || []
 
         let data = slideRef[index]?.data
         checkActionTrigger(data, index)
@@ -107,7 +121,7 @@
             }
 
             // get lines reveal
-            const linesRevealItems = (showSlide?.items || []).filter((a) => a.lineReveal)
+            const linesRevealItems = (showSlide?.items || []).filter((a) => a?.lineReveal)
             let revealCount = outSlide?.revealCount ?? 0
             if (outSlide && outSlide.id === showId && outSlide.layout === activeLayout && outSlide.index === index && linesRevealItems.length && isRevealed) {
                 revealCount++
@@ -120,15 +134,12 @@
             setOutput("slide", { id: showId, layout: activeLayout, index, line, revealCount, itemClickReveal })
             updateOut(showId, index, slideRef, !e.altKey)
 
-            getClosestRecordingSlide({ showId, layoutId: activeLayout }, index)
-
             // force update output if index is the same as previous
             if (activeSlides[index]) refreshOut()
         })
 
-        // WIP focus mode does not auto scroll on arrow navigation when many slides (that overflow view area)
-        // always auto scroll in focus mode (if not very many slides)
-        if ($focusMode && projectIndex > -1 && index < 10) {
+        // set to active in focus mode
+        if ($focusMode) {
             activeFocus.set({ id: showId, index: projectIndex, type: "show" })
             return
         }
@@ -152,14 +163,24 @@
         } else endIndex = null
     }
 
+    $: gridMode = mode === "grid" || mode === "simple" || mode === "groups"
+
     // update show by its template
-    $: gridMode = $slidesOptions.mode === "grid" || $slidesOptions.mode === "simple" || $slidesOptions.mode === "groups"
-    $: if (showId && gridMode && !isLessons && loaded) setTimeout(updateTemplate, 100)
+    $: if (showId && loaded) setTimeout(updateTemplate, 100)
     function updateTemplate() {
         if (!loaded) return
 
-        let showTemplate = currentShow?.settings?.template || ""
-        history({ id: "TEMPLATE", save: false, newData: { id: showTemplate }, location: { page: "show" } })
+        let currentTemplate = currentShow?.settings?.template || ""
+        let createItems = false
+
+        // override with category template if any
+        const categoryTemplate = $categories[currentShow?.category || ""]?.template || ""
+        if (categoryTemplate && $templates[categoryTemplate]) {
+            currentTemplate = categoryTemplate
+            createItems = true
+        }
+
+        history({ id: "TEMPLATE", save: false, newData: { id: currentTemplate, data: { createItems } }, location: { page: "show" } })
     }
 
     $: if (showId && $special.capitalize_words) capitalizeWords()
@@ -172,11 +193,13 @@
         Object.keys(slides).forEach((slideId) => {
             let slide = slides[slideId]
 
-            slide.items.forEach((item) => {
-                if (!item.lines) return
+            slide?.items?.forEach((item) => {
+                if (!item?.lines) return
 
                 item.lines.forEach((line) => {
-                    line?.text.forEach((text) => {
+                    if (!Array.isArray(line?.text)) return
+
+                    line.text.forEach((text) => {
                         let newValue = capitalize(text.value)
                         if (text.value !== newValue) capitalized = true
                         text.value = newValue
@@ -194,15 +217,16 @@
 
         function capitalize(value: string) {
             $special.capitalize_words.split(",").forEach((word) => {
-                let newWord = word.trim().toLowerCase()
+                let newWord = word.trim()
                 if (!newWord.length) return
 
-                const regEx = new RegExp(`\\b${newWord}\\b`, "gi")
+                // match whole words, respecting Unicode letters (accented characters)
+                const regEx = new RegExp(`(?<!\\p{L})${newWord.toLowerCase()}(?!\\p{L})`, "giu")
                 value = value.replace(regEx, (match) => {
                     // always capitalize: newWord.charAt(0).toUpperCase() + newWord.slice(1)
                     // use the input case styling (meaning all uppercase/lowercase also works)
                     // but don't change anything if the text is already fully uppercase
-                    return match === match.toUpperCase() ? match : word.trim()
+                    return match === match.toUpperCase() ? match : newWord
                 })
             })
 
@@ -210,15 +234,31 @@
         }
     }
 
+    let altTimeout: NodeJS.Timeout | null = null
+    let altTemp = false
     let altKeyPressed = false
     function keydown(e: KeyboardEvent) {
+        if (!e.altKey && altTimeout) clearTimeout(altTimeout)
+
         if (e.altKey) {
-            e.preventDefault()
-            altKeyPressed = true
+            if (altTemp) return
+            altTemp = true
+            // e.preventDefault()
+
+            // only activate alt preview hide after a little time (still works instantly)
+            altTimeout = setTimeout(() => {
+                if (altTemp && document.hasFocus()) altKeyPressed = true
+            }, 300)
         }
     }
     function keyup(e) {
         if (e.altKey) return
+
+        altTemp = false
+        altKeyPressed = false
+    }
+    function blurred() {
+        altTemp = false
         altKeyPressed = false
     }
 
@@ -236,7 +276,7 @@
 
             if (activeSlides[outSlide.index] || outSlide.id !== showId || outSlide.layout !== activeLayout) return
 
-            let ref = outSlide?.id === "temp" ? [{ temp: true, items: outSlide.tempItems, id: "" }] : _show(outSlide.id).layouts([outSlide.layout]).ref()[0]
+            let ref = outSlide?.id === "temp" ? [{ temp: true, items: outSlide.tempItems, id: "" }] : _show(outSlide.id).layouts([outSlide.layout]).ref()[0] || []
             let showSlide = outSlide.index !== undefined ? _show(outSlide.id).slides([ref[outSlide.index]?.id]).get()?.[0] : null
 
             // get progress of current line division
@@ -257,7 +297,7 @@
             }
 
             // lines reveal
-            const linesRevealItems = (showSlide?.items || []).filter((a) => a.lineReveal)
+            const linesRevealItems = (showSlide?.items || []).filter((a) => a?.lineReveal)
             if (linesRevealItems.length) {
                 lineIndex = getFewestOutputLinesReveal($outputs) - 1
                 maxLines = getItemWithMostLines({ items: linesRevealItems })
@@ -273,10 +313,14 @@
         })
     }
 
+    let profile = getAccess("shows")
+    $: isLocked = currentShow?.locked || profile.global === "read" || profile[currentShow?.category || ""] === "read"
+
     function createSlide() {
-        if (currentShow?.locked) return
+        if (isLocked) return
 
         history({ id: "SLIDES" })
+        activeEdit.set({ type: "show", slide: 0, items: [] })
         activePage.set("edit")
     }
 
@@ -295,7 +339,7 @@
         startLazyLoader()
     }
 
-    $: isLessons = currentShow?.category === "lessons"
+    $: isLessons = currentShow?.reference?.type === "lessons"
     // let showLessonsAlert: boolean = false
     let lessonsFailed = 0
     // let currentTries: number = 0
@@ -328,6 +372,9 @@
                     let exists = await checkImage(mediaPath)
 
                     if (exists) {
+                        // it exists before it's fully downloaded
+                        if (lazyLoader > 0) await wait(1000)
+
                         lazyLoader = layoutSlides.length
                         loaded = true
                         lazyLoading = false
@@ -372,6 +419,7 @@
 
         function next() {
             lazyLoader += $focusMode ? 20 : 4
+            clearTimeout(timeout as NodeJS.Timeout)
             timeout = null
             startLazyLoader()
         }
@@ -383,86 +431,87 @@
         if (isVideo) media = document.createElement("video")
 
         return new Promise((resolve) => {
-            if (isVideo)
-                media.onloadeddata = () => {
-                    resolve(true)
-                }
-            else media.onload = () => resolve(true)
+            let hasLoaded = false
+            if (isVideo) media.onloadeddata = onLoaded
+            else media.onload = onLoaded
+
             media.onerror = () => {
+                if (hasLoaded) return
                 resolve(false)
             }
 
             media.src = encodeFilePath(src)
+
+            function onLoaded() {
+                hasLoaded = true
+                resolve(true)
+            }
         })
     }
 
     let loading = false
     $: if (showId) startLoading()
     $: if ($notFound.show?.includes(showId)) loading = false
+    let loadingTimeout: NodeJS.Timeout | null = null
     function startLoading() {
         loading = true
-        setTimeout(() => {
+        if (loadingTimeout) clearTimeout(loadingTimeout)
+        loadingTimeout = setTimeout(() => {
             loading = false
         }, 8000)
     }
+
+    $: mode = isLessons ? "grid" : $slidesOptions.mode
 </script>
 
 <!-- TODO: tab enter not woring -->
 
-<svelte:window on:keydown={keydown} on:keyup={keyup} on:mousedown={keyup} />
+<svelte:window on:keydown={keydown} on:keyup={keyup} on:mousedown={keyup} on:blur={blurred} />
 
-<Autoscroll class={$focusMode || currentShow?.locked ? "" : "context #shows__close"} on:wheel={wheel} {offset} disabled={disableAutoScroll} bind:scrollElem style="display: flex;">
-    <DropArea id="all_slides" selectChildren>
-        <DropArea id="slides" hoverTimeout={0} selectChildren>
-            {#if $showsCache[showId] === undefined}
-                <Center faded={!loading}>
-                    {#if loading}
-                        <Loader />
-                    {:else}
-                        <T id="error.no_show" />
-                    {/if}
-                </Center>
-            {:else}
-                <div class="grid">
-                    {#if layoutSlides.length}
-                        {#each layoutSlides as slide, i}
-                            {#if (loaded || i < lazyLoader) && currentShow.slides?.[slide.id] && ($slidesOptions.mode === "grid" || !slide.disabled) && ($slidesOptions.mode !== "groups" || currentShow.slides[slide.id].group !== null || activeSlides[i] !== undefined)}
-                                <Slide
-                                    {showId}
-                                    slide={currentShow.slides[slide.id]}
-                                    show={currentShow}
-                                    {layoutSlides}
-                                    layoutSlide={slide}
-                                    index={i}
-                                    color={slide.color}
-                                    output={activeSlides[i]}
-                                    active={activeSlides[i] !== undefined}
-                                    {endIndex}
-                                    list={!gridMode}
-                                    columns={$slidesOptions.columns}
-                                    icons
-                                    {altKeyPressed}
-                                    disableThumbnails={isLessons && !loaded}
-                                    centerPreview
-                                    on:click={(e) => slideClick(e, i)}
-                                />
-                            {/if}
-                        {/each}
-                    {:else}
-                        <Center absolute size={2}>
-                            <span style="opacity: 0.5;"><T id="empty.slides" /></span>
-                            <!-- Add slides button -->
-                            <Button disabled={currentShow?.locked} on:click={createSlide} style="font-size: initial;margin-top: 10px;" dark center>
-                                <Icon id="add" right />
-                                <T id="new.slide" />
-                            </Button>
-                        </Center>
-                    {/if}
-                </div>
-            {/if}
+<div class="main" class:padding={!$focusMode} style="display: contents;">
+    <Autoscroll class={$focusMode || isLocked ? "" : "context #shows__close"} {offset} disabled={disableAutoScroll} {shouldSkipSmooth} bind:scrollElem style="display: flex;">
+        <DropArea id="all_slides" selectChildren>
+            <DropArea id="slides" hoverTimeout={0} selectChildren>
+                {#if !$focusMode}
+                    <ShowHeader {showId} hideOptions={!layoutSlides?.length} />
+                {/if}
+
+                {#if $showsCache[showId] === undefined}
+                    <Center faded={!loading}>
+                        {#if loading}
+                            <Loader />
+                        {:else}
+                            <T id="error.no_show" />
+                        {/if}
+                    </Center>
+                {:else}
+                    <div class="grid" style={$focusMode ? "" : "padding-bottom: 60px;"}>
+                        {#if layoutSlides.length}
+                            {#each layoutSlides as slide, i}
+                                {@const currentSlide = currentShow?.slides?.[slide.id]}
+                                {#if hasMounted && (loaded || i < lazyLoader)}
+                                    {#if currentSlide && (mode === "grid" || mode === "groups" || !slide.disabled) && (mode !== "groups" || currentSlide.group !== null || activeSlides[i] !== undefined)}
+                                        <Slide {showId} slide={currentSlide} show={currentShow} {layoutSlides} layoutSlide={slide} index={i} color={slide.color} output={activeSlides[i]} active={activeSlides[i] !== undefined} {endIndex} list={!gridMode} columns={$slidesOptions.columns} icons {altKeyPressed} disableThumbnails={isLessons && !loaded} centerPreview on:click={(e) => slideClick(e, i)} />
+                                    {/if}
+                                {:else}
+                                    <SkeletonSlide slide={currentSlide} index={i} color={slide.color} columns={$slidesOptions.columns} active={activeSlides[i] !== undefined} on:click={(e) => slideClick(e, i)} />
+                                {/if}
+                            {/each}
+                        {:else}
+                            <Center absolute>
+                                <span style="opacity: 0.5;font-size: 2em;margin-bottom: 10px;"><T id="empty.slides" /></span>
+
+                                <MaterialButton variant="outlined" disabled={isLocked} icon="add" title="tooltip.project" style="justify-content: start;padding: 8px 14px;" on:click={createSlide}>
+                                    <T id="new.slide" />
+                                </MaterialButton>
+                            </Center>
+                        {/if}
+                    </div>
+                {/if}
+            </DropArea>
         </DropArea>
-    </DropArea>
-</Autoscroll>
+    </Autoscroll>
+</div>
 
 <style>
     .grid {

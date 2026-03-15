@@ -1,22 +1,22 @@
 const DEF_FONT_SIZE = 100
 export const MAX_FONT_SIZE = 800
 const MIN_FONT_SIZE = 10
-
-// const BREAK_MARGIN = 2 // px
+const PRECISION = 5
 
 // shrinkToFit: text is set font size by default, but can shrink if the text does not fit in the textbox
 // growToFit: text will grow to fill the entire textbox, but maximum the set font size
 
-export type AutosizeTypes = "shrinkToFit" | "growToFit"
+export type AutosizeTypes = "shrinkToFit" | "growToFit" | "none"
 type Options = {
     type?: AutosizeTypes // "shrinkToFit"
     textQuery?: string // all children by default (or self)
     defaultFontSize?: number // 50
     maxFontSize?: number // 800
     minFontSize?: number // 10
+    isList?: boolean // whether this is a list item (affects measurement)
 }
 
-export default function autosize(elem: HTMLElement, { type, textQuery, defaultFontSize, maxFontSize, minFontSize }: Options = {}) {
+export default function autosize(elem: HTMLElement, { type, textQuery, defaultFontSize, maxFontSize, minFontSize, isList }: Options = {}) {
     // set default values
     if (!minFontSize) minFontSize = MIN_FONT_SIZE
     if (!maxFontSize) maxFontSize = MAX_FONT_SIZE
@@ -61,8 +61,10 @@ export default function autosize(elem: HTMLElement, { type, textQuery, defaultFo
 
     size()
 
+    const finalResult = Math.min(maxFontSize, lowestValue)
+
     // prefer lowest value (due to margin)
-    return finish(Math.min(maxFontSize, lowestValue))
+    return finish(finalResult)
 
     function finish(value: number) {
         boxElem!.remove()
@@ -74,7 +76,7 @@ export default function autosize(elem: HTMLElement, { type, textQuery, defaultFo
         else lowestValue = fontSize
 
         // if difference is less than 2px margin, return early
-        if (highestValue - lowestValue < 2) return
+        if (highestValue - lowestValue < PRECISION) return
 
         // always double/half the amount for the quickest search
         fontSize = (highestValue + lowestValue) * 0.5
@@ -93,7 +95,7 @@ export default function autosize(elem: HTMLElement, { type, textQuery, defaultFo
 
     function addStyleToElemText(currentFontSize: number) {
         let i = 0
-        for (const textElem of textChildren) {
+        for (const textElem of Array.from(textChildren)) {
             if (!styles[i]) styles[i] = textElem.getAttribute("style") || ""
             textElem.setAttribute("style", styles[i] + `;overflow:visible;font-size: ${currentFontSize}px !important;`)
             i++
@@ -121,8 +123,27 @@ export default function autosize(elem: HTMLElement, { type, textQuery, defaultFo
         cloned.style.alignItems = "center"
         if (cloned.querySelector(".edit")) (cloned.querySelector(".edit") as HTMLElement).style.justifyContent = "center"
 
-        for (const elemHide of cloned.querySelectorAll(".hideFromAutosize")) {
+        for (const elemHide of Array.from(cloned.querySelectorAll(".hideFromAutosize"))) {
             ;(elemHide as HTMLElement).style.display = "none"
+        }
+
+        // fix chords size
+        for (const chordElem of Array.from(cloned.querySelectorAll(".chords"))) {
+            ;(chordElem as HTMLElement).style.maxHeight = "65px"
+        }
+
+        // CRITICAL FIX FOR LIST ITEMS:
+        // List items have font-size on both the parent .break div AND the inner span elements
+        // This causes double font-size application during measurement
+        // We need to remove font-size from .break divs so only the spans (selected by textQuery) control sizing
+        if (isList) {
+            const breakElements = cloned.querySelectorAll(".break")
+            for (const breakElem of Array.from(breakElements)) {
+                const htmlBreak = breakElem as HTMLElement
+                const currentStyle = htmlBreak.getAttribute("style") || ""
+                const newStyle = currentStyle.replace(/font-size:\s*[^;]+;?/gi, "")
+                htmlBreak.setAttribute("style", newStyle)
+            }
         }
 
         elem.after(cloned)

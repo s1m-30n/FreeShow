@@ -4,11 +4,11 @@ import { activeEdit, activeShow, showsCache } from "../../../stores"
 import { wait } from "../../../utils/common"
 import { clone } from "../../helpers/array"
 import { history } from "../../helpers/history"
+import { getLayoutRef } from "../../helpers/show"
 import { _show } from "../../helpers/shows"
 import { getStyles } from "../../helpers/style"
-import { boxes } from "../values/boxes"
-import { itemEdits } from "../values/item"
-import { getLayoutRef } from "../../helpers/show"
+import { itemBoxes } from "../values/boxes"
+import { itemSections } from "../values/item"
 
 type StyleClipboard = {
     keys: { [key: string]: any }
@@ -56,10 +56,30 @@ export function getItemStyle(item: Item): StyleClipboard {
     return clone({ keys: {}, style: newStyles })
 }
 
+// get current item style
+export function filterItemStyle(style: string, isItem: boolean) {
+    if (typeof style !== "string" || !style) return ""
+
+    const itemKeys = getItemKeys()
+    const styles = getStyles(style)
+
+    // only keep item keys
+    let newStyle = ""
+    Object.entries(styles).forEach(([key, value]) => {
+        const hasItemKey = itemKeys.includes(key)
+        if (isItem ? hasItemKey : !hasItemKey) newStyle += `${key}: ${value};`
+    })
+
+    return newStyle
+}
+export function mergeWithStyle(newStyle: string, oldStyle: string, isItem: boolean) {
+    return filterItemStyle(oldStyle, !isItem) + newStyle
+}
+
 export function getSlideStyle(): StyleClipboard {
     const ref = getLayoutRef()
     const settings = _show()
-        .slides([ref[get(activeEdit).slide!].id])
+        .slides([ref[get(activeEdit).slide!]?.id])
         .get("settings")[0]
 
     return { keys: { settings: clone(settings) }, style: {} }
@@ -67,7 +87,7 @@ export function getSlideStyle(): StyleClipboard {
 
 export function getFilterStyle(): StyleClipboard {
     const ref = getLayoutRef()
-    const slideData = ref[get(activeEdit).slide!].data
+    const slideData = ref[get(activeEdit).slide!]?.data || {}
 
     const filterKeys = ["backdrop-filter", "filter"]
 
@@ -92,6 +112,8 @@ export async function setBoxStyle(styles: StyleClipboard[], slides: any, type: I
     }
 
     function updateSlideStyle(slide) {
+        if (!slide || !get(activeShow)) return
+
         const items: number[] = []
         const values: any[] = []
 
@@ -103,11 +125,20 @@ export async function setBoxStyle(styles: StyleClipboard[], slides: any, type: I
 
         // item keys
         Object.keys(style.keys).forEach((key) => {
+            const value = style.keys[key]
             history({
                 id: "setItems",
                 newData: { style: { key, values: [style.keys[key]] } },
                 location: { page: "edit", show: get(activeShow)!, slide: slide.id, items }
             })
+
+            if (key === "textFit") {
+                history({
+                    id: "setItems",
+                    newData: { style: { key: "auto", values: [value && value !== "none"] } },
+                    location: { page: "edit", show: get(activeShow)!, slide: slide.id, items }
+                })
+            }
         })
 
         // line align
@@ -118,7 +149,7 @@ export async function setBoxStyle(styles: StyleClipboard[], slides: any, type: I
             //     location: { page: "edit", show: get(activeShow)!, slide: slide.id, items },
             // })
             showsCache.update((a) => {
-                ;(a[get(activeShow)!.id].slides[slide.id || ""]?.items || [])
+                ;(a[get(activeShow)!.id]?.slides[slide.id || ""]?.items || [])
                     .filter((_, i) => items.includes(i))
                     .forEach((item) => {
                         item.lines?.forEach((line) => {
@@ -148,6 +179,7 @@ export async function setBoxStyle(styles: StyleClipboard[], slides: any, type: I
             items.push(i)
 
             const currentStyle = styles[i] || styles[0]
+            if (!currentStyle) return
 
             let newStyle = ""
             Object.entries(currentStyle.style).forEach(([key, value]) => {
@@ -220,6 +252,7 @@ export async function setItemStyle(styles: StyleClipboard[], slides: any) {
             items.push(i)
 
             const style = styles[i] || styles[0]
+            if (!style) return
 
             // get new style
             let newStyle = ""
@@ -243,6 +276,8 @@ export async function setItemStyle(styles: StyleClipboard[], slides: any) {
 
 export async function setSlideStyle(style: StyleClipboard, slides: any) {
     for (const slide of slides) {
+        if (slide.locked) continue // WIP get group slide
+
         updateSlideStyle(slide)
 
         // prevent lag when updating many slides
@@ -250,7 +285,7 @@ export async function setSlideStyle(style: StyleClipboard, slides: any) {
     }
 
     function updateSlideStyle(slide) {
-        const oldData = { style: slide.settings }
+        const oldData = { style: slide.settings || {} }
 
         history({
             id: "slideStyle",
@@ -275,9 +310,13 @@ export function getItemKeys(isBox = false) {
     // replace just item style or just box style if not textbox
     let itemKeys: string[] = []
 
-    Object.values(itemEdits).forEach((values) => {
-        itemKeys.push(...values.map((a) => a.key || ""))
-        // WIP transform not working with this
+    Object.values(itemSections).forEach((values) => {
+        itemKeys.push(
+            ...values.inputs.flat().map((a) => {
+                const key = a.id === "style" ? a.key : a.id
+                return key || ""
+            })
+        )
     })
 
     // gradient
@@ -289,16 +328,19 @@ export function getItemKeys(isBox = false) {
 
 function getSpecialBoxValues(item: Item) {
     const keyValues: any = {}
-    const inputs = Object.values(boxes[item.type || "text"]?.edit || {}).flat()
-    inputs.push({ id: "align", input: "" })
+    const inputIds = Object.values(itemBoxes[item.type || "text"]?.sections || {})
+        .map((a) => a.inputs.flat())
+        .flat()
+        .map(({ id }) => id)
 
-    inputs.forEach((input) => {
-        let id = input.id
-        if (!id || id === "style") return
+    inputIds.forEach((id) => {
+        if (id === "style") return
 
         if (id.includes(".")) id = id.slice(0, id.indexOf("."))
         if (item[id] !== undefined) keyValues[id] = item[id]
     })
+
+    if (item.align) keyValues.align = item.align
 
     return keyValues
 }

@@ -3,16 +3,17 @@
 
 import { get } from "svelte/store"
 import { Main } from "../../../types/IPC/Main"
-import type { MediaStyle, Subtitle } from "../../../types/Main"
+import type { FileFolder, MediaStyle, Subtitle } from "../../../types/Main"
 import type { Cropping, Styles } from "../../../types/Settings"
 import type { ShowType } from "../../../types/Show"
 import { requestMain, sendMain } from "../../IPC/main"
-import { loadedMediaThumbnails, media, outputs, tempPath } from "../../stores"
-import { newToast, wait, waitUntilValueIsDefined } from "../../utils/common"
+import { audioFolders, cachePath, loadedMediaThumbnails, media, mediaFolders, special } from "../../stores"
+import { addToMediaFolder } from "../../utils/cloudSync"
+import { isMainWindow, newToast, wait, waitUntilValueIsDefined } from "../../utils/common"
 import { audioExtensions, imageExtensions, mediaExtensions, presentationExtensions, videoExtensions } from "../../values/extensions"
 import type { API_media, API_slide_thumbnail } from "../actions/api"
 import { clone } from "./array"
-import { getActiveOutputs, getOutputResolution } from "./output"
+import { getFirstActiveOutput, getOutputResolution } from "./output"
 
 export function getExtension(path: string): string {
     if (typeof path !== "string") return ""
@@ -51,6 +52,7 @@ export function getFileName(path: string): string {
 let pathJoiner = ""
 export function splitPath(path: string): string[] {
     if (typeof path !== "string") return []
+    path = path.replace("file://", "")
     if (path.indexOf("\\") > -1) pathJoiner = "\\"
     if (path.indexOf("/") > -1) pathJoiner = "/"
     return path.split(pathJoiner) || []
@@ -61,21 +63,31 @@ export function joinPath(path: string[]): string {
     return path.join(pathJoiner)
 }
 
+export function isLocalFile(path: string): boolean {
+    if (typeof path !== "string") return false
+    if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("data:") || path.startsWith("blob:") || path.startsWith("freeshow-protected://")) return false
+    return true
+}
+
 // fix for media files with special characters in file name not playing
 export function encodeFilePath(path: string): string {
     if (typeof path !== "string") return ""
+    if (!isLocalFile(path)) return path
 
     // already encoded
-    if (path.match(/%\d+/g) || path.includes("http") || path.includes("data:")) return path
-
-    // can't load file paths with "#"
-    path = path.replaceAll("#", "%23")
+    if (path.match(/%\d+/g)) {
+        if (path.startsWith("/")) path = `file://${path}`
+        return path
+    }
 
     const splittedPath = splitPath(path)
     const fileName = splittedPath.pop() || ""
     const encodedName = encodeURIComponent(fileName)
+    let joinedPath = joinPath([...splittedPath, encodedName])
 
-    return joinPath([...splittedPath, encodedName])
+    // path starting at "/" auto completes to app root, but should be file://
+    if (joinedPath.startsWith("/")) joinedPath = `file://${joinedPath}`
+    return joinedPath
 }
 
 // decode only file name in path (not full path)
@@ -93,12 +105,13 @@ export async function getThumbnail(data: API_media) {
         path = getThumbnailPath(path, mediaSize.drawerSize)
     }
 
-    return await toDataURL(path)
+    return await toDataURL(encodeFilePath(path))
 }
 
-export async function getSlideThumbnail(data: API_slide_thumbnail, extraOutData: { backgroundImage?: string; overlays?: string[] } = {}, plainSlide: boolean = false) {
-    const outputId = getActiveOutputs(get(outputs), false, true, true)[0]
-    const outSlide = get(outputs)[outputId]?.out?.slide
+export async function getSlideThumbnail(data: API_slide_thumbnail, extraOutData: { backgroundImage?: string; overlays?: string[] } = {}, plainSlide = false) {
+    const currentOutput = getFirstActiveOutput()
+    const outSlide = currentOutput?.out?.slide
+    if (!currentOutput) return ""
 
     if (!data.showId) data.showId = outSlide?.id
     if (!data.layoutId) data.layoutId = outSlide?.layout
@@ -106,7 +119,7 @@ export async function getSlideThumbnail(data: API_slide_thumbnail, extraOutData:
 
     if (!data?.showId) return ""
 
-    const output = clone(get(outputs)[outputId])
+    const output = clone(currentOutput)
     if (!output.out) output.out = {}
     output.out.slide = { id: data.showId, layout: data.layoutId, index: data.index }
 
@@ -118,10 +131,10 @@ export async function getSlideThumbnail(data: API_slide_thumbnail, extraOutData:
     if (extraOutData.backgroundImage) output.out.background = { path: extraOutData.backgroundImage }
     if (extraOutData.overlays) output.out.overlays = extraOutData.overlays
 
-    let resolution: any = getOutputResolution(outputId)
+    let resolution: any = getOutputResolution(currentOutput.id)
     resolution = { width: resolution.width * 0.5, height: resolution.height * 0.5 }
 
-    const thumbnail = await requestMain(Main.CAPTURE_SLIDE, { output: { [outputId]: output }, resolution })
+    const thumbnail = await requestMain(Main.CAPTURE_SLIDE, { output: { [currentOutput.id]: output }, resolution })
     return thumbnail?.base64 || ""
 }
 
@@ -143,43 +156,139 @@ async function toDataURL(url: string): Promise<string> {
     })
 }
 
-// check if media file exists in plain js
-export function checkMedia(src: string): Promise<boolean> {
-    const extension = getExtension(src)
-    const isVideo = videoExtensions.includes(extension)
-    const isAudio = !isVideo && audioExtensions.includes(extension)
+// download any online media
+// get located media path & generated thumbnail
+const replacedPaths = new Map<string, { path: string; altPath?: string; thumbnail: string }>()
+let currentlyGetting: string[] = []
+export async function getMedia(path: string, size: number = mediaSize.drawerSize) {
+    if (typeof path !== "string") return null
 
-    return new Promise((resolve) => {
-        let elem
-        if (isVideo) {
-            elem = document.createElement("video")
-            elem.onloadeddata = () => finish()
-        } else if (isAudio) {
-            elem = document.createElement("audio")
-            elem.onloadeddata = () => finish()
-        } else {
-            elem = new Image()
-            elem.onload = () => finish()
+    const mediaId = `${path}-${size}`
+
+    const mediaData = clone(get(media)[path])
+    if (replacedPaths.has(mediaId)) return { ...replacedPaths.get(mediaId)!, data: mediaData }
+
+    if (currentlyGetting.includes(mediaId)) {
+        await waitUntilValueIsDefined(() => replacedPaths.has(mediaId), 50, 10000)
+        if (replacedPaths.has(mediaId)) return { ...replacedPaths.get(mediaId)!, data: mediaData }
+        return null
+    }
+    currentlyGetting.push(mediaId)
+
+    try {
+        if (path.startsWith("http")) {
+            const localPath = (await downloadOnlineMedia(path)) || path
+            const thumbnail = mediaData?.contentFile?.thumbnail || localPath
+
+            return finish(localPath, thumbnail, path)
         }
 
-        elem.onerror = () => finish(false)
-        elem.src = encodeFilePath(src)
-
-        const timedout = setTimeout(() => {
-            finish(false)
-        }, 3000)
-
-        function finish(response = true) {
-            clearTimeout(timedout)
-            resolve(response)
+        if (!isLocalFile(path) || path.includes("freeshow-cache") || path.includes("media-cache")) {
+            return finish(path, path)
         }
-    })
+
+        // lessons
+        // let thumbnailPath = getThumbnailPath(path, data.size)
+        // // cache after it's downloaded
+        // setTimeout(() => loadThumbnail(path, data.size), 1000)
+
+        const located = await locateMediaFile(path)
+        if (!located) return finish()
+
+        const newPath = located.path
+        if (!located.hasChanged) addToMediaFolder(newPath)
+
+        if (!isMainWindow()) {
+            const thumbnail = getThumbnailPath(newPath, size)
+            return finish(newPath, thumbnail)
+        }
+
+        // generate thumbnails only in main window
+        const thumbnail = (await loadThumbnail(newPath, size)) || newPath
+        return finish(newPath, thumbnail)
+    } finally {
+        const index = currentlyGetting.indexOf(mediaId)
+        if (index > -1) currentlyGetting.splice(index, 1)
+    }
+
+    function finish(path?: string, thumbnail?: string, altPath?: string) {
+        if (!path || !thumbnail) return null
+        if (altPath) replacedPaths.set(mediaId, { path, altPath, thumbnail })
+        else replacedPaths.set(mediaId, { path, thumbnail })
+        if (altPath) return { path, altPath, thumbnail, data: mediaData }
+        return { path, thumbnail, data: mediaData }
+    }
+}
+
+// export function isMediaCached(path: string, size: number = mediaSize.drawerSize) {
+//     const mediaId = `${path}-${size}`
+//     return replacedPaths.has(mediaId)
+// }
+
+export async function getMediaCached(path: string, size: number = mediaSize.drawerSize) {
+    const mediaData = clone(get(media)[path])
+
+    const mediaId = `${path}-${size}`
+    if (replacedPaths.has(mediaId)) return { ...replacedPaths.get(mediaId)!, data: mediaData }
+
+    if (currentlyGetting.includes(mediaId)) {
+        await waitUntilValueIsDefined(() => replacedPaths.has(mediaId), 50, 10000)
+        if (replacedPaths.has(mediaId)) return { ...replacedPaths.get(mediaId)!, data: mediaData }
+    }
+
+    return null
+}
+
+export async function locateMediaFile(path: string) {
+    let folders: string[] = []
+    if (get(special).autoLocateMedia !== false) {
+        const mediaType = getMediaType(getExtension(path))
+        if (mediaType === "audio") folders = Object.values(get(audioFolders)).map((a) => a.path!)
+        else folders = Object.values(get(mediaFolders)).map((a) => a.path!)
+    }
+
+    const result = await requestMain(Main.LOCATE_MEDIA_FILE, { filePath: path, folders })
+
+    // if (!result) newToast("error.media")
+    // else if (result.hasChanged) newToast("toast.media_replaced")
+
+    return result
+}
+
+const existingMedia: string[] = []
+export async function doesMediaExist(path: string, noCache = false) {
+    if (existingMedia.includes(path)) return true
+
+    if (noCache) {
+        const existsDataNoCache = await requestMain(Main.DOES_MEDIA_EXIST, { path, noCache })
+        if (existsDataNoCache.exists) existingMedia.push(path)
+        return existsDataNoCache.exists
+    }
+
+    const creationTime = get(media)[path]?.creationTime || 0
+    const existsData = await requestMain(Main.DOES_MEDIA_EXIST, { path, creationTime })
+
+    // update "media"
+    if (!existsData.exists || !creationTime) {
+        media.update((a) => {
+            if (existsData.exists && a[path]) {
+                a[path].creationTime = existsData.creationTime
+            } else {
+                a[path] = { creationTime: existsData.creationTime }
+            }
+
+            return a
+        })
+    }
+
+    if (existsData.exists) existingMedia.push(path)
+    return existsData.exists
 }
 
 export async function getMediaInfo(path: string): Promise<{ codecs: string[]; mimeType: string; mimeCodec: string } | null> {
     let info: { path?: string; codecs: string[]; mimeType: string; mimeCodec: string } | null = null
     if (typeof path !== "string") return info
-    if (path.includes("http") || path.includes("data:")) return info
+    if (!isLocalFile(path)) return info
 
     const cachedInfo = get(media)[path]?.info
     if (cachedInfo?.codecs?.length) return cachedInfo
@@ -193,6 +302,9 @@ export async function getMediaInfo(path: string): Promise<{ codecs: string[]; mi
     if (!info) return info
 
     delete info.path
+
+    if (JSON.stringify(get(media)[path]?.info) === JSON.stringify(info)) return info
+
     media.update((a) => {
         if (!a[path]) a[path] = {}
         a[path].info = info
@@ -213,7 +325,7 @@ export async function isVideoSupported(path: string) {
     // not reliable:
     // const isSupported = MediaSource.isTypeSupported(info.mimeCodec)
 
-    if (isUnsupported) newToast("$toast.unsupported_video")
+    if (isUnsupported) newToast("toast.unsupported_video")
     return !isUnsupported
 }
 
@@ -241,11 +353,18 @@ export function enableSubtitle(video: HTMLVideoElement, languageId: string) {
 }
 
 export function getMediaStyle(mediaObj: MediaStyle | undefined, currentStyle: Styles | undefined) {
+    const fitOptions = {
+        blurAmount: currentStyle?.blurAmount ?? 6,
+        blurOpacity: currentStyle?.blurOpacity || 0.3
+    }
+
     const mediaStyle: MediaStyle = {
         filter: "",
         flipped: false,
         flippedY: false,
         fit: currentStyle?.fit || "contain",
+        fitOptions,
+        volume: currentStyle?.volume ?? 100,
         speed: "1",
         fromTime: 0,
         toTime: 0,
@@ -263,6 +382,31 @@ export function getMediaStyle(mediaObj: MediaStyle | undefined, currentStyle: St
     return mediaStyle
 }
 
+export function getMediaLayerType(path: string, style: MediaStyle | null): "" | "background" | "foreground" {
+    if (!path) return ""
+    if (style?.videoType) return style.videoType as "background" | "foreground"
+
+    // get multiple matching folder paths if children are added
+    let allMatchingFolderPaths: string[] = []
+    const mediaFolderPaths = Object.values(get(mediaFolders)).map((a) => a.path || "")
+    mediaFolderPaths.forEach((folderPath) => {
+        if (path.startsWith(folderPath)) allMatchingFolderPaths.push(folderPath)
+    })
+    if (!allMatchingFolderPaths.length) return ""
+
+    // get longest matching folder path (the closest to the actual file)
+    let matchedFolderPath = ""
+    allMatchingFolderPaths.forEach((folderPath) => {
+        if (folderPath.length > matchedFolderPath.length) matchedFolderPath = folderPath
+    })
+    if (!matchedFolderPath) return ""
+
+    const folderData = Object.values(get(mediaFolders)).find((a) => a.path === matchedFolderPath)
+    if (!folderData) return ""
+
+    return folderData.mediaType || ""
+}
+
 export const mediaSize = {
     big: 900, // stage & editor
     slideSize: 500, // slide + remote
@@ -270,17 +414,15 @@ export const mediaSize = {
     small: 100 // show tools
 }
 
-export async function loadThumbnail(input: string, size: number) {
+export async function loadThumbnail(input: string, size: number = mediaSize.drawerSize) {
     if (typeof input !== "string") return ""
-
-    // online media (e.g. Pixabay/Unsplash)
-    if (input.includes("http") || input.includes("data:")) return input
+    if (!isLocalFile(input)) return input
 
     // already encoded (this could cause an infinite loop)
-    if (input.includes("freeshow-cache")) return input
+    if (input.includes("freeshow-cache") || input.includes("media-cache")) return input
 
     const loadedPath = get(loadedMediaThumbnails)[getThumbnailId({ input, size })]
-    if (loadedPath) return loadedPath
+    if (loadedPath !== undefined) return loadedPath
 
     const data = await requestMain(Main.GET_THUMBNAIL, { input, size })
     if (!data) return ""
@@ -291,17 +433,15 @@ export async function loadThumbnail(input: string, size: number) {
 
 export function getThumbnailPath(input: string, size: number) {
     if (!input) return ""
-
-    // online media (e.g. Pixabay/Unsplash)
-    if (input.includes("http") || input.includes("data:")) return input
+    if (!isLocalFile(input)) return input
 
     // already encoded
-    if (input.includes("freeshow-cache")) return input
+    if (input.includes("freeshow-cache") || input.includes("media-cache")) return input
 
     const loadedPath = get(loadedMediaThumbnails)[getThumbnailId({ input, size })]
-    if (loadedPath) return loadedPath
+    if (loadedPath !== undefined) return loadedPath
 
-    const encodedPath: string = joinPath([get(tempPath), "freeshow-cache", getThumbnailFileName(hashCode(input))])
+    const encodedPath: string = joinPath([get(cachePath), getThumbnailFileName(hashCode(input))])
     return encodedPath
 
     function getThumbnailFileName(path: string) {
@@ -338,9 +478,7 @@ function getThumbnailId(data: { input: string; size: number }) {
 // convert path to base64
 export async function getBase64Path(path: string, size: number = mediaSize.big) {
     if (typeof path !== "string" || !mediaExtensions.includes(getExtension(path))) return ""
-
-    // online media (e.g. Pixabay/Unsplash)
-    if (path.includes("http") || path.includes("data:")) return path
+    if (!isLocalFile(path)) return path
 
     const thumbnailPath = await loadThumbnail(path, size)
     if (!thumbnailPath) return ""
@@ -354,10 +492,11 @@ export async function getBase64Path(path: string, size: number = mediaSize.big) 
     return base64Path || thumbnailPath
 }
 
+// check multiple times as thumbnail should be created if it does not exist
 export async function checkThatMediaExists(path: string, iteration = 1): Promise<boolean> {
     if (iteration > 8) return false
 
-    const exists = await checkMedia(path)
+    const exists = await doesMediaExist(path, true)
     if (!exists) {
         await wait(500 * iteration)
         return checkThatMediaExists(path, iteration + 1)
@@ -366,7 +505,7 @@ export async function checkThatMediaExists(path: string, iteration = 1): Promise
     return exists
 }
 
-let cachedDurations: { [key: string]: number } = {}
+const cachedDurations: { [key: string]: number } = {}
 export function getVideoDuration(path: string): Promise<number> {
     return new Promise((resolve) => {
         if (cachedDurations[path]) {
@@ -402,30 +541,42 @@ export function getVideoDuration(path: string): Promise<number> {
 // CACHE
 
 // const jpegQuality = 90 // 0-100
-const capturing: string[] = []
+const capturing = new Set<string>()
 const retries: { [key: string]: number } = {}
-export function captureCanvas(data: { input: string; output: string; size: any; extension: string; config: any; seek?: number }) {
+export function captureCanvas(data: { input: string; output: string; size: any; extension: string; config: any; id: string; seek?: number }) {
     let completed = false
-    if (capturing.includes(data.output)) return exit()
-    capturing.push(data.output)
+    if (capturing.has(data.output)) return exit()
+    capturing.add(data.output)
 
     const canvas = document.createElement("canvas")
 
     const isImage = imageExtensions.includes(data.extension)
     const mediaElem = document.createElement(isImage ? "img" : "video")
 
+    // Only request CORS for non-local sources.
+    if (!isLocalFile(data.input)) (mediaElem as any).crossOrigin = "anonymous"
+
     mediaElem.addEventListener(isImage ? "load" : "loadeddata", async () => {
-        const currentMediaSize = isImage
-            ? { width: (mediaElem as HTMLImageElement).naturalWidth, height: (mediaElem as HTMLImageElement).naturalHeight }
-            : { width: (mediaElem as HTMLVideoElement).videoWidth, height: (mediaElem as HTMLVideoElement).videoHeight }
+        const currentMediaSize = isImage ? { width: (mediaElem as HTMLImageElement).naturalWidth, height: (mediaElem as HTMLImageElement).naturalHeight } : { width: (mediaElem as HTMLVideoElement).videoWidth, height: (mediaElem as HTMLVideoElement).videoHeight }
         const newSize = getNewSize(currentMediaSize, data.size || {})
         canvas.width = newSize.width
         canvas.height = newSize.height
 
         // seek video
         if (!isImage) {
-            ;(mediaElem as HTMLVideoElement).currentTime = (mediaElem as HTMLVideoElement).duration * (data.seek ?? 0.5)
-            await wait(400)
+            const seekTime = (mediaElem as HTMLVideoElement).duration * (data.seek ?? 0.5)
+            ;(mediaElem as HTMLVideoElement).currentTime = isFinite(seekTime) ? seekTime : 3
+
+            await new Promise((resolve) => {
+                const handler = () => {
+                    mediaElem.removeEventListener("seeked", handler)
+                    resolve(null)
+                }
+                mediaElem.addEventListener("seeked", handler)
+            })
+
+            await new Promise(requestAnimationFrame)
+            await new Promise(requestAnimationFrame)
         }
 
         // wait until loaded
@@ -439,7 +590,7 @@ export function captureCanvas(data: { input: string; output: string; size: any; 
     mediaElem.addEventListener("error", (err) => {
         if (!mediaElem.src || completed) return
 
-        console.error("Could not load media:", err)
+        console.error("Could not load media:", data.input, err)
         if (!retries[data.input]) retries[data.input] = 0
         retries[data.input]++
 
@@ -456,26 +607,43 @@ export function captureCanvas(data: { input: string; output: string; size: any; 
 
         // ensure lessons are downloaded and loaded before capturing
         const isLessons = data.input.includes("Lessons")
-        const loading = isLessons ? 3000 : 200
+        const loading = isLessons ? 3000 : 0
         await wait(loading)
         ctx.drawImage(mediaElem, 0, 0, currentMediaSize.width, currentMediaSize.height, 0, 0, canvas.width, canvas.height)
+        await new Promise(requestAnimationFrame)
 
-        await wait(200)
-        const dataURL = canvas.toDataURL("image/png") // , jpegQuality
+        try {
+            canvas.toBlob((blob) => {
+                if (!blob) return exit()
+                blob.arrayBuffer()
+                    .then((buffer) => {
+                        sendMain(Main.SAVE_IMAGE, { id: data.id, path: data.output, buffer })
+                        completed = true
 
-        sendMain(Main.SAVE_IMAGE, { path: data.output, base64: dataURL })
-        completed = true
-
-        // unload
-        capturing.splice(capturing.indexOf(data.input), 1)
-        mediaElem.src = ""
+                        // unload
+                        capturing.delete(data.output)
+                        mediaElem.src = ""
+                    })
+                    .catch(() => exit())
+            })
+        } catch (error) {
+            // Source is likely cross-origin without CORS if failing
+            console.warn("Could not export thumbnail canvas.:", data.input, error)
+            exit()
+        }
     }
 
     function exit() {
         if (completed) return
 
         completed = true
-        sendMain(Main.SAVE_IMAGE, { path: data.output })
+        sendMain(Main.SAVE_IMAGE, { id: data.id })
+        capturing.delete(data.output)
+
+        // unload
+        mediaElem.onload = null
+        mediaElem.onerror = null
+        mediaElem.src = ""
     }
 }
 
@@ -495,31 +663,179 @@ function getNewSize(contentSize: { width: number; height: number }, newSize: { w
 
 // CROP
 
-export function cropImageToBase64(imagePath: string, crop: Partial<Cropping> | undefined): Promise<string> {
+export function cropImageToBase64(imagePath: string, crop: Partial<Cropping> | undefined, percentageScaling: boolean = false): Promise<string> {
     return new Promise((resolve) => {
         if (!crop) return resolve("")
         if (!crop.bottom && !crop.left && !crop.right && !crop.top) return resolve("")
 
         const img = new Image()
 
-        // needed if loading from local path
-        img.src = imagePath.startsWith("file://") ? imagePath : `file://${imagePath}`
-        img.onload = () => {
-            const cropWidth = img.width - (crop.left || 0) - (crop.right || 0)
-            const cropHeight = img.height - (crop.top || 0) - (crop.bottom || 0)
+        // set crossOrigin to prevent canvas tainting
+        img.crossOrigin = "anonymous"
 
-            if (cropWidth <= 0 || cropHeight <= 0) return resolve("")
+        // needed if loading from local path
+        img.src = encodeFilePath(imagePath)
+        img.onload = () => {
+            const iw = img.naturalWidth
+            const ih = img.naturalHeight
+
+            const left = (crop.left || 0) * (percentageScaling ? iw * 0.01 : 1)
+            const right = (crop.right || 0) * (percentageScaling ? iw * 0.01 : 1)
+            const top = (crop.top || 0) * (percentageScaling ? ih * 0.01 : 1)
+            const bottom = (crop.bottom || 0) * (percentageScaling ? ih * 0.01 : 1)
+
+            const sx = left
+            const sy = top
+            const sWidth = iw - left - right
+            const sHeight = ih - top - bottom
+
+            if (sWidth <= 0 || sHeight <= 0) return resolve("")
 
             const canvas = document.createElement("canvas")
-            canvas.width = cropWidth
-            canvas.height = cropHeight
-
             const ctx = canvas.getContext("2d")!
-            ctx.drawImage(img, crop.left || 0, crop.top || 0, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight)
+
+            if (percentageScaling) {
+                canvas.width = iw
+                canvas.height = ih
+
+                const scaleX = canvas.width / sWidth
+                const scaleY = canvas.height / sHeight
+
+                ctx.save()
+
+                // Office transform
+                ctx.scale(scaleX, scaleY)
+                ctx.translate(-left, -top)
+
+                ctx.drawImage(img, 0, 0)
+
+                ctx.restore()
+            } else {
+                canvas.width = sWidth
+                canvas.height = sHeight
+
+                ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, canvas.width, canvas.height)
+            }
 
             const base64 = canvas.toDataURL("image/png")
             resolve(base64)
         }
         img.onerror = () => resolve("")
     })
+}
+
+export async function downloadOnlineMedia(url: string) {
+    if (!url?.startsWith("http")) return url
+
+    const mediaData = get(media)[url]
+    const downloadedPath = await requestMain(Main.MEDIA_IS_DOWNLOADED, { url, contentFile: mediaData?.contentFile })
+
+    if (downloadedPath?.isDownloading) return url
+    if (downloadedPath?.protectedUrl) return downloadedPath.protectedUrl
+    if (downloadedPath?.path) return downloadedPath.path
+
+    // Check license before downloading (for content providers like APlay)
+    if (mediaData?.contentFile?.mediaId && mediaData?.contentFile?.providerId && !mediaData?.licenseChecked) {
+        media.update((m) => {
+            if (!m[url]) m[url] = {}
+            m[url].licenseChecked = true
+            return m
+        })
+
+        const pingbackUrl = await requestMain(Main.CHECK_MEDIA_LICENSE, {
+            providerId: mediaData.contentFile.providerId,
+            mediaId: mediaData.contentFile.mediaId
+        })
+        if (pingbackUrl) {
+            media.update((m) => {
+                if (!m[url]) m[url] = {}
+                if (!m[url].contentFile) m[url].contentFile = {}
+                m[url].contentFile.pingbackUrl = pingbackUrl
+                return m
+            })
+        }
+    }
+
+    // not downloaded yet - get updated media data in case pingbackUrl was just set
+    const updatedMediaData = get(media)[url]
+    sendMain(Main.MEDIA_DOWNLOAD, { url, contentFile: updatedMediaData?.contentFile })
+    return url
+}
+
+export async function getMediaFileFromClipboard(e: ClipboardEvent): Promise<string | null> {
+    const items = e.clipboardData?.items
+    if (!items) return null
+
+    return new Promise((resolve) => {
+        for (const item of items) {
+            if (!item.type.startsWith("image/")) continue
+
+            const file = item.getAsFile()
+            if (!file) return resolve(null)
+
+            const reader = new FileReader()
+            reader.onload = async (event) => {
+                // base64 image data
+                const dataUrl = event.target?.result as string
+                const compressed = await compressImage(dataUrl)
+                resolve(compressed)
+            }
+            reader.readAsDataURL(file)
+        }
+    })
+}
+
+function compressImage(dataUrl: string, maxWidth = 1920, maxHeight = 1080, quality = 0.8): Promise<string> {
+    return new Promise((resolve) => {
+        const img = new Image()
+
+        // set crossOrigin to prevent canvas tainting
+        img.crossOrigin = "anonymous"
+
+        img.onload = () => {
+            let { width, height } = img
+            if (width > maxWidth || height > maxHeight) {
+                const ratio = Math.min(maxWidth / width, maxHeight / height)
+                width = Math.round(width * ratio)
+                height = Math.round(height * ratio)
+            }
+
+            const canvas = document.createElement("canvas")
+            canvas.width = width
+            canvas.height = height
+
+            const ctx = canvas.getContext("2d")
+            ctx?.drawImage(img, 0, 0, width, height)
+
+            // use png if image has transparency
+            const imageData = ctx?.getImageData(0, 0, width, height)
+            const hasTransparency = imageData?.data.some((_, i) => i % 4 === 3 && imageData.data[i] < 255)
+
+            if (hasTransparency) resolve(canvas.toDataURL("image/png"))
+            else resolve(canvas.toDataURL("image/jpeg", quality))
+        }
+
+        img.src = dataUrl
+    })
+}
+
+export function countFolderMediaItems(folderPath: string, folderContents: FileFolder[]) {
+    const folderFiles = (folderContents.find((a) => a.path === folderPath) as any)?.files || []
+    let count = { folder: 0, audio: 0, video: 0, image: 0 }
+
+    folderFiles.forEach((filePath: string) => {
+        if (filePath === folderPath) return
+
+        const file = folderContents.find((a) => a.path === filePath)
+        if (file?.isFolder) {
+            if (file.files?.length) count.folder++
+            return
+        }
+
+        if (videoExtensions.includes(getExtension(filePath))) count.video++
+        else if (imageExtensions.includes(getExtension(filePath))) count.image++
+        else if (audioExtensions.includes(getExtension(filePath))) count.audio++
+    })
+
+    return count
 }

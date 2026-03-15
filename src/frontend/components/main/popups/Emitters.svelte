@@ -1,22 +1,20 @@
 <script lang="ts">
     import { uid } from "uid"
+    import { Main } from "../../../../types/IPC/Main"
     import type { Emitter, EmitterTemplate, EmitterTemplateValue } from "../../../../types/Show"
-    import { dictionary, emitters } from "../../../stores"
+    import { requestMain } from "../../../IPC/main"
+    import { activePopup, emitters, popupData } from "../../../stores"
     import { emitterData, formatData } from "../../actions/emitters"
+    import MidiValues from "../../actions/MidiValues.svelte"
     import { clone, keysToID, sortByName } from "../../helpers/array"
-    import Icon from "../../helpers/Icon.svelte"
     import T from "../../helpers/T.svelte"
     import DynamicList from "../../input/DynamicList.svelte"
+    import HRule from "../../input/HRule.svelte"
     import { getValues } from "../../input/inputs"
     import Inputs from "../../input/Inputs.svelte"
-    import Button from "../../inputs/Button.svelte"
-    import CombinedInput from "../../inputs/CombinedInput.svelte"
-    import Dropdown from "../../inputs/Dropdown.svelte"
-    import TextInput from "../../inputs/TextInput.svelte"
-    import HRule from "../../input/HRule.svelte"
-    import { requestMain } from "../../../IPC/main"
-    import { Main } from "../../../../types/IPC/Main"
-    import MidiValues from "../../actions/MidiValues.svelte"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
+    import MaterialDropdown from "../../inputs/MaterialDropdown.svelte"
+    import MaterialTextInput from "../../inputs/MaterialTextInput.svelte"
 
     $: emittersList = sortByName(sortByName(keysToID($emitters)), "type")
 
@@ -31,18 +29,29 @@
         return clone(object).map((a) => ({ ...a, value: a.value || (a.name ? `{${a.name.toLowerCase()}}` : "") }))
     }
 
-    $: emitterTypes = [
-        { name: "OSC", id: "osc" },
-        { name: "HTTP", id: "http" },
-        { name: "MIDI", id: "midi" }
+    const emitterTypes = [
+        { value: "osc", label: "OSC" },
+        { value: "http", label: "HTTP" },
+        { value: "midi", label: "MIDI" }
     ]
 
     const DEFAULT_EMITTER: Emitter = { name: "", type: "osc" }
     const DEFAULT_TEMPLATE: EmitterTemplate = { name: "", inputs: [] }
     const DEFAULT_TEMPLATE_VALUE: EmitterTemplateValue = { name: "", value: "" }
 
+    // create from action dropdown
+    const createId = $popupData?.id || ""
+    const createName = $popupData?.name || ""
+    const backData = $popupData?.actionData || null
+    if (createName) {
+        createEmitter()
+        updateValue("name", createName)
+    } else if (createId) {
+        editEmitter = createId
+    }
+
     function createEmitter() {
-        let id = uid()
+        let id = createId || uid()
         emitters.update((a) => {
             a[id] = clone(DEFAULT_EMITTER)
             return a
@@ -73,7 +82,7 @@
         updateValue("templates", templates)
     }
     function updateTemplate(key: string, e: any) {
-        let value = e.target?.value
+        let value = e.detail
         let templates = emitter?.templates || {}
         if (!templates[editTemplate]) return
 
@@ -99,7 +108,7 @@
         updateValue("templates", templates)
     }
     function updateTemplateValue(index: string, key: string, e: any) {
-        let value = e.target?.value
+        let value = e.detail
         let templates = emitter?.templates || {}
         if (!templates[editTemplate]?.inputs?.[index]) return
 
@@ -117,10 +126,8 @@
         updateValue("templates", templates)
     }
 
-    function updateValue(key: keyof Emitter, e: any) {
+    function updateValue(key: keyof Emitter, value: any) {
         if (!editEmitter || !$emitters[editEmitter]) return
-
-        let value = e.target?.value ?? e
 
         emitters.update((a) => {
             a[editEmitter][key] = value
@@ -130,7 +137,6 @@
 
     function changed(e: any, key: keyof Emitter) {
         let input = e.detail
-        if (input.type === "dropdown" && typeof input.value === "object") input.value = input.value.id
 
         let previousValue = emitter[key]
         if (typeof previousValue !== "object") previousValue = {}
@@ -146,31 +152,36 @@
 
     $: if (emitter?.type === "midi") getMidiOutputs()
     function getMidiOutputs() {
-        if (signalInputs[0].type !== "dropdown" || signalInputs[0].options[0]?.id) return
+        if (signalInputs[0].type !== "dropdown" || signalInputs[0].options[0]?.value) return
 
         requestMain(Main.GET_MIDI_OUTPUTS, undefined, (data) => {
             if (!data.length || signalInputs[0].type !== "dropdown") return
 
-            signalInputs[0].options = data.map((a) => ({ id: a.name, ...a }))
+            signalInputs[0].options = data.map((a) => ({ value: a.name, label: a.name, ...a }))
             if (!emitter?.signal?.output) updateValue("signal", { output: data[0].name })
             // if (!signalInputs[0].value) signalInputs[0].value = data[0].name
         })
     }
 </script>
 
-{#if editTemplate && template}
-    <Button class="popup-back" title={$dictionary.actions?.back} on:click={() => (editTemplate = "")}>
-        <Icon id="back" size={2} white />
-    </Button>
+{#if backData}
+    <MaterialButton
+        class="popup-back"
+        icon="back"
+        iconSize={1.3}
+        title="actions.back"
+        on:click={() => {
+            popupData.set(backData)
+            activePopup.set("action")
+        }}
+    />
+{/if}
 
-    <CombinedInput textWidth={30}>
-        <p><T id="midi.name" /></p>
-        <TextInput value={template.name} on:change={(e) => updateTemplate("name", e)} autofocus={!template.name} />
-    </CombinedInput>
-    <CombinedInput textWidth={30}>
-        <p><T id="midi.description" /></p>
-        <TextInput value={template.description || ""} on:change={(e) => updateTemplate("description", e)} />
-    </CombinedInput>
+{#if editTemplate && template}
+    <MaterialButton class="popup-back" icon="back" iconSize={1.3} title="actions.back" on:click={() => (editTemplate = "")} />
+
+    <MaterialTextInput label="midi.name" value={template.name} on:change={(e) => updateTemplate("name", e)} autofocus={!template.name} />
+    <MaterialTextInput label="midi.description" value={template.description || ""} on:change={(e) => updateTemplate("description", e)} />
 
     <HRule title="emitters.inputs" />
 
@@ -179,8 +190,8 @@
     {:else}
         <DynamicList addDisabled={!!templateInputs.find((a) => !a.name && !a.value)} items={templateInputs} let:item={input} on:add={createTemplateValue} on:delete={(e) => removeTemplateValue(e.detail)} allowOpen={false}>
             <div style="display: flex;width: 100%;">
-                <TextInput placeholder={$dictionary.inputs?.name} value={input.name} on:change={(e) => updateTemplateValue(input.id, "name", e)} style="width: 50%;" />
-                <TextInput placeholder={$dictionary.variables?.value} value={input.value} on:change={(e) => updateTemplateValue(input.id, "value", e)} />
+                <MaterialTextInput label="inputs.name" value={input.name} on:change={(e) => updateTemplateValue(input.id, "name", e)} style="width: 50%;" />
+                <MaterialTextInput label="variables.value" value={input.value} on:change={(e) => updateTemplateValue(input.id, "value", e)} style="width: 50%;" />
             </div>
         </DynamicList>
     {/if}
@@ -191,23 +202,14 @@
         </div>
     {/if}
 {:else if editEmitter && emitter}
-    <Button class="popup-back" title={$dictionary.actions?.back} on:click={() => (editEmitter = "")}>
-        <Icon id="back" size={2} white />
-    </Button>
+    {#if !backData}
+        <MaterialButton class="popup-back" icon="back" iconSize={1.3} title="actions.back" on:click={() => (editEmitter = "")} />
+    {/if}
 
-    <CombinedInput textWidth={30}>
-        <p><T id="midi.name" /></p>
-        <TextInput value={emitter.name} on:change={(e) => updateValue("name", e)} autofocus={!emitter.name} />
-    </CombinedInput>
-    <CombinedInput textWidth={30}>
-        <p><T id="midi.description" /></p>
-        <TextInput value={emitter.description || ""} on:change={(e) => updateValue("description", e)} />
-    </CombinedInput>
+    <MaterialTextInput label="midi.name" value={emitter.name} on:change={(e) => updateValue("name", e.detail)} autofocus={!emitter.name} />
+    <MaterialTextInput label="midi.description" value={emitter.description || ""} on:change={(e) => updateValue("description", e.detail)} />
 
-    <CombinedInput textWidth={30}>
-        <p><T id="midi.type" /></p>
-        <Dropdown disabled={!!Object.keys(emitter.templates || {})?.length} options={emitterTypes} value={emitterTypes.find((a) => a.id === emitter.type)?.name || "—"} on:click={(e) => updateValue("type", e.detail.id)} />
-    </CombinedInput>
+    <MaterialDropdown label="midi.type" disabled={!!Object.keys(emitter.templates || {})?.length} options={emitterTypes} value={emitter.type} on:change={(e) => updateValue("type", e.detail)} />
 
     <Inputs inputs={signalInputs} title="emitters.signal" on:change={(e) => changed(e, "signal")} />
 
@@ -216,7 +218,7 @@
     <HRule title="emitters.message_templates" />
 
     <DynamicList items={keysToID(emitter.templates || {})} let:item={template} on:open={(e) => (editTemplate = e.detail)} on:delete={(e) => deleteTemplate(e.detail)} on:add={createTemplate}>
-        <p class="template" style="gap: 5px;width: 100%;min-width: auto;">
+        <p class="template" style="display: flex;gap: 5px;width: 100%;min-width: auto;">
             {template.name || "—"} <span style="display: flex;align-items: center;margin-left: 10px;font-size: 0.8em;opacity: 0.5;font-style: italic;">{template.description || ""}</span>
         </p>
     </DynamicList>
@@ -226,8 +228,8 @@
     {/if}
 
     <DynamicList items={emittersList} let:item={emitter} on:open={(e) => (editEmitter = e.detail)} on:delete={(e) => deleteEmitter(e.detail)} on:add={createEmitter}>
-        <p class="emitter" style="gap: 5px;width: 100%;min-width: auto;">
-            <span style="display: flex;align-items: center;text-transform: uppercase;opacity: 0.7;">[{emitter.type}]</span>{emitter.name || "—"}
+        <p class="emitter" style="display: flex;gap: 5px;width: 100%;min-width: auto;">
+            <span style="display: flex;align-items: center;text-transform: uppercase;opacity: 0.5;min-width: 50px;">{emitter.type}</span>{emitter.name || "—"}
             <span style="display: flex;align-items: center;margin-left: 10px;font-size: 0.8em;opacity: 0.5;font-style: italic;">{emitter.description || ""}</span>
         </p>
     </DynamicList>

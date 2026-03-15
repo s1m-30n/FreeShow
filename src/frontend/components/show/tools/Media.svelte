@@ -1,20 +1,22 @@
 <script lang="ts">
     import { OUTPUT } from "../../../../types/Channels"
     import { Main } from "../../../../types/IPC/Main"
+    import type { MediaStyle } from "../../../../types/Main"
     import type { Media, MediaType, SlideAction } from "../../../../types/Show"
     import { requestMain } from "../../../IPC/main"
     import { AudioMicrophone } from "../../../audio/audioMicrophone"
     import { AudioPlayer } from "../../../audio/audioPlayer"
-    import { activeShow, dictionary, driveData, media, outLocked, outputs, playingAudio, showsCache, styles } from "../../../stores"
-    import { translate } from "../../../utils/language"
+    import { activePopup, activeShow, alertMessage, media, outLocked, outputs, playingAudio, showsCache, styles } from "../../../stores"
+    import { translateText } from "../../../utils/language"
+    import { getAccess } from "../../../utils/profile"
     import { send } from "../../../utils/request"
     import { actionData } from "../../actions/actionData"
     import { getActionName, getActionTriggerId, runAction } from "../../actions/actions"
     import MediaLoader from "../../drawer/media/MediaLoader.svelte"
     import Icon from "../../helpers/Icon.svelte"
     import T from "../../helpers/T.svelte"
-    import { sortByName } from "../../helpers/array"
-    import { getExtension, getMediaStyle, getMediaType, isMediaExtension, loadThumbnail, mediaSize } from "../../helpers/media"
+    import { clone, sortByName } from "../../helpers/array"
+    import { getExtension, getMedia, getMediaStyle, getMediaType, isMediaExtension, mediaSize } from "../../helpers/media"
     import { findMatchingOut, getActiveOutputs, getCurrentStyle, setOutput } from "../../helpers/output"
     import { _show } from "../../helpers/shows"
     import Button from "../../inputs/Button.svelte"
@@ -71,8 +73,6 @@
             if (!show.media?.[a]) return
 
             let path: string = show.media[a].path || show.media[a].id || ""
-            let cloudId = $driveData.mediaId
-            if (cloudId && cloudId !== "default") path = show.media[a].cloud?.[cloudId] || path
 
             let type = (show.media[a].type || getMediaType(getExtension(path))) as MediaType
 
@@ -90,9 +90,6 @@
             if (!show.media?.[a]) return
 
             let path = show.media[a].path!
-            // no need for cloud when audio can be stacked
-            // let cloudId = $driveData.mediaId
-            // if (cloudId && cloudId !== "default") path = show.media[a].cloud?.[cloudId] || path
 
             let type: MediaType = "audio"
 
@@ -117,6 +114,20 @@
     } else mics = []
 
     function setBG(id: string, key: string, value: boolean) {
+        if (show.locked) {
+            alertMessage.set("show.locked")
+            activePopup.set("alert")
+            return
+        }
+
+        const profile = getAccess("shows")
+        const readOnly = profile.global === "read" || profile[show.category || ""] === "read"
+        if (readOnly) {
+            alertMessage.set("profile.locked")
+            activePopup.set("alert")
+            return
+        }
+
         showsCache.update((a) => {
             let bgs = a[$activeShow!.id].media
             if (!bgs[id]) return a // old media
@@ -137,25 +148,24 @@
         })
     } else actions = []
 
-    let simularBgs: { path: string; name: string }[] = []
+    let similarBgs: { path: string; name: string }[] = []
     $: if (bgs.length) getSimularPaths()
     function getSimularPaths() {
-        if (!bgs.filter((a) => !a.path?.includes("http") && !a.path?.includes("data:")).length) return
+        if (!bgs.filter((a) => !a.path?.startsWith("http") && !a.path?.startsWith("data:")).length) return
 
-        requestMain(Main.GET_SIMULAR, { paths: bgs.map((a) => a.path || "") }, (data) => {
-            simularBgs = data.filter((a) => isMediaExtension(getExtension(a.path))).slice(0, 3)
+        requestMain(Main.GET_SIMILAR, { paths: bgs.map((a) => a.path || "") }, (data) => {
+            similarBgs = data.filter((a) => isMediaExtension(getExtension(a.path))).slice(0, 3)
         })
     }
 
-    let newPaths: { [key: string]: string } = {}
+    let newMedia: { [key: string]: { path: string; thumbnail: string; data: MediaStyle } } = {}
     $: if (bgs) loadBackgrounds()
     function loadBackgrounds() {
-        bgs.forEach(async (background) => {
-            let path = background.path || ""
-            let newBgPath = await loadThumbnail(path, mediaSize.small)
+        bgs.forEach(async (bgMedia) => {
+            let bgPath = bgMedia.path || ""
 
-            if (newBgPath) newPaths[path] = newBgPath
-            else newPaths[path] = path
+            const media = await getMedia(bgPath, mediaSize.small)
+            if (media) newMedia[bgPath] = media
         })
     }
 </script>
@@ -165,44 +175,42 @@
         {#if bgs.length}
             <!-- <h5><T id="tools.media" /></h5> -->
             {#each bgs as background}
+                {@const media = newMedia[background.path || ""] || {}}
+
                 <!-- TODO: cameras -->
-                {@const mediaStyle = getMediaStyle($media[background.path || ""], outputStyle)}
-                {@const bgPath = newPaths[background.path || ""] || ""}
+                {@const mediaStyle = getMediaStyle(media.data, outputStyle)}
 
                 <SelectElem id="media" data={{ ...background }} draggable>
-                    <div class="media_item item context #show_media" class:active={findMatchingOut(background.path || "", $outputs)}>
+                    <div class="media_item item context #show_media" class:active={findMatchingOut(media.path || "", $outputs)}>
                         <HoverButton
                             style="flex: 2;height: 50px;max-width: 100px;"
                             icon="play"
                             size={3}
                             on:click={() => {
                                 if (!$outLocked) {
-                                    setOutput("background", { path: background.path, type: background.type, loop: background.loop !== false, muted: background.muted !== false, ...mediaStyle })
+                                    let style = clone(mediaStyle)
+                                    style.fit = media.data?.fit || ""
+                                    delete style.fitOptions
+
+                                    setOutput("background", { path: media.path, type: background.type, loop: background.loop !== false, muted: background.muted !== false, ...style })
                                     if (background.type === "video") send(OUTPUT, ["DATA"], { [outputId]: { duration: 0, paused: false, muted: background.muted !== false, loop: background.loop !== false } })
                                 }
                             }}
-                            title={$dictionary.media?.play}
                         >
-                            <MediaLoader name={background.name} path={background.path || ""} thumbnailPath={bgPath} type={background.type} {mediaStyle} />
+                            <MediaLoader name={background.name} path={media.path} thumbnailPath={media.thumbnail} type={background.type} {mediaStyle} />
                         </HoverButton>
 
-                        <p title={background.path}>{background.name}</p>
+                        <p data-title={decodeURIComponent(media.path || background.path || "")}>{background.name}</p>
 
                         {#if background.count > 1}
                             <span style="color: var(--secondary);font-weight: bold;">{background.count}</span>
                         {/if}
 
                         {#if background.type === "video"}
-                            <Button
-                                style="flex: 0;padding: 14px 5px;"
-                                center
-                                title={background.muted !== false ? $dictionary.actions?.unmute : $dictionary.actions?.mute}
-                                on:click={() => setBG(background.id || "", "muted", background.muted === false)}
-                                dark
-                            >
+                            <Button style="flex: 0;padding: 14px 5px;" center title={translateText(background.muted !== false ? "actions.unmute" : "actions.mute")} on:click={() => setBG(background.id || "", "muted", background.muted === false)} dark>
                                 <Icon id={background.muted !== false ? "muted" : "volume"} white={background.muted !== false} size={1.2} />
                             </Button>
-                            <Button style="flex: 0;padding: 14px 5px;" center title={$dictionary.media?._loop} on:click={() => setBG(background.id || "", "loop", background.loop === false)} dark>
+                            <Button style="flex: 0;padding: 14px 5px;" center title={translateText("media._loop" + (background.loop !== false ? ": settings.enabled" : ""))} on:click={() => setBG(background.id || "", "loop", background.loop === false)} dark>
                                 <Icon id="loop" white={background.loop === false} size={1.2} />
                             </Button>
                         {/if}
@@ -210,10 +218,10 @@
                 </SelectElem>
             {/each}
 
-            {#if simularBgs.length}
+            {#if similarBgs.length}
                 <h5><T id="media.recommended" /></h5>
 
-                {#each simularBgs as background}
+                {#each similarBgs as background}
                     {@const mediaStyle = getMediaStyle($media[background.path], outputStyle)}
                     {@const type = getMediaType(getExtension(background.path)) || "video"}
 
@@ -229,11 +237,10 @@
                                         if (type === "video") send(OUTPUT, ["DATA"], { [outputId]: { duration: 0, paused: false, muted: true, loop: true } })
                                     }
                                 }}
-                                title={$dictionary.media?.play}
                             >
                                 <MediaLoader name={background.name} path={background.path} {type} {mediaStyle} />
                             </HoverButton>
-                            <p title={background.path}>{background.name}</p>
+                            <p data-title={background.path}>{background.name}</p>
                         </div>
                     </SelectElem>
                 {/each}
@@ -291,7 +298,7 @@
                 {@const actionId = getActionTriggerId(action.triggers?.[0])}
                 {@const customData = actionData[actionId] || {}}
                 {@const actionValue = action?.actionValues?.[actionId] || action?.actionValues?.[action.triggers?.[0]] || {}}
-                {@const customName = getActionName(actionId, actionValue) || (action.name !== translate(customData.name) ? action.name : "")}
+                {@const customName = getActionName(actionId, actionValue) || (action.name !== translateText(customData.name) ? action.name : "")}
 
                 <SelectElem id="action" data={action} draggable>
                     <!-- class="context #action" -->

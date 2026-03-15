@@ -2,7 +2,7 @@
     import { uid } from "uid"
     import type { SelectIds } from "../../../types/Main"
     import type { Media, Slide } from "../../../types/Show"
-    import { activeDropId, activeRename, activeShow, disableDragging, os, selected } from "../../stores"
+    import { activeDropId, activeRename, activeShow, disableDragging, os, selected, drawerTabsData, scriptures } from "../../stores"
     import { arrayHasData, clone } from "../helpers/array"
     import { _show } from "../helpers/shows"
     import { getLayoutRef } from "../helpers/show"
@@ -18,11 +18,13 @@
     export let fileOver = false
     export let borders: "all" | "center" | "edges" = "all"
     export let triggerOnHover = false
+    export let dropAbove = false
     let elem: HTMLElement | undefined
 
     function enter(e: any) {
         if (!selectable || $selected.hoverActive) return
-        if (!e.buttons || dragActive || onlyRightClickSelect) return
+        // Only allow left-click (button 1) for drag selection
+        if (!e.buttons || e.buttons !== 1 || dragActive || onlyRightClickSelect) return
 
         if ((id === "project" || id === "folder") && $selected.data[0] && data.index < $selected.data[0].index) {
             selected.set({ id, data: [data] })
@@ -32,6 +34,7 @@
         if ($selected.id !== id) selected.set({ id, data: [data] })
         else if (!arrayHasData($selected.data, data)) {
             selected.update((s) => {
+                if (!Array.isArray(s.data)) s.data = []
                 s.data = [...s.data, data]
                 return s
             })
@@ -39,7 +42,7 @@
     }
 
     const TRIGGER_TIMEOUT = 500
-    let triggerTimeout: NodeJS.Timeout | null = null
+    let triggerTimeout: ReturnType<typeof setTimeout> | null = null
     function triggerHoverAction() {
         if (!triggerOnHover || triggerTimeout) return
 
@@ -96,23 +99,22 @@
         return slideData.filter((a) => a.slide)
     }
 
-    // mac bug causes two finger trackpad to not register as a button 2 input,
-    // this could be a workaround, but contetxmenu is triggered last!
-    // let rightClickMenu = false
-    // function contextmenu() {
-    //     rightClickMenu = true
-    // }
-    // function mouseup() {
-    //     rightClickMenu = false
-    // }
+    // TOUCH SCREEN: synthesize a minimal mouse-like event and reuse mousedown logic
+    // did not work at the moment
+    // on:touchstart={touchstart}
+    // function touchstart(e: TouchEvent) {
+    //     const fakeMouseEvent: any = {
+    //         button: 0,
+    //         buttons: 1,
+    //         shiftKey: false,
+    //         ctrlKey: false,
+    //         metaKey: false,
+    //         // keep the original target so remainSelected/deselect logic still works
+    //         target: (e as any).target || undefined
+    //     }
 
-    // TOUCH SCREEN
-
-    function touchstart(e: TouchEvent) {
-        // Convert to a synthetic "mouse" event for reuse
-        const fakeMouseEvent = { ...e, button: 0, buttons: 1 }
-        mousedown(fakeMouseEvent, false)
-    }
+    //     mousedown(fakeMouseEvent, false)
+    // }
 
     function touchend(e: TouchEvent) {
         endDrag()
@@ -150,7 +152,7 @@
         }
 
         // shift select range
-        if (e.shiftKey && (shiftRange.length || $selected.data[0]?.index !== undefined)) {
+        if (e.shiftKey && ((shiftRange.length && $selected.data[0]) || $selected.data[0]?.index !== undefined)) {
             const searchKeys = ["id", "index", "path"]
             let lastSelected = $selected.data[$selected.data.length - 1]
             if (!lastSelected) return
@@ -162,10 +164,13 @@
 
             let selectedBetween: number[] = range(lowestNumber, highestNumber)
             function range(start: number, end: number) {
-                return Array(end - start + 1)
+                return Array(Math.abs(end - start) + 1)
                     .fill("")
                     .map((_, idx) => start + idx)
             }
+
+            // nothing in between
+            if (newIndex - 1 === lastSelectedIndex || newIndex + 1 === lastSelectedIndex) selectedBetween = [selectedBetween[0]]
 
             let dataBetween = selectedBetween.map((index) => (shiftRange.length ? shiftRange[index] : { index }))
             let allNewData = [...$selected.data, ...dataBetween, data]
@@ -175,10 +180,13 @@
             if (shiftRange) {
                 allNewData = allNewData
                     .map((data) => {
+                        if (!data) return null
+
                         let newData: any = {}
                         keys.forEach((key) => {
                             newData[key] = data[key]
                         })
+
                         return newData
                     })
                     .filter((a) => a)
@@ -198,6 +206,38 @@
             return
         }
 
+        // Special handling for scripture tabs: shift+click to select range from active to clicked
+        if (e.shiftKey && id.toString().includes("category_scripture")) {
+            // WIP this is bad, find the last selected elem of same type instead of the active one
+            const activeScriptureId = $drawerTabsData.scripture?.activeSubTab
+            if (activeScriptureId && activeScriptureId !== data) {
+                // Get all scripture keys of the same type (API or local)
+                const activeScripture = $scriptures[activeScriptureId]
+                const currentScripture = $scriptures[data]
+                if (activeScripture && currentScripture && !!activeScripture.api === !!currentScripture.api) {
+                    // Get all scriptures of the same type
+                    const allScriptureIds = Object.keys($scriptures).filter((scriptureId) => {
+                        const scripture = $scriptures[scriptureId]
+                        return scripture && !!scripture.api === !!activeScripture.api
+                    })
+
+                    // Find indices of active and clicked scriptures
+                    const activeIndex = allScriptureIds.indexOf(activeScriptureId)
+                    const clickedIndex = allScriptureIds.indexOf(data)
+
+                    if (activeIndex !== -1 && clickedIndex !== -1) {
+                        const startIndex = Math.min(activeIndex, clickedIndex)
+                        const endIndex = Math.max(activeIndex, clickedIndex)
+
+                        // Select all scriptures in the range
+                        const selectedRange = allScriptureIds.slice(startIndex, endIndex + 1)
+                        selected.set({ id, data: selectedRange })
+                        return
+                    }
+                }
+            }
+        }
+
         let alreadySelected: boolean = $selected.id === id && arrayHasData($selected.data, data)
         let selectMultiple: boolean = e.ctrlKey || e.metaKey || e.shiftKey || e.buttons === 4 // middle mouse button
 
@@ -214,8 +254,12 @@
                 newData = $selected.data.filter((a) => JSON.stringify(a) !== JSON.stringify(data))
             } else if (selectMultiple) {
                 // && $selected.id === id
-                newData = [...$selected.data, data]
-            } else if (rightClick) newData = [data]
+                let selectedData = $selected.data ?? []
+                if (!Array.isArray(selectedData)) selectedData = [$selected.data]
+                newData = [...selectedData, data]
+            } else if (rightClick) {
+                newData = [data]
+            }
         }
 
         if (!newData?.length) selected.set({ id: null, data: [] })
@@ -284,25 +328,16 @@
     }}
 />
 
-<div
-    {id}
-    data={JSON.stringify(data)}
-    {draggable}
-    style={$$props.style}
-    class="selectElem {$$props.class || ''}"
-    class:fill
-    class:isSelected={$selected.id === id && arrayHasData($selected.data, data)}
-    bind:this={elem}
-    on:mouseenter={enter}
-    on:mousedown={mousedown}
-    on:dragstart={(e) => mousedown(e, true)}
-    on:touchstart={touchstart}
->
+<div {id} data-item={JSON.stringify(data)} {draggable} style={$$props.style} class="selectElem {$$props.class || ''}" class:fill class:isSelected={selectable && $selected.id === id && arrayHasData($selected.data, data)} bind:this={elem} on:mouseenter={enter} on:mousedown={mousedown} on:dragstart={(e) => mousedown(e, true)}>
     <!-- on:mouseup={mouseup}
     on:contextmenu={contextmenu} -->
     <!-- TODO: validateDrop(id, $selected.id, true) -->
     {#if trigger && (dragActive || fileOver)}
         <div id={thisId} class="trigger {trigger} {dragover ? dragover : ''}" style="flex-direction: {trigger};" on:dragleave={stopDrag}>
+            {#if dropAbove}
+                <span id="start" class="TriggerBlock over" />
+            {/if}
+
             {#if borders === "all" || borders === "edges"}
                 <span id="start" class="TriggerBlock" on:dragover={() => dragOver("start")} />
             {/if}
@@ -330,8 +365,10 @@
         /* outline: 2px solid red;
     outline-offset: 2px; */
         background-color: var(--focus);
-        outline: 2px solid var(--secondary-text);
+        outline: 2px solid var(--text);
         opacity: 0.9;
+
+        border-radius: 6px;
 
         /* filter: invert(1); */
         /* filter: sepia(1); */
@@ -394,5 +431,14 @@
         inset-inline-end: calc(var(--border-width) / 2 * -1);
         height: 100%;
         width: var(--border-width);
+    }
+
+    .trigger span.over {
+        position: absolute;
+        top: 0;
+        transform: translateY(-100%);
+
+        height: 10px;
+        display: flex;
     }
 </style>

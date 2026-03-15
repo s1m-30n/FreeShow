@@ -1,4 +1,4 @@
-import type { LayoutRef, Show } from "../../../types/Show"
+import type { LayoutRef, Line, Show } from "../../../types/Show"
 import { clone, keysToID } from "./helpers"
 
 export function getLayoutRef(currentShow: Show, layoutId: string = "") {
@@ -32,7 +32,7 @@ export function getLayoutRef(currentShow: Show, layoutId: string = "") {
                 layoutIndex,
                 id: childId,
                 parent: { id: layoutSlide.id, index, layoutIndex: layoutIndex - jndex - 1 },
-                data: layoutSlide.children?.[childId] || {},
+                data: layoutSlide.children?.[childId] || {}
             })
         })
     })
@@ -51,7 +51,10 @@ export function getGroupName({ show, showId }: { show: Show; showId: string }, s
     // sort by order when just one layout
     let slides = keysToID(clone(show.slides || {}))
     if (Object.keys(show.layouts || {}).length < 2) {
-        let layoutSlides = Object.values(show.layouts || {})[0]?.slides?.map(({ id }) => id) || []
+        let layoutSlides =
+            Object.values(show.layouts || {})[0]
+                ?.slides?.filter(Boolean)
+                ?.map(({ id }) => id) || []
         slides = slides.sort((a, b) => layoutSlides.indexOf(a.id) - layoutSlides.indexOf(b.id))
     }
 
@@ -71,4 +74,24 @@ export function getGroupName({ show, showId }: { show: Show; showId: string }, s
     name += addHTML ? currentLayoutNumberHTML : currentLayoutNumber
 
     return name
+}
+
+export const VIRTUAL_BREAK_CHAR = "[_VB]"
+export function createVirtualBreaks(lines: Line[], skip: boolean = false) {
+    if (!lines?.length) return []
+
+    const replaceWith = skip ? "" : "<br>"
+    lines.forEach((line) => {
+        if (!Array.isArray(line?.text)) return
+
+        line.text.forEach((text) => {
+            text.value = replaceVirtualBreaks(text.value, replaceWith)
+        })
+    })
+
+    return lines
+}
+export function replaceVirtualBreaks(line: string, replaceWith: string = "<br>") {
+    // replace & remove spaces
+    return line.replaceAll(VIRTUAL_BREAK_CHAR, replaceWith).replace(/\s*<br>\s*/g, "<br>")
 }

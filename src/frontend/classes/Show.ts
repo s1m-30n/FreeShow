@@ -2,7 +2,8 @@ import { get } from "svelte/store"
 import { uid } from "uid"
 import type { Show } from "../../types/Show"
 import { _show } from "../components/helpers/shows"
-import { activeShow, dictionary, templates } from "../stores"
+import { activeShow, templates } from "../stores"
+import { translateText } from "../utils/language"
 
 export class ShowObj implements Show {
     name: string
@@ -13,12 +14,7 @@ export class ShowObj implements Show {
     settings: any
     timestamps: any
     quickAccess: any
-    message?: {
-        text: string
-        template?: string
-    }
     metadata?: {
-        autoMedia?: boolean
         override: boolean
         display: string
         template: string
@@ -44,12 +40,12 @@ export class ShowObj implements Show {
         this.timestamps = {
             created,
             modified: null,
-            used: null,
+            used: null
         }
         this.quickAccess = {}
         this.meta = {}
         this.slides = {}
-        this.layouts = { [layoutId]: { name: get(dictionary).example?.default || "Default", notes: "", slides: [] } }
+        this.layouts = { [layoutId]: { name: translateText("example.default"), notes: "", slides: [] } }
         this.media = {}
     }
 }

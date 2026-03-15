@@ -1,12 +1,26 @@
 name: freeshow
-version: 1.4.0
+version: 1.4.9
 title: FreeShow
-summary: FreeShow
-description: Show song lyrics and more for free!
+summary: Show song lyrics and more for free!
+description: A dynamic, user-friendly, and open-source presenter built for all of your presentations.
+contact:
+    - dev@freeshow.app
+license: GPL-3.0-or-later
+donation:
+    - https://churchapps.org/partner
+issues:
+    - https://github.com/churchapps/freeshow/issues
+source-code:
+    - https://github.com/churchapps/freeshow
+website:
+    - https://freeshow.app
 platforms:
     amd64:
         build-on: amd64
         build-for: amd64
+    arm64:
+        build-on: arm64
+        build-for: arm64
 base: core24
 grade: stable
 confinement: strict
@@ -36,25 +50,37 @@ parts:
         plugin: dump
         stage-packages:
             - libasound2t64
+            - libnode109
+            - libglu1-mesa
+            - libltc11
 apps:
     freeshow:
         command: command.sh
         extensions: [gnome]
         plugs:
             - alsa
+            - audio-playback
+            - avahi-control
+            - browser-support
+            - camera
             - desktop
             - desktop-legacy
             - home
-            - x11
-            - wayland
-            - unity7
-            - browser-support
-            - network
             - gsettings
-            - audio-playback
-            - pulseaudio
+            - network
+            - network-bind
+            - network-control
+            - network-observe
+            - network-manager
+            - network-manager-observe
+            - network-setup-observe
             - opengl
+            - pulseaudio
+            - pipewire
             - removable-media
+            - unity7
+            - wayland
+            - x11
         environment:
             PATH: $SNAP/usr/sbin:$SNAP/usr/bin:$SNAP/sbin:$SNAP/bin:$PATH
             SNAP_DESKTOP_RUNTIME: $SNAP/gnome-platform

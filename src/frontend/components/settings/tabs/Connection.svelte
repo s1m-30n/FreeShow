@@ -1,69 +1,36 @@
 <script lang="ts">
     import { onMount } from "svelte"
+    import type { ContentProviderId } from "../../../../electron/contentProviders/base/types"
     import { Main } from "../../../../types/IPC/Main"
     import { requestMain, sendMain } from "../../../IPC/main"
-    import {
-        activePage,
-        activePopup,
-        activeShow,
-        companion,
-        connections,
-        dataPath,
-        disabledServers,
-        maxConnections,
-        outputs,
-        pcoConnected,
-        chumsConnected,
-        popupData,
-        ports,
-        remotePassword,
-        serverData,
-        activeTriggerFunction,
-        dictionary
-    } from "../../../stores"
-    import { pcoSync, chumsSync } from "../../../utils/startup"
+    import { activePage, activePopup, activeShow, activeTriggerFunction, cloudSyncData, companion, connections, contentProviderData, disabledServers, maxConnections, outputs, popupData, ports, providerConnections, serverData, special } from "../../../stores"
+    import { contentProviderSync } from "../../../utils/startup"
     import Icon from "../../helpers/Icon.svelte"
     import T from "../../helpers/T.svelte"
     import { checkWindowCapture } from "../../helpers/output"
-    import Button from "../../inputs/Button.svelte"
-    import Checkbox from "../../inputs/Checkbox.svelte"
-    import CombinedInput from "../../inputs/CombinedInput.svelte"
+    import InputRow from "../../input/InputRow.svelte"
+    import Title from "../../input/Title.svelte"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
+    import MaterialToggleSwitch from "../../inputs/MaterialToggleSwitch.svelte"
 
     let ip = "localhost"
 
     onMount(async () => {
-        getIP(await requestMain(Main.IP))
+        ip = (await requestMain(Main.IP))[0]
     })
 
-    function getIP(nets: any) {
-        let results: any = {}
-        for (const name of Object.keys(nets)) {
-            for (const net of nets[name]) {
-                // Skip over non-IPv4 and internal (i.e. 127.0.0.1) addresses
-                // 'IPv4' is in Node <= 17, from 18 it's a number 4 or 6
-                const familyV4Value = typeof net.family === "string" ? "IPv4" : 4
-                if (net.family === familyV4Value && !net.internal) {
-                    if (!results[name]) results[name] = []
-                    results[name].push(net.address)
-                }
-            }
-        }
-
-        ip = results["en0"]?.[0] || results["eth0"]?.[0] || results["Wi-Fi"]?.[0] || Object.values(results)[0]?.[0] || "localhost"
-    }
-
-    function reset() {
-        remotePassword.set(randomNumber(1000, 9999).toString())
-        ports.set({ remote: 5510, stage: 5511 })
-        maxConnections.set(10)
-        disabledServers.set({})
-        serverData.set({})
-    }
-
-    const randomNumber = (from: number, to: number): number => Math.floor(Math.random() * (to - from)) + from
+    // WIP reset in popups
+    // function reset() {
+    //     remotePassword.set(randomNumber(1000, 9999).toString())
+    //     ports.set({ remote: 5510, stage: 5511 })
+    //     maxConnections.set(10)
+    //     disabledServers.set({})
+    //     serverData.set({})
+    // }
+    // const randomNumber = (from: number, to: number): number => Math.floor(Math.random() * (to - from)) + from
 
     function toggleServer(e: any, id: string) {
-        let value = e.target.checked
+        let value = e.detail
 
         disabledServers.update((a) => {
             a[id] = !value
@@ -88,7 +55,7 @@
     }
 
     function toggleCompanion(e: any) {
-        let value = e.target.checked
+        let value = e.detail
 
         companion.update((a) => {
             a.enabled = value
@@ -119,6 +86,7 @@
         { id: "remote", name: "RemoteShow", icon: "connection", enabledByDefault: true },
         { id: "stage", name: "StageShow", icon: "stage", enabledByDefault: true },
         { id: "controller", name: "ControlShow", icon: "connection", enabledByDefault: false },
+        // ...(($special.optimizedMode && $disabledServers.output_stream !== false) ? [] : [{ id: "output_stream", name: "OutputShow", icon: "stage", enabledByDefault: false }]),
         { id: "output_stream", name: "OutputShow", icon: "stage", enabledByDefault: false },
         // Bitfocus Companion (WebSocket/REST)
         { id: "companion", name: "API", icon: "companion", enabledByDefault: false, url: "https://freeshow.app/docs/companion" }
@@ -127,38 +95,184 @@
     // Camera
     // Answer / Guess / Poll
 
-    function pcoConnect() {
-        if (!$pcoConnected) sendMain(Main.PCO_LOAD_SERVICES, { dataPath: $dataPath })
-        else {
-            requestMain(Main.PCO_DISCONNECT, undefined, (a) => {
+    $: cloudOnly = { churchApps: !!$special.churchAppsCloudOnly }
+    function contentProviderConnect(providerId: ContentProviderId) {
+        if (!$providerConnections[providerId] || cloudOnly[providerId]) {
+            if (providerId === "churchApps") {
+                special.update((a) => {
+                    delete a.churchAppsCloudOnly
+                    return a
+                })
+
+                if ($cloudSyncData.enabled === undefined) {
+                    cloudSyncData.set({ enabled: false, id: "churchApps" })
+                }
+            }
+
+            sendMain(Main.PROVIDER_LOAD_SERVICES, { providerId, cloudOnly: cloudOnly[providerId] || false })
+        } else {
+            if ($cloudSyncData.enabled && providerId === $cloudSyncData.id) {
+                // should remain connected to cloud
+                special.update((a) => {
+                    a.churchAppsCloudOnly = true
+                    return a
+                })
+                return
+            }
+
+            requestMain(Main.PROVIDER_DISCONNECT, { providerId }, (a) => {
                 if (!a.success) return
-                pcoConnected.set(false)
+                providerConnections.update((c) => {
+                    c[providerId] = false
+                    return c
+                })
             })
         }
     }
 
-    function syncPCO() {
-        pcoSync()
+    function syncContentProvider() {
+        contentProviderSync()
         activeShow.set(null)
         activePage.set("show")
     }
 
-    function chumsConnect() {
-        if (!$chumsConnected) sendMain(Main.CHUMS_LOAD_SERVICES)
-        else {
-            requestMain(Main.CHUMS_DISCONNECT, undefined, (a) => {
-                if (!a.success) return
-                chumsConnected.set(false)
-            })
-        }
+    function updateProvider(id: ContentProviderId, key: string, value: any) {
+        contentProviderData.update((a) => {
+            if (!a[id]) a[id] = {}
+            a[id][key] = value
+            return a
+        })
     }
 
-    function syncChums() {
-        chumsSync()
-        activeShow.set(null)
-        activePage.set("show")
+    // TEMP solution
+    let showAll = false
+    let taps = 0
+    function tap() {
+        taps++
+        setTimeout(() => {
+            taps = 0
+        }, 1500)
+
+        if (taps >= 3) showAll = true
     }
 </script>
+
+{#each servers as server}
+    {@const disabled = server.id === "companion" ? $companion?.enabled !== true : server.enabledByDefault ? $disabledServers[server.id] === true : $disabledServers[server.id] !== false}
+    {@const connections = Object.keys($connections[server.id.toUpperCase()] || {})?.length || 0}
+
+    <InputRow>
+        <MaterialButton
+            style="flex: 1;justify-content: space-between;"
+            {disabled}
+            on:click={() => {
+                popupData.set({ ip, id: server.id })
+                activePopup.set("connect")
+            }}
+        >
+            <span style="display: flex;align-items: center;justify-content: center;gap: 15px;">
+                <Icon id={server.icon} size={1.1} />
+
+                {server.name}
+
+                {#if server.id === "companion"}
+                    <span style="opacity: 0.5;font-size: 0.7em;margin-left: 5px;">WebSocket/REST/OSC/Companion</span>
+                {/if}
+                {#if connections}
+                    <span style="opacity: 0.5;font-size: 0.7em;margin-left: 5px;">{connections}</span>
+                {/if}
+            </span>
+
+            {#if server.id === "output_stream" && $serverData.output_stream?.sendAudio}
+                <span style="border: none;display: flex;align-items: center;justify-content: end;">
+                    <Icon id="volume" />
+                </span>
+            {/if}
+        </MaterialButton>
+
+        {#if server.id === "companion"}
+            <MaterialToggleSwitch label="" checked={$companion?.enabled === true} on:change={toggleCompanion} />
+        {:else}
+            <MaterialToggleSwitch label="" checked={server.enabledByDefault ? $disabledServers[server.id] !== true : $disabledServers[server.id] === false} on:change={(e) => toggleServer(e, server.id)} />
+        {/if}
+    </InputRow>
+{/each}
+
+{#if !$providerConnections.planningcenter && (!$providerConnections.churchApps || cloudOnly.churchApps) && !$providerConnections.amazinglife}
+    <!-- No provider connected - show connection options -->
+    <div class="tapping" on:click={tap}>
+        <Title label="settings.content_provider" icon="list" />
+    </div>
+
+    <InputRow>
+        <MaterialButton on:click={() => contentProviderConnect("planningcenter")} style="flex: 1;" icon="login">
+            <T id="settings.connect_to" replace={["Planning Center"]} />
+        </MaterialButton>
+    </InputRow>
+
+    <InputRow>
+        <MaterialButton on:click={() => contentProviderConnect("churchApps")} style="flex: 1;" icon="login">
+            <T id="settings.connect_to" replace={["ChurchApps"]} />
+        </MaterialButton>
+    </InputRow>
+
+    {#if showAll}
+        <InputRow>
+            <MaterialButton on:click={() => contentProviderConnect("amazinglife")} style="flex: 1;" icon="login">
+                <T id="settings.connect_to" replace={["APlay"]} />
+            </MaterialButton>
+        </InputRow>
+    {/if}
+{:else if $providerConnections.planningcenter}
+    <!-- Planning Center connected -->
+    <Title label="Content Provider: Planning Center" icon="list" />
+
+    <InputRow>
+        <MaterialButton on:click={() => contentProviderConnect("planningcenter")} style="flex: 1;border-bottom: 2px solid var(--connected) !important;" icon="logout">
+            <T id="settings.disconnect_from" replace={["Planning Center"]} />
+        </MaterialButton>
+        <MaterialButton icon="cloud_sync" on:click={syncContentProvider}>
+            <T id="cloud.sync" />
+        </MaterialButton>
+        <MaterialButton on:click={() => sendMain(Main.URL, "https://planningcenter.com")} title="Planning Center" white>
+            <Icon id="launch" white />
+        </MaterialButton>
+    </InputRow>
+    <MaterialToggleSwitch label="Always use local instance of songs" checked={$contentProviderData.planningcenter?.localAlways} defaultValue={false} on:change={(e) => updateProvider("planningcenter", "localAlways", e.detail)} />
+{:else if $providerConnections.churchApps && !cloudOnly.churchApps}
+    <!-- ChurchApps connected -->
+    <Title label="Content Provider: ChurchApps" icon="list" />
+
+    <InputRow>
+        <MaterialButton on:click={() => contentProviderConnect("churchApps")} style="flex: 1;border-bottom: 2px solid var(--connected) !important;" icon="logout">
+            <T id="settings.disconnect_from" replace={["ChurchApps"]} />
+        </MaterialButton>
+        <MaterialButton icon="cloud_sync" on:click={syncContentProvider}>
+            <T id="cloud.sync" />
+        </MaterialButton>
+        <MaterialButton title="<b>popup.sync_categories:</b> settings.sync_categories_tip" icon="options" on:click={() => activePopup.set("sync_categories")} />
+        <MaterialButton on:click={() => sendMain(Main.URL, "https://b1.church")} title="B1.Church" white>
+            <Icon id="launch" white />
+        </MaterialButton>
+    </InputRow>
+
+    {#if $cloudSyncData.enabled}
+        <p class="tip">Note: This is unrelated to the Cloud sync found in "Files". This is for the content manager / curriculum.</p>
+    {/if}
+{:else if $providerConnections.amazinglife}
+    <!-- APlay connected -->
+    <Title label="Content Provider: APlay" icon="list" />
+
+    <InputRow>
+        <MaterialButton on:click={() => contentProviderConnect("amazinglife")} style="flex: 1;border-bottom: 2px solid var(--connected) !important;" icon="logout">
+            <T id="settings.disconnect_from" replace={["APlay"]} />
+        </MaterialButton>
+        <!-- Nothing to sync yet -->
+        <!-- <MaterialButton icon="cloud_sync" on:click={syncContentProvider}>
+            <T id="cloud.sync" />
+        </MaterialButton> -->
+    </InputRow>
+{/if}
 
 <!-- <CombinedInput>
     <Button style="width: 100%;" on:click={restart} center>
@@ -172,145 +286,15 @@
   <TextInput style="max-width: 50%;" value={$os.name} light />
 </div> -->
 
-{#each servers as server}
-    {@const disabled = server.id === "companion" ? $companion?.enabled !== true : server.enabledByDefault ? $disabledServers[server.id] === true : $disabledServers[server.id] !== false}
-    {@const connections = Object.keys($connections[server.id.toUpperCase()] || {})?.length || 0}
-    <CombinedInput>
-        <span style="width: 100%;">
-            <Button
-                style="width: 100%;"
-                on:click={() => {
-                    popupData.set({ ip, id: server.id })
-                    activePopup.set("connect")
-                }}
-                {disabled}
-            >
-                <div style="margin: 0;border: none;">
-                    <Icon id={server.icon} size={1.1} right />
-                    <p style="min-width: fit-content;padding-inline-end: 0;">
-                        {server.name}
-                        {#if server.id === "companion"}<span style="border: none;opacity: 0.8;font-size: 0.9em;padding-inline-start: 15px;" class="connections">WebSocket/REST/OSC/Companion</span>{/if}
-                        {#if connections}<span style="border: none;" class="connections">{connections}</span>{/if}
-                    </p>
-                </div>
-                {#if server.id === "output_stream" && $serverData.output_stream?.sendAudio}
-                    <span style="border: none;display: flex;align-items: center;justify-content: end;">
-                        <Icon id="volume" />
-                    </span>
-                {/if}
-            </Button>
-        </span>
-        <span class="alignRight" style="padding-inline-start: 10px;">
-            {#if server.id === "companion"}
-                <Checkbox checked={$companion?.enabled === true} on:change={toggleCompanion} />
-            {:else}
-                <Checkbox checked={server.enabledByDefault ? $disabledServers[server.id] !== true : $disabledServers[server.id] === false} on:change={(e) => toggleServer(e, server.id)} />
-            {/if}
-        </span>
-    </CombinedInput>
-{/each}
-
-<!-- Planning Center -->
-<h3>Planning Center</h3>
-
-<CombinedInput style="border-bottom: 2px solid var(--{$pcoConnected ? 'connected' : 'disconnected'});">
-    <Button on:click={pcoConnect} style="width: 100%;" center>
-        <Icon id={$pcoConnected ? "logout" : "login"} right />
-        {#if $pcoConnected}
-            <T id="settings.disconnect_from" replace={["Planning Center"]} />
-        {:else}
-            <T id="settings.connect_to" replace={["Planning Center"]} />
-        {/if}
-    </Button>
-    {#if $pcoConnected}
-        <Button on:click={syncPCO}>
-            <Icon id="cloud_sync" right />
-            <p><T id="cloud.sync" /></p>
-        </Button>
-    {/if}
-</CombinedInput>
-
-<!-- Chums -->
-<h3>Chums</h3>
-
-<CombinedInput style="border-bottom: 2px solid var(--{$chumsConnected ? 'connected' : 'disconnected'});">
-    <Button on:click={chumsConnect} style="width: 100%;" center>
-        <Icon id={$chumsConnected ? "logout" : "login"} right />
-        {#if $chumsConnected}
-            <T id="settings.disconnect_from" replace={["Chums"]} />
-        {:else}
-            <T id="settings.connect_to" replace={["Chums"]} />
-        {/if}
-    </Button>
-    {#if $chumsConnected}
-        <Button on:click={syncChums}>
-            <Icon id="cloud_sync" right />
-            <p><T id="cloud.sync" /></p>
-        </Button>
-        <Button title={$dictionary.chums?.sync_categories_description} on:click={() => activePopup.set("chums_sync_categories")}>
-            <Icon id="settings" right />
-            <p><T id="chums.sync_categories" /></p>
-        </Button>
-    {/if}
-</CombinedInput>
-
 <!-- <div>
   <p><T id="settings.allowed_connections" /></p>
   <span>(all, only phones, (laptops), ...)</span>
 </div> -->
 
-<div class="filler" />
-<div class="bottom">
-    <Button style="width: 100%;" on:click={reset} center>
-        <Icon id="reset" right />
-        <T id="actions.reset" />
-    </Button>
-</div>
-
 <style>
-    div:not(.scroll):not(.bottom):not(.filler) {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin: 5px 0;
-        min-height: 38px;
-    }
-
-    .connections {
-        display: flex;
-        align-items: center;
-        padding-inline-start: 10px;
-        opacity: 0.5;
-        font-weight: normal;
-    }
-
-    .filler {
-        height: 48px;
-    }
-    .bottom {
-        position: absolute;
-        bottom: 0;
-        inset-inline-start: 0;
-        width: 100%;
-        background-color: var(--primary-darkest);
-
-        display: flex;
-        flex-direction: column;
-    }
-
-    h3 {
-        color: var(--text);
-        text-transform: uppercase;
-        text-align: center;
-        font-size: 0.9em;
-        margin: 20px 0;
-    }
-
-    h3 {
-        color: var(--text);
-        text-transform: uppercase;
-        text-align: center;
-        font-size: 0.9em;
-        margin: 20px 0;
+    .tip {
+        font-size: 0.8em;
+        opacity: 0.6;
+        margin: 10px 0;
     }
 </style>

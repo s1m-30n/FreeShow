@@ -2,8 +2,9 @@
     import { Main } from "../../../../types/IPC/Main"
     import { requestMain } from "../../../IPC/main"
     import { activeProject, outLocked, outputs, presentationData, projects, special } from "../../../stores"
+    import { triggerClickOnEnterSpace } from "../../../utils/clickable"
     import { getFileName, removeExtension } from "../../helpers/media"
-    import { getActiveOutputs } from "../../helpers/output"
+    import { getAllActiveOutputIds } from "../../helpers/output"
     import T from "../../helpers/T.svelte"
     import Window from "../../output/Window.svelte"
     import Center from "../../system/Center.svelte"
@@ -30,7 +31,7 @@
     function receiveWindows(a: any) {
         chosenWindow = null
 
-        let savedScreen = $projects[$activeProject || ""].shows.find((a) => a.id === path)?.data?.screenName
+        let savedScreen = $projects[$activeProject || ""]?.shows?.find((a) => a.id === path)?.data?.screenName
         if (savedScreen) {
             let window = a.find((a) => a.name === savedScreen)
             if (window) {
@@ -70,7 +71,7 @@
         // save chosen screen in project item
         if (save) {
             projects.update((a) => {
-                let projectIndex = a[$activeProject || ""]?.shows?.findIndex((a) => a.id === path)
+                let projectIndex = a[$activeProject || ""]?.shows?.findIndex((a) => a.id === path) ?? -1
                 if (projectIndex < 0) return a
 
                 a[$activeProject!].shows[projectIndex].data = { screenName: chosenWindow.name }
@@ -81,7 +82,7 @@
         // update output with screen
         if ($outLocked) return
 
-        let outputIds = getActiveOutputs()
+        const outputIds = getAllActiveOutputIds()
         outputs.update((a) => {
             outputIds.forEach((id) => {
                 if (a[id].out?.slide?.type !== "ppt") return
@@ -100,9 +101,9 @@
         <p style="padding: 0 10px;"><T id="presentation_control.choose_window" />:</p>
         <div class="choose">
             {#each chooseWindow as screen}
-                <div class="screen" on:click={() => selectWindow(screen, true)}>
+                <div class="screen" role="button" tabindex="0" on:click={() => selectWindow(screen, true)} on:keydown={triggerClickOnEnterSpace}>
                     <Window id={screen.id} class="media" style="width: 100%;height: 100%;pointer-events: none;position: absolute;" />
-                    <p title={screen.name}>{screen.name}</p>
+                    <p data-title={screen.name}>{screen.name}</p>
                 </div>
             {/each}
         </div>
@@ -142,5 +143,9 @@
 
     .screen:hover {
         filter: brightness(0.8);
+    }
+    .screen:focus {
+        outline: 2px solid var(--secondary);
+        outline-offset: 2px;
     }
 </style>

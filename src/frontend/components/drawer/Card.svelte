@@ -1,6 +1,8 @@
 <script lang="ts">
     import type { Resolution } from "../../../types/Settings"
     import { mediaOptions, outputs, styles } from "../../stores"
+    import { triggerClickOnEnterSpace } from "../../utils/clickable"
+    import { translateText } from "../../utils/language"
     import Icon from "../helpers/Icon.svelte"
     import { getResolution } from "../helpers/output"
     import Loader from "../main/Loader.svelte"
@@ -20,6 +22,7 @@
     export let color: null | string = null
     export let white = true
     export let showPlayOnHover = false
+    export let showApplyOnHover = false
     export let checkered = false
     export let mode: "grid" | "list" | "lyrics" = "grid"
     export let resolution: Resolution = getResolution(null, { $outputs, $styles })
@@ -29,13 +32,13 @@
 
 <!-- display: table; -->
 <div class="main" style="{outlineColor ? 'outline: 2px solid ' + outlineColor + ';' : ''}flex-direction: {mode === 'grid' ? 'column' : 'row'};width: {mainWidth}%;" class:preview class:active>
-    <div class="over" style="flex-direction: {mode === 'grid' ? 'column' : 'row'};width: 100%;" on:mousedown on:click on:dblclick>
+    <div class="over" style="flex-direction: {mode === 'grid' ? 'column' : 'row'};width: 100%;" on:mousedown on:click on:dblclick on:keydown={triggerClickOnEnterSpace} tabindex="0" role="button">
         {#if preview}
             <div class="overlay" />
         {:else}
             <div class="hover overlay" />
         {/if}
-        <div data-media={mediaData} class="card {$$props.class || ''}" class:checkered style="{$$props.style || ''};aspect-ratio: {resolution.width}/{resolution.height};" on:mouseenter on:mouseleave on:mousemove>
+        <div data-title={showPlayOnHover ? translateText(active ? "clear.general" : "media.play") : ""} data-media={mediaData} class="card {$$props.class || ''}" class:checkered style="{$$props.style || ''};aspect-ratio: {resolution.width}/{resolution.height};" on:mouseenter on:mouseleave on:mousemove>
             {#if !loaded}
                 <div class="loader">
                     <Loader />
@@ -43,6 +46,10 @@
             {:else if showPlayOnHover}
                 <div class="overlayIcon">
                     <Icon id={active ? "clear" : "play"} size={2} white />
+                </div>
+            {:else if showApplyOnHover && !active}
+                <div class="overlayIcon">
+                    <Icon id="export" size={2} white />
                 </div>
             {/if}
             <slot />
@@ -74,7 +81,7 @@
         background-color: rgb(255 255 255 / 0.05);
         position: absolute;
         top: 0;
-        inset-inline-start: 0;
+        left: 0;
     }
 
     .over:hover > .card .overlayIcon {
@@ -85,7 +92,7 @@
         cursor: pointer;
 
         position: absolute;
-        inset-inline-start: 50%;
+        left: 50%;
         top: 50%;
         transform: translate(-50%, -50%);
 
@@ -108,7 +115,7 @@
         pointer-events: none;
         position: absolute;
         top: 0;
-        inset-inline-start: 0;
+        left: 0;
         background-color: rgb(0 0 0 / 0.3);
         height: 100%;
         width: 100%;
@@ -150,7 +157,7 @@
     .loader {
         position: absolute;
         top: 50%;
-        inset-inline-start: 50%;
+        left: 50%;
         transform: translate(-50%, -50%);
     }
 </style>

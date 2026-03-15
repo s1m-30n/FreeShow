@@ -2,29 +2,26 @@
     import { Main } from "../../../../types/IPC/Main"
     import type { SaveData } from "../../../../types/Save"
     import { sendMain } from "../../../IPC/main"
-    import { activeEdit, activePage, activePopup, activeShow, dataPath, deletedShows, drawSettings, renamedShows, scripturesCache, showsPath } from "../../../stores"
+    import { activeEdit, activePage, activePopup, activeShow, deletedShows, drawSettings, renamedShows, scripturesCache } from "../../../stores"
     import { save } from "../../../utils/save"
-    import Icon from "../../helpers/Icon.svelte"
     import T from "../../helpers/T.svelte"
-    import Button from "../../inputs/Button.svelte"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
     import { clearAll } from "../../output/clear"
 
     function reset() {
         // backup
         save(false, { backup: true, isAutoBackup: true })
-        setTimeout(resetSettings, 500)
+        setTimeout(resetSettings, 1000)
     }
 
     function resetSettings() {
         sendMain(Main.SAVE, {
-            path: $showsPath || "",
-            dataPath: $dataPath,
             // SETTINGS
             SETTINGS: {},
             SYNCED_SETTINGS: {},
             // SHOWS
             SHOWS: {},
-            STAGE_SHOWS: {},
+            STAGE: {},
             // STORES
             PROJECTS: { projects: {}, folders: {}, projectTemplates: {} },
             OVERLAYS: {},
@@ -38,14 +35,16 @@
             USAGE: { all: [] },
             // SAVE DATA
             closeWhenFinished: false,
-            customTriggers: { changeUserData: { reset: true } }
+            customTriggers: { reset: true }
         } as SaveData)
+
+        // WIP reset error log / other config files
+        // all content in FreeShow/ folder, including Shows/Scripture files are not deleted
+        // media cache is not deleted
 
         clearAll()
         drawSettings.set({})
 
-        showsPath.set(null)
-        // dataPath.set("")
         // showsCache.set({})
         scripturesCache.set({})
         deletedShows.set([])
@@ -60,11 +59,8 @@
 </script>
 
 <p><T id="popup.reset_all_confirm" /></p>
-<p><T id="popup.reset_all_action" /></p>
+<p style="font-size: 0.9em;opacity: 0.7;"><T id="popup.reset_all_action" /></p>
 
-<br />
-
-<Button on:click={reset} center dark red>
-    <Icon id="close" right />
+<MaterialButton variant="outlined" class="red" style="margin-top: 20px;" icon="close" on:click={reset} white red>
     <T id="popup.continue" />
-</Button>
+</MaterialButton>

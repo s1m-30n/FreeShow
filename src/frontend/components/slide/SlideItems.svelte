@@ -16,8 +16,9 @@
     import Timer from "./views/Timer.svelte"
     import Variable from "./views/Variable.svelte"
     import Visualizer from "./views/Visualizer.svelte"
-    import Website from "./views/Website.svelte"
     import Weather from "./views/Weather.svelte"
+    import Website from "./views/Website.svelte"
+    import MetronomeVisualizer from "../drawer/audio/MetronomeVisualizer.svelte"
 
     export let item: Item
 
@@ -26,11 +27,13 @@
 
     export let slideIndex = 0
     export let preview = false
+    export let isTemplatePreview = false
     export let mirror = true
     export let isMirrorItem = false
     export let disableListTransition = false
     export let smallFontSize = false
     export let fontSize = 0
+    export let outputId = ""
 
     export let ratio = 1
     export let ref: {
@@ -54,6 +57,9 @@
 
     // AUTO SIZE
 
+    $: noAutoSize = item.auto === false && item.textFit === "none"
+
+    // this only applies to the stage slide editor
     $: if (edit && item && itemElem) calculateAutosize()
     let autoSize = 0
     let loopStop: NodeJS.Timeout | null = null
@@ -66,28 +72,29 @@
         let textQuery = item.type === "slide_tracker" ? ".progress div" : ""
         // timeout to update size after content change (e.g. Clock seconds)
         setTimeout(() => {
+            // item.textFit || (always growToFit)
             autoSize = autosize(itemElem!, { type: "growToFit", textQuery })
         }, 50)
     }
 
     $: cameraStyleString = `object-fit: ${item.fit || "contain"};filter: ${item.filter};transform: scale(${item.flipped ? "-1" : "1"}, ${item.flippedY ? "-1" : "1"});`
-    $: variableStyleString = item.style?.includes("font-size") && item.style.split("font-size:")[1].trim()[0] !== "0" ? "" : `font-size: ${edit ? autoSize : fontSize}px;`
+    $: variableStyleString = typeof item.style === "string" ? (item.style.includes("font-size") && item.style.split("font-size:")[1].trim()[0] !== "0" ? "" : `font-size: ${edit ? autoSize : fontSize}px;`) : ""
 </script>
 
 {#if item.type === "media"}
-    <MediaItem {item} {preview} {mirror} {edit} />
+    <MediaItem id="{ref.showId}_{ref.slideId}" {item} {outputId} slideRef={{ ...ref, slideIndex }} {preview} {mirror} {edit} />
 {:else if item.type === "web"}
     <Website src={item.web?.src || ""} navigation={!edit && !item.web?.noNavigation} clickable={!edit && $currentWindow === "output"} {ratio} />
 {:else if item.type === "timer"}
-    <Timer {item} id={item.timer?.id || item.timerId || ""} {today} style={item.auto === false ? "" : `font-size: ${edit ? autoSize : fontSize}px;`} {edit} />
+    <Timer {item} id={item.timer?.id || item.timerId || ""} {today} style={noAutoSize ? "" : `font-size: ${edit ? autoSize : fontSize}px;`} {edit} />
 {:else if item.type === "clock"}
-    <Clock autoSize={edit ? autoSize : fontSize} style={false} {...item.clock} />
+    <Clock {item} fontStyle={noAutoSize ? "" : `font-size: ${edit ? autoSize : fontSize}px;`} style={false} {...item.clock} />
 {:else if item.type === "camera"}
     {#if item.device}
-        <Cam cam={item.device} item style={cameraStyleString} />
+        <Cam cam={item.device} item style={cameraStyleString} disablePreview={isTemplatePreview} />
     {/if}
 {:else if item.type === "slide_tracker"}
-    <SlideProgress tracker={item.tracker || {}} autoSize={item.auto === false ? 0 : edit ? autoSize : fontSize} />
+    <SlideProgress {item} tracker={item.tracker || {}} autoSize={item.auto === false ? 0 : edit ? autoSize : fontSize} {outputId} />
 {:else if item.type === "events"}
     <DynamicEvents {...item.events} textSize={smallFontSize ? (-1.1 * $slidesOptions.columns + 10) * 5 : Number(getStyles(item.style, true)?.["font-size"]) || 80} />
 {:else if item.type === "weather"}
@@ -103,6 +110,8 @@
     <Captions {item} />
 {:else if item.type === "icon"}
     <IconItem {item} {ratio} />
+{:else if item.type === "metronome"}
+    <MetronomeVisualizer isItem />
 {:else if item.type === "list"}
     <!-- moved to textbox in 1.3.3 -->
     <ListView list={item.list} disableTransition={edit || disableListTransition} />

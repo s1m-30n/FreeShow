@@ -127,12 +127,19 @@ function createBridge(id: ServerName, server: ServerValues) {
     // SEND DATA FROM APP TO CLIENT
     ioServers[id] = server.io
     ipcMain.on(id, (_e: IpcMainEvent, msg: Message) => {
-        if (msg.id) server.io.to(msg.id).emit(id, msg)
+        if (msg?.id) server.io.to(msg.id).emit(id, msg)
         else server.io.emit(id, msg)
     })
 }
 
+let responded: { [key: string]: boolean } = {}
 export function toServer(id: ServerName, msg: any) {
+    if (msg.channel === "STREAM") {
+        // only send if responded
+        if (responded[msg.data.id] === false) return
+        responded[msg.data.id] = false
+    }
+
     ioServers[id]?.emit(id, msg)
 }
 
@@ -147,12 +154,20 @@ function initialize(id: ServerName, socket: Socket) {
     toApp(id, { channel: "CONNECTION", id: socket.id, data: { name } })
     servers[id]!.connections[socket.id] = { name }
 
+    // reset with new connection
+    if (id === "OUTPUT_STREAM") responded = {}
+
     // SEND DATA FROM CLIENT TO APP
     socket.on(id, async (msg: Message) => {
-        if (msg.channel === "OUTPUT_FRAME") {
+        if (msg.channel === "STREAM_DONE") {
+            responded[msg.data.id] = true
+        } else if (msg.channel === "OUTPUT_FRAME") {
             const window = OutputHelper.getOutput(msg.data.outputId)?.window
             if (!window || window.isDestroyed()) return
+
             const frame = await CaptureHelper.captureBase64Frame(window)
+            if (window.isDestroyed()) return
+
             const bounds = window.getBounds()
             toServer(id, { channel: "OUTPUT_FRAME", data: { frame, width: bounds.width, height: bounds.height } })
         } else if (msg) {

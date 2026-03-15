@@ -1,6 +1,6 @@
 import type { SaveListSettings, SaveListSyncedSettings } from "../../types/Save"
 
-export const defaultConfig = { loaded: false, maximized: true, bounds: { width: 800, height: 600, x: 0, y: 0 }, disableHardwareAcceleration: true }
+export const defaultConfig = { loaded: false, maximized: true, bounds: { width: 800, height: 600, x: 0, y: 0 }, dataPath: null, disableHardwareAcceleration: null }
 
 export const defaultGroups = {
     break: { name: "break", default: true, color: "#f5255e" },
@@ -29,12 +29,11 @@ export const defaultSettings: { [key in SaveListSettings]: any } = {
         }
     },
     sorted: {},
-    styles: {},
     openedFolders: ["default"],
     activeProject: null,
     alertUpdates: true,
     autoOutput: false,
-    autosave: "never",
+    autosave: "15min",
     timeFormat: "24",
     remotePassword: "",
     ports: { remote: 5510, stage: 5511 },
@@ -58,8 +57,8 @@ export const defaultSettings: { [key in SaveListSettings]: any } = {
     groupNumbers: true,
     fullColors: false,
     formatNewShow: false,
-    showsPath: null,
-    dataPath: "",
+    showsPath: null, // DEPRECATED
+    dataPath: "", // DEPRECATED
     lockedOverlays: [],
     splitLines: 0,
     theme: "default",
@@ -69,12 +68,25 @@ export const defaultSettings: { [key in SaveListSettings]: any } = {
     },
     volume: 1,
     gain: 1,
+    audioChannelsData: {},
+    cloudSyncData: {},
     driveData: { mainFolderId: null, disabled: false, initializeMethod: null, disableUpload: false },
     calendarAddShow: "",
     metronome: {},
+    equalizerConfig: { enabled: false, bands: [] },
+    eqPresets: {},
     effectsLibrary: [],
     special: {},
-    chumsSyncCategories: ["song"]
+    timeline: {},
+    timecode: {},
+    contentProviderData: {
+        planningcenter: {
+            localAlways: false
+        },
+        churchApps: {
+            syncCategories: ["song"]
+        }
+    }
 }
 
 export const defaultSyncedSettings: { [key in SaveListSyncedSettings]: any } = {
@@ -93,6 +105,8 @@ export const defaultSyncedSettings: { [key in SaveListSyncedSettings]: any } = {
         presentation: { name: "category.presentation", icon: "presentation", default: true },
         scripture: { name: "category.scripture", icon: "scripture", default: true }
     },
+    styles: {},
+    profiles: {},
     timers: {
         default: { name: "05:00", type: "counter", start: 300, end: 0 }
     },
@@ -122,7 +136,7 @@ export const defaultSyncedSettings: { [key in SaveListSyncedSettings]: any } = {
     scriptureSettings: {
         template: "scripture",
         versesPerSlide: 3,
-        verseNumbers: false,
+        verseNumbers: true,
         showVersion: false,
         showVerse: true,
         referenceDivider: ":"
@@ -146,5 +160,6 @@ export const defaultSyncedSettings: { [key in SaveListSyncedSettings]: any } = {
     companion: {},
     globalTags: {},
     customMetadata: { disabled: [], custom: [] },
-    effects: {}
+    effects: {},
+    deletedDefaults: {}
 }

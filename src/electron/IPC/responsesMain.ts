@@ -1,53 +1,32 @@
-import getFonts from "css-fonts"
+import * as Sentry from "@sentry/electron/main"
 import type { BrowserWindow, DesktopCapturerSource } from "electron"
 import { app, desktopCapturer, screen, shell, systemPreferences } from "electron"
-import { machineIdSync } from "node-machine-id"
 import os from "os"
 import path from "path"
 import { getMainWindow, isProd, mainWindow, maximizeMain, setGlobalMenu } from ".."
 import type { MainResponses } from "../../types/IPC/Main"
 import { Main } from "../../types/IPC/Main"
 import type { ErrorLog, LyricSearchResult, OS } from "../../types/Main"
-import { setPlayingState, unsetPlayingAudio } from "../audio/nowPlaying"
-import { chumsDisconnect, chumsLoadServices, chumsStartupLoad } from "../chums"
-import { restoreFiles } from "../data/backup"
-import { downloadMedia } from "../data/downloadMedia"
+import { openNowPlaying, setPlayingState, unsetPlayingAudio } from "../audio/nowPlaying"
+import { canSync, getSyncTeams, hasDataChanged, hasTeamData, markAsNewSync, syncData } from "../cloud/syncManager"
+import { ContentProviderRegistry } from "../contentProviders"
+import { ChurchAppsChat } from "../contentProviders/churchApps/ChurchAppsChat"
+import { deleteBackup, getBackups, restoreFiles } from "../data/backup"
+import { getLocalIPs } from "../data/bonjour"
+import { checkIfMediaDownloaded, downloadLessonsMedia, downloadMedia } from "../data/downloadMedia"
 import { importShow } from "../data/import"
 import { save } from "../data/save"
-import { config, error_log, getStore, stores, updateDataPath, userDataPath } from "../data/store"
-import { captureSlide, getThumbnail, getThumbnailFolderPath, pdfToImage, saveImage } from "../data/thumbnails"
+import { _store, appDataPath, config, createStores, getStore, getStoreValue, setStoreValue } from "../data/store"
+import { captureSlide, doesMediaExist, getThumbnail, getThumbnailFolderPath, pdfToImage, saveImage } from "../data/thumbnails"
 import { OutputHelper } from "../output/OutputHelper"
+import { libreConvert } from "../output/ppt/libreConverter"
 import { getPresentationApplications, presentationControl, startSlideshow } from "../output/ppt/presentation"
-import { pcoDisconnect, pcoStartupLoad } from "../planningcenter/connect"
-import { pcoLoadServices } from "../planningcenter/request"
 import { closeServers, startServers, updateServerData } from "../servers"
+import { processAudioData, timecodeStart, timecodeStop, updateTimecodeValue } from "../timecode/timecode"
 import { apiReturnData, emitOSC, startWebSocketAndRest, stopApiListener } from "../utils/api"
-import { closeMain, forceCloseApp } from "../utils/close"
-import {
-    bundleMediaFiles,
-    checkShowsFolder,
-    dataFolderNames,
-    doesPathExist,
-    getDataFolder,
-    getDocumentsFolder,
-    getFileInfo,
-    getFolderContent,
-    getMediaCodec,
-    getMediaTracks,
-    getPaths,
-    getSimularPaths,
-    getTempPaths,
-    loadFile,
-    loadShows,
-    locateMediaFile,
-    openSystemFolder,
-    readExifData,
-    readFile,
-    selectFiles,
-    selectFilesDialog,
-    selectFolder,
-    writeFile
-} from "../utils/files"
+import { closeMain } from "../utils/close"
+import { addToMediaFolder, bundleMediaFiles, getDataFolderPath, getDataFolderRoot, getFileInfo, getMediaCodec, getMediaSyncFolderPath, getMediaTracks, getPaths, getSimularPaths, loadFile, loadShows, locateMediaFile, openInSystem, readExifData, readFile, readFolder, readFolderContent, selectFiles, selectFilesDialog, selectFolder, setMediaSyncFolderPath, writeFile } from "../utils/files"
+import { getMachineId } from "../utils/helpers"
 import { LyricSearch } from "../utils/LyricSearch"
 import { closeMidiInPorts, getMidiInputs, getMidiOutputs, receiveMidi, sendMidi } from "../utils/midi"
 import { deleteShows, deleteShowsNotIndexed, getAllShows, getEmptyShows, refreshAllShows } from "../utils/shows"
@@ -58,16 +37,18 @@ export const mainResponses: MainResponses = {
     // DEV
     [Main.LOG]: (data) => console.info(data),
     [Main.IS_DEV]: () => !isProd,
-    [Main.GET_TEMP_PATHS]: () => getTempPaths(),
+    [Main.GET_CACHE_PATH]: () => getThumbnailFolderPath(),
     // APP
-    [Main.VERSION]: () => app.getVersion(),
+    [Main.VERSION]: () => getVersion(),
     [Main.GET_OS]: () => getOS(),
-    [Main.DEVICE_ID]: () => machineIdSync(),
-    [Main.IP]: () => os.networkInterfaces(),
+    [Main.DEVICE_ID]: () => getMachineId(),
+    [Main.GET_DEVICE_NAME]: () => getDeviceName(),
+    [Main.IP]: () => getLocalIPs(),
+    [Main.CHECK_RAM_USAGE]: () => checkRamUsage(),
     // STORES
     [Main.SETTINGS]: () => getStore("SETTINGS"),
     [Main.SYNCED_SETTINGS]: () => getStore("SYNCED_SETTINGS"),
-    [Main.STAGE_SHOWS]: () => getStore("STAGE_SHOWS"),
+    [Main.STAGE]: () => getStore("STAGE"),
     [Main.PROJECTS]: () => getStore("PROJECTS"),
     [Main.OVERLAYS]: () => getStore("OVERLAYS"),
     [Main.TEMPLATES]: () => getStore("TEMPLATES"),
@@ -86,59 +67,63 @@ export const mainResponses: MainResponses = {
     [Main.FULLSCREEN]: () => getMainWindow()?.setFullScreen(!getMainWindow()?.isFullScreen()),
     [Main.SPELLCHECK]: (a) => correctSpelling(a),
     /// //////////////////////
-    [Main.SAVE]: (a) => {
-        if (userDataPath === null) updateDataPath()
-        save(a)
-    },
+    [Main.SAVE]: (a) => save(a),
+    [Main.BACKUPS]: () => getBackups(),
+    [Main.DELETE_BACKUP]: (data) => deleteBackup(data),
     [Main.IMPORT]: (data) => startImport(data),
+    [Main.IMPORT_FILES]: (data) => importFiles(data),
     [Main.BIBLE]: (data) => loadScripture(data),
     [Main.SHOW]: (data) => loadShow(data),
     // MAIN
-    [Main.SHOWS]: (data) => {
-        if (userDataPath === null) updateDataPath()
-        return loadShows(data)
-    },
+    [Main.SHOWS]: () => loadShows(),
     [Main.AUTO_UPDATE]: () => checkForUpdates(),
-    [Main.GET_SYSTEM_FONTS]: () => loadFonts(),
     [Main.URL]: (data) => openURL(data),
     [Main.LANGUAGE]: (data) => setGlobalMenu(data.strings),
     [Main.GET_PATHS]: () => getPaths(),
-    [Main.SHOWS_PATH]: () => getDocumentsFolder(),
-    [Main.DATA_PATH]: () => getDocumentsFolder(null, ""),
+    [Main.DATA_PATH]: () => getDataFolderRoot(),
+    [Main.UPDATE_DATA_PATH]: (data) => {
+        config.set("dataPath", data.newPath)
+        createStores(data.oldPath)
+    },
     [Main.LOG_ERROR]: (data) => logError(data),
-    [Main.OPEN_LOG]: () => openSystemFolder(error_log.path),
-    [Main.OPEN_CACHE]: () => openSystemFolder(getThumbnailFolderPath()),
-    [Main.OPEN_APPDATA]: () => openSystemFolder(path.dirname(config.path)),
-    [Main.OPEN_FOLDER_PATH]: (path) => openSystemFolder(path),
+    [Main.OPEN_LOG]: () => openInSystem(_store.ERROR_LOG?.path || ""),
+    [Main.OPEN_CACHE]: () => openInSystem(getThumbnailFolderPath(), true),
+    [Main.OPEN_APPDATA]: () => openInSystem(appDataPath, true),
+    [Main.OPEN_FOLDER_PATH]: (folderPath) => openInSystem(folderPath, true),
+    [Main.OPEN_NOW_PLAYING]: () => openNowPlaying(),
     [Main.GET_STORE_VALUE]: (data) => getStoreValue(data),
     [Main.SET_STORE_VALUE]: (data) => setStoreValue(data),
     // SHOWS
     [Main.DELETE_SHOWS]: (data) => deleteShows(data),
     [Main.DELETE_SHOWS_NI]: (data) => deleteShowsNotIndexed(data),
-    [Main.REFRESH_SHOWS]: (data) => refreshAllShows(data),
+    [Main.REFRESH_SHOWS]: () => refreshAllShows(),
     [Main.GET_EMPTY_SHOWS]: (data) => getEmptyShows(data),
-    [Main.FULL_SHOWS_LIST]: (data) => getAllShows(data),
+    [Main.FULL_SHOWS_LIST]: () => getAllShows(),
     // OUTPUT
     [Main.GET_SCREENS]: () => getScreens(),
     [Main.GET_WINDOWS]: () => getScreens("window"),
     [Main.GET_DISPLAYS]: () => screen.getAllDisplays(),
     [Main.OUTPUT]: (_, e) => (e.sender.id === getMainWindow()?.webContents.id ? "false" : "true"),
     // MEDIA
-    [Main.GET_THUMBNAIL]: (data) => getThumbnail(data),
+    [Main.DOES_MEDIA_EXIST]: (data) => doesMediaExist(data),
+    [Main.GET_THUMBNAIL]: async (data) => await getThumbnail(data),
     [Main.SAVE_IMAGE]: (data) => saveImage(data),
     [Main.PDF_TO_IMAGE]: (data) => pdfToImage(data),
     [Main.READ_EXIF]: (data) => readExifData(data),
     [Main.MEDIA_CODEC]: (data) => getMediaCodec(data),
     [Main.MEDIA_TRACKS]: (data) => getMediaTracks(data),
-    [Main.DOWNLOAD_MEDIA]: (data) => downloadMedia(data),
+    [Main.DOWNLOAD_LESSONS_MEDIA]: (data) => downloadLessonsMedia(data),
+    [Main.MEDIA_DOWNLOAD]: (data) => downloadMedia(data),
+    [Main.MEDIA_IS_DOWNLOADED]: async (data) => await checkIfMediaDownloaded(data),
     [Main.NOW_PLAYING]: (data) => setPlayingState(data),
-    [Main.NOW_PLAYING_UNSET]: (data) => unsetPlayingAudio(data),
+    [Main.NOW_PLAYING_UNSET]: () => unsetPlayingAudio(),
     // [Main.MEDIA_BASE64]: (data) => storeMedia(data),
     [Main.CAPTURE_SLIDE]: (data) => captureSlide(data),
     [Main.ACCESS_CAMERA_PERMISSION]: () => getPermission("camera"),
     [Main.ACCESS_MICROPHONE_PERMISSION]: () => getPermission("microphone"),
     [Main.ACCESS_SCREEN_PERMISSION]: () => getPermission("screen"),
     // PPT
+    [Main.LIBREOFFICE_CONVERT]: (data) => libreConvert(data),
     [Main.SLIDESHOW_GET_APPS]: () => getPresentationApplications(),
     [Main.START_SLIDESHOW]: (data) => startSlideshow(data),
     [Main.PRESENTATION_CONTROL]: (data) => presentationControl(data),
@@ -164,36 +149,82 @@ export const mainResponses: MainResponses = {
     [Main.SEARCH_LYRICS]: (data) => searchLyrics(data),
     // FILES
     [Main.RESTORE]: (data) => restoreFiles(data),
-    [Main.SYSTEM_OPEN]: (data) => openSystemFolder(data),
-    [Main.DOES_PATH_EXIST]: (data) => {
-        let configPath = data.path
-        if (configPath === "data_config") configPath = path.join(data.dataPath, dataFolderNames.userData)
-        return { ...data, exists: doesPathExist(configPath) }
-    },
-    [Main.UPDATE_DATA_PATH]: () => {
-        // updateDataPath({ ...data, load: true })
-        const special = stores.SETTINGS.get("special")
-        special.customUserDataLocation = true
-        stores.SETTINGS.set("special", special)
-
-        forceCloseApp()
-    },
+    [Main.RECORDER]: (data) => saveRecording(data),
+    [Main.SYSTEM_OPEN]: (data) => openInSystem(data),
     [Main.LOCATE_MEDIA_FILE]: (data) => locateMediaFile(data),
-    [Main.GET_SIMULAR]: (data) => getSimularPaths(data),
+    [Main.GET_MEDIA_FOLDER_PATH]: () => getMediaSyncFolderPath(),
+    [Main.SET_MEDIA_FOLDER_PATH]: (data) => setMediaSyncFolderPath(data),
+    [Main.GET_SIMILAR]: (data) => getSimularPaths(data),
     [Main.BUNDLE_MEDIA_FILES]: (data) => bundleMediaFiles(data),
+    [Main.MEDIA_FOLDER_COPY]: (data) => addToMediaFolder(data.paths),
+    [Main.READ_BIBLES_FOLDER]: () => readBiblesFolder(),
     [Main.FILE_INFO]: (data) => getFileInfo(data),
-    [Main.READ_FOLDER]: (data) => getFolderContent(data),
+    [Main.READ_FOLDER]: (data) => readFolderContent(data),
     [Main.READ_FILE]: (data) => ({ content: readFile(data.path) }),
     [Main.OPEN_FOLDER]: (data) => selectFolder(data),
     [Main.OPEN_FILE]: (data) => selectFiles(data),
-    // CONNECTION
-    [Main.PCO_LOAD_SERVICES]: (data) => pcoLoadServices(data.dataPath),
-    [Main.PCO_STARTUP_LOAD]: (data) => pcoStartupLoad(data.dataPath),
-    [Main.PCO_DISCONNECT]: () => pcoDisconnect(),
-    // Chums CONNECTION
-    [Main.CHUMS_LOAD_SERVICES]: () => chumsLoadServices(),
-    [Main.CHUMS_STARTUP_LOAD]: (data) => chumsStartupLoad("plans", data),
-    [Main.CHUMS_DISCONNECT]: () => chumsDisconnect()
+    // SYNC
+    [Main.CAN_SYNC]: (data) => canSync(data),
+    [Main.GET_TEAMS]: (data) => getSyncTeams(data),
+    [Main.CLOUD_DATA]: (data) => hasTeamData(data),
+    [Main.CLOUD_CHANGED]: (data) => hasDataChanged(data),
+    [Main.CLOUD_SYNC]: (data) => syncData(data),
+    [Main.GET_CONVERSATION_ID]: (data) => getConversationId(data.teamId),
+    [Main.SEND_SOCKET_MESSAGE]: (data) => sendSocketMessage(data),
+    // Provider-based routing
+    [Main.PROVIDER_LOAD_SERVICES]: async (data) => {
+        if (data.cloudOnly) markAsNewSync()
+        await ContentProviderRegistry.loadServices(data.providerId, data.cloudOnly || false)
+    },
+    [Main.PROVIDER_DISCONNECT]: (data) => {
+        ContentProviderRegistry.disconnect(data.providerId, data.scope)
+        return { success: true }
+    },
+    [Main.PROVIDER_STARTUP_LOAD]: async (data) => {
+        await ContentProviderRegistry.startupLoad(data.providerId, data.scope || "", data.data, data.cloudOnly)
+    },
+    // Content Library
+    [Main.GET_CONTENT_PROVIDERS]: () => {
+        const providers = ContentProviderRegistry.getAvailableProviders()
+        return providers.map((providerId) => {
+            const provider = ContentProviderRegistry.getProvider(providerId)
+            return {
+                providerId,
+                displayName: provider?.displayName || providerId,
+                hasContentLibrary: provider?.hasContentLibrary || false
+            }
+        })
+    },
+    [Main.GET_CONTENT_LIBRARY]: async (data) => {
+        const provider = ContentProviderRegistry.getProvider(data.providerId)
+        if (!provider?.getContentLibrary) {
+            console.error(`Provider ${data.providerId} does not support content library`)
+            return []
+        }
+        return await provider.getContentLibrary()
+    },
+    [Main.GET_PROVIDER_CONTENT]: async (data) => {
+        const provider = ContentProviderRegistry.getProvider(data.providerId)
+        if (!provider?.getContent) {
+            console.error(`Provider ${data.providerId} does not support getContent`)
+            return []
+        }
+        return await provider.getContent(data.key)
+    },
+    [Main.CHECK_MEDIA_LICENSE]: async (data) => {
+        const provider = ContentProviderRegistry.getProvider(data.providerId)
+        if (!provider?.checkMediaLicense) {
+            console.error(`Provider ${data.providerId} does not support checkMediaLicense`)
+            return null
+        }
+        return await provider.checkMediaLicense(data.mediaId)
+    },
+    // Timecode
+    [Main.TIMECODE_START]: (data) => timecodeStart(data),
+    [Main.TIMECODE_STOP]: () => timecodeStop(),
+    [Main.TIMECODE_VALUE]: (data) => updateTimecodeValue(data),
+    [Main.TIMECODE_STATUS]: (data) => console.log(data),
+    [Main.TIMECODE_AUDIO_DATA]: (data) => processAudioData(data)
 }
 
 /// ///////
@@ -205,12 +236,16 @@ export function startImport(data: { channel: string; format: { name: string; ext
     const needsFileAndNoFileSelected = data.format.extensions && !files.length
     if (needsFileAndNoFileSelected) return
 
-    importShow(data.channel, files || null, data.settings)
+    importShow(data.channel, files || null, data.settings || {})
+}
+
+function importFiles(data: { id: string; paths: string[] }) {
+    importShow(data.id, data.paths, {})
 }
 
 // BIBLE
-export function loadScripture(msg: { id: string; path: string; name: string; data: any }) {
-    const bibleFolder: string = getDataFolder(msg.path || "", dataFolderNames.scriptures)
+export function loadScripture(msg: { id: string; name: string }) {
+    const bibleFolder: string = getDataFolderPath("scriptures")
     let filePath: string = path.join(bibleFolder, msg.name + ".fsb")
 
     let bible = loadFile(filePath, msg.id)
@@ -219,37 +254,89 @@ export function loadScripture(msg: { id: string; path: string; name: string; dat
     if (bible.error) filePath = path.join(app.getPath("documents"), "Bibles", msg.name + ".fsb")
     bible = loadFile(filePath, msg.id)
 
-    if (msg.data) return { ...bible, data: msg.data }
+    // convert "value" keys to correct "text" key, pre v1.3.0
+    if (bible.content?.[1]?.books?.[0]?.chapters?.[0]?.verses?.[0]?.value) {
+        bible.content[1].books.forEach((book: any) => {
+            book.chapters.forEach((chapter: any) => {
+                chapter.verses.forEach((verse: any) => {
+                    if (!verse.text) {
+                        verse.text = verse.value || ""
+                        delete verse.value
+                    }
+                })
+            })
+        })
+    }
+
     return bible
 }
 
+function readBiblesFolder() {
+    const bibleFolder: string = getDataFolderPath("scriptures")
+    const names = readFolder(bibleFolder)
+    return names.map((name) => {
+        const filePath = path.join(bibleFolder, name)
+        return { path: filePath, name: name.replace(/\.fsb$/i, "") }
+    })
+}
+
 // SHOW
-export function loadShow(msg: { id: string; path: string | null; name: string }) {
-    let filePath: string = checkShowsFolder(msg.path || "")
-    filePath = path.join(filePath, (msg.name || msg.id) + ".show")
+export function loadShow(msg: { id: string; name: string }) {
+    const showsFolder = getDataFolderPath("shows")
+    const filePath = path.join(showsFolder, (msg.name || msg.id) + ".show")
     const show = loadFile(filePath, msg.id)
 
     return show
+}
+
+function getVersion() {
+    try {
+        return app.getVersion()
+    } catch (err) {
+        console.error("Could not get version:", err)
+        return "0.0.0"
+    }
+}
+
+async function getConversationId(teamId: string): Promise<string | null> {
+    return ChurchAppsChat.getOrCreateConversation(teamId)
+}
+
+async function sendSocketMessage(data: { churchId: string; teamId: string; displayName: string; content: string }): Promise<boolean> {
+    const conversationId = await ChurchAppsChat.getOrCreateConversation(data.teamId)
+    if (!conversationId) return false
+    return ChurchAppsChat.sendMessage({ churchId: data.churchId, conversationId, displayName: data.displayName, content: data.content })
 }
 
 function getOS() {
     return { platform: os.platform(), name: os.hostname(), arch: os.arch() } as OS
 }
 
+function getDeviceName() {
+    return (os.hostname() || "").replace(".local", "")
+}
+
+function checkRamUsage() {
+    const total = os.totalmem()
+    const free = os.freemem()
+
+    return { total, free, performanceMode: shouldEnablePerformanceMode() }
+
+    function shouldEnablePerformanceMode() {
+        const totalGB = total / 1024 / 1024 / 1024
+        const lowTotalRAM = totalGB <= 8
+
+        const usedPercent = (total - free) / total
+        const highUsage = usedPercent > 0.98
+
+        return lowTotalRAM || highUsage
+    }
+}
+
 // URL: open url in default web browser
 export const openURL = (url: string) => {
     shell.openExternal(url)
     return
-}
-
-async function loadFonts() {
-    try {
-        const fonts = await getFonts()
-        return { fonts }
-    } catch (err) {
-        console.error("Something went wrong when loading fonts.")
-        return { fonts: [] }
-    }
 }
 
 async function searchLyrics({ artist, title }: { artist: string; title: string }) {
@@ -307,15 +394,15 @@ function getScreens(type: "window" | "screen" = "screen"): Promise<{ name: strin
 // RECORDER
 // only open once per session
 let systemOpened = false
-export function saveRecording(_: Electron.IpcMainEvent, msg: any) {
-    const folder: string = getDataFolder(msg.path || "", dataFolderNames.recordings)
-    const filePath: string = path.join(folder, msg.name)
+export function saveRecording(data: { blob: ArrayBuffer; name: string }) {
+    const folder = getDataFolderPath("recordings")
+    const filePath = path.join(folder, data.name)
 
-    const buffer = Buffer.from(msg.blob)
+    const buffer = Buffer.from(data.blob)
     writeFile(filePath, buffer)
 
     if (!systemOpened) {
-        openSystemFolder(folder)
+        openInSystem(folder)
         systemOpened = true
     }
 }
@@ -325,7 +412,7 @@ const maxLogLength = 250
 export function logError(log: ErrorLog, key: "main" | "renderer" | "request" = "renderer") {
     if (!isProd) log.dev = true
 
-    const storedLog = error_log.store
+    const storedLog = getStore("ERROR_LOG")
 
     let previousLog = storedLog[key] || []
     previousLog.push(log)
@@ -333,12 +420,16 @@ export function logError(log: ErrorLog, key: "main" | "renderer" | "request" = "
     if (previousLog.length > maxLogLength) previousLog = previousLog.slice(previousLog.length - maxLogLength)
     if (!previousLog.length) return
 
-    // error_log.clear()
-    error_log.set({ [key]: previousLog })
+    // _store.ERROR_LOG?.clear()
+    _store.ERROR_LOG?.set({ [key]: previousLog })
 }
 
 const ERROR_FILTER = [
-    "ENOENT: no such file or directory" // file/folder does not exist
+    "ENOENT: no such file or directory", // file/folder does not exist
+    "::internal::", // internal errors (v8 / partition_alloc)
+    "crash_reporter::DumpWithoutCrashing", // chromium crashes
+    "ERR_INTERNET_DISCONNECTED", // internet disconnected
+    "First argument to DataView constructor must be an ArrayBuffer" // mp4box issue
 ]
 export function catchErrors() {
     process.on("uncaughtException", (err) => {
@@ -351,12 +442,27 @@ export function createLog(err: Error) {
     return {
         time: new Date(),
         os: process.platform || "Unknown",
-        version: app.getVersion(),
+        version: getVersion(),
         type: "Uncaught Exception",
         source: "See stack",
         message: err.message,
         stack: err.stack
     } as ErrorLog
+}
+
+export function autoErrorReport() {
+    if (!isProd) return
+    if (config.get("autoErrorReporting") === false) return
+
+    Sentry.init({
+        dsn: "https://5d1069c3cb6faaa6e7ad0d9dc0145361@o4510419080445952.ingest.us.sentry.io/4510419082346496",
+        beforeSend(event) {
+            // filter out known non-critical errors
+            const errorMessage = event.exception?.values?.[0]?.value || ""
+            const shouldFilter = ERROR_FILTER.some((filter) => errorMessage.includes(filter))
+            return shouldFilter ? null : event
+        }
+    })
 }
 
 // STORE MEDIA AS BASE64
@@ -368,15 +474,3 @@ export function createLog(err: Error) {
 //     })
 //     return encodedFiles
 // }
-
-// GET STORE VALUE (used in special cases - currently only disableHardwareAcceleration)
-function getStoreValue(data: { file: "config" | keyof typeof stores; key: string }) {
-    const store = data.file === "config" ? config : stores[data.file]
-    return { ...data, value: (store as any).get(data.key) }
-}
-
-// GET STORE VALUE (used in special cases - currently only disableHardwareAcceleration)
-function setStoreValue(data: { file: "config" | keyof typeof stores; key: string; value: any }) {
-    const store = data.file === "config" ? config : stores[data.file]
-    store.set(data.key, data.value)
-}

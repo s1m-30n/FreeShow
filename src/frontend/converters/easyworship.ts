@@ -1,12 +1,14 @@
 import { get } from "svelte/store"
 import { uid } from "uid"
+import { DEFAULT_ITEM_STYLE } from "../components/edit/scripts/itemHelpers"
 import { getSlidesText } from "../components/edit/scripts/textStyle"
+import { setQuickAccessMetadata } from "../components/helpers/setShow"
 import { checkName, getGlobalGroup } from "../components/helpers/show"
 import { newToast } from "../utils/common"
+import { translateText } from "../utils/language"
 import { ShowObj } from "./../classes/Show"
 import { activePopup, alertMessage, dictionary, groups, shows } from "./../stores"
 import { createCategory, setTempShows } from "./importHelpers"
-import { setQuickAccessMetadata } from "../components/helpers/setShow"
 import { trimNameFromString } from "./txt"
 
 interface Song {
@@ -41,12 +43,12 @@ export function convertEasyWorship(data: any) {
     const songs = data.find((a: any) => a.content.song)?.content.song
     const songsWords = data.find((a: any) => a.content.word)?.content.word
     if (!songsWords) {
-        newToast("$toast.no_songswords_easyworship")
+        newToast("toast.no_songswords_easyworship")
         return
     }
 
     let i = 0
-    const importingText = get(dictionary).popup?.importing || "Importing"
+    const importingText = translateText("popup.importing")
 
     const tempShows: any[] = []
 
@@ -75,7 +77,7 @@ export function convertEasyWorship(data: any) {
                 title: song?.title || "",
                 author: song.author || "",
                 copyright: song.copyright || "",
-                CCLI: song.reference_number || "",
+                CCLI: song.reference_number || ""
             }
         }
         if (show.meta.CCLI) show = setQuickAccessMetadata(show, "CCLI", show.meta.CCLI)
@@ -89,7 +91,7 @@ export function convertEasyWorship(data: any) {
         const showId = song?.song_uid || uid()
 
         show.slides = slides
-        show.layouts = { [layoutID]: { name: get(dictionary).example?.default || "", notes: song?.description || "", slides: layout } }
+        show.layouts = { [layoutID]: { name: translateText("example.default"), notes: song?.description || "", slides: layout } }
         const allText = trimNameFromString(getSlidesText(slides))
         show.name = checkName(song?.title || allText || showId, showId)
         show.settings.template = "default"
@@ -107,7 +109,7 @@ export function convertEasyWorship(data: any) {
 
 // https://asecuritysite.com/coding/asc2
 const replaceCodes: any = {
-    "u8211?": "–",
+    "u8211?": "–"
 }
 
 function decodeString(input) {
@@ -128,9 +130,11 @@ function createSlides({ words }: Words) {
     const newSlides: any[] = []
     let lines: any[] = []
 
+    // easyworship2 format not supported
+
     // .replaceAll('"', '\\"')
     words = words.replaceAll("\\", "").replaceAll("\r\n", "")
-    let index = words.indexOf("pardli0fi0ri0sb0slsa0") + 22
+    let index = words.indexOf("li0fi0ri0sb0slsa0", words.indexOf("pard")) + 22
     if (index < 22) index = words.indexOf("sdfsauto")
     words = words.slice(index, words.lastIndexOf("}"))
     if (words.charAt(words.length - 2) === "}") words = words.slice(0, words.length - 1)
@@ -208,16 +212,16 @@ function createSlides({ words }: Words) {
             layout.push({ id })
             const items = [
                 {
-                    style: "inset-inline-start:50px;top:120px;width:1820px;height:840px;",
-                    lines: slideLines.map((a: any) => ({ align: "", text: [{ style: "", value: a }] })),
-                },
+                    style: DEFAULT_ITEM_STYLE,
+                    lines: slideLines.map((a: any) => ({ align: "", text: [{ style: "", value: a }] }))
+                }
             ]
             slides[id] = {
                 group: "",
                 color: null,
                 settings: {},
                 notes: "",
-                items,
+                items
             }
 
             const globalGroup = getGlobalGroup(group)

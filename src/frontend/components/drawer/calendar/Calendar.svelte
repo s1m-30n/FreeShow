@@ -1,10 +1,12 @@
 <script lang="ts">
-    import { activeDays, activePopup, dictionary, eventEdit, events, labelsDisabled, popupData } from "../../../stores"
+    import { activeDays, activePopup, eventEdit, events, labelsDisabled, popupData, special } from "../../../stores"
+    import { translateText } from "../../../utils/language"
     import { actionData } from "../../actions/actionData"
     import { removeDuplicates, sortByTime } from "../../helpers/array"
     import Icon from "../../helpers/Icon.svelte"
     import T from "../../helpers/T.svelte"
-    import Button from "../../inputs/Button.svelte"
+    import FloatingInputs from "../../input/FloatingInputs.svelte"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
     import { MILLISECONDS_IN_A_DAY, copyDate, getDaysInMonth, getWeekNumber, isBetween, isSameDay } from "./calendar"
 
     export let active: string | null
@@ -13,7 +15,7 @@
     // WIP search for events
     $: console.log(searchValue)
 
-    let sundayFirstDay = false
+    $: sundayFirstDay = $special.firstDayOfWeek === "7"
 
     let today = new Date()
     $: current = new Date(today.getFullYear(), today.getMonth())
@@ -23,9 +25,9 @@
     activeDays.set([copyDate(today).getTime()])
 
     let days: Date[][] = []
-    $: getDays(month)
+    $: getDays(month, sundayFirstDay)
 
-    function getDays(month: number) {
+    function getDays(month: number, _updater: any) {
         let daysList: any = []
         for (let i = 1; i <= getDaysInMonth(year, month); i++) daysList.push(new Date(year, month, i))
 
@@ -71,9 +73,10 @@
 
     let weekdays: string[] = []
     $: {
+        weekdays = []
         for (let i = 0; i < 7; i++) {
             let index = sundayFirstDay ? (i === 0 ? 7 : i) : i + 1
-            weekdays.push($dictionary.weekday?.[index] || "")
+            weekdays.push(translateText("weekday." + index))
         }
     }
 
@@ -183,23 +186,18 @@
         if (type === "action") return actionData[actionId]?.icon || "actions"
         return type
     }
+
+    $: isPresentDay = !!$activeDays.length && isSameDay(new Date($activeDays[0]), today) && current.getMonth() === new Date($activeDays[0]).getMonth() && current.getFullYear() === new Date($activeDays[0]).getFullYear()
+    function setToPresentDay() {
+        current = today
+        activeDays.set([copyDate(today).getTime()])
+    }
 </script>
 
 <div class="calendar">
     <div class="week" style="flex: 1;">
-        <div class="weekday" style="min-width: 25px;flex: 1;padding: 0;">
-            <Button
-                on:click={() => {
-                    current = today
-                    activeDays.set([copyDate(today).getTime()])
-                }}
-                active={!!$activeDays.length && isSameDay(new Date($activeDays[0]), today) && current.getMonth() === new Date($activeDays[0]).getMonth() && current.getFullYear() === new Date($activeDays[0]).getFullYear()}
-                title={$dictionary.calendar?.today}
-                style="width: 100%;height: 100%;padding: 0;"
-                center
-            >
-                <Icon id="calendar" />
-            </Button>
+        <div class="weekday" style="min-width: 25px;flex: 1;padding: 0;background-color: var(--primary-darker);font-size: 0.9em;opacity: 0.7;font-weight: 600;">
+            {current.getFullYear().toString().slice(2)}
         </div>
 
         {#each weekdays as weekday}
@@ -219,14 +217,7 @@
 
                 {#each week as day}
                     {@const dayEvents = getEvents(day, currentEvents, active || "event")}
-                    <div
-                        class="day"
-                        class:today={isSameDay(day, today)}
-                        class:faded={day.getMonth() !== month || day.getFullYear() !== year}
-                        class:active={$activeDays?.includes(copyDate(day).getTime())}
-                        on:mousedown={(e) => dayClick(e, day)}
-                        on:mousemove={(e) => move(e, day)}
-                    >
+                    <div class="day" class:today={isSameDay(day, today)} class:faded={day.getMonth() !== month || day.getFullYear() !== year} class:active={$activeDays?.includes(copyDate(day).getTime())} on:mousedown={(e) => dayClick(e, day)} on:mousemove={(e) => move(e, day)}>
                         <!-- // isSameDay(day, new Date($activeDays[0]))} -->
                         <span style="font-size: 1.5em;font-weight: 600;">{day.getDate()}</span>
                         <span class="events">
@@ -234,9 +225,9 @@
                                 {@const eventIcon = getEventIcon(event.type, { actionId: event.action?.id })}
 
                                 {#if dayEvents.length > 3 && i > 1}
-                                    <span class="dot" style="background-color: {event.color || 'white'}" title={event.name} />
+                                    <span class="dot" style="background-color: {event.color || 'white'}" data-title={event.name} />
                                 {:else}
-                                    <div class="event" style="color: {event.color || 'white'}" title={event.name}>
+                                    <div class="event" style="color: {event.color || 'white'}" data-title={event.name}>
                                         <Icon id={eventIcon} right white />
                                         <p>{event.name}</p>
                                     </div>
@@ -248,38 +239,42 @@
             </div>
         {/each}
     </div>
-
-    <div class="bottom">
-        <span style="opacity: 0.8;min-width: 150px;text-transform: capitalize;white-space: nowrap;align-self: center;padding: 0 10px;">
-            {$dictionary.month?.[current.getMonth() + 1]}
-            {current.getFullYear()}
-        </span>
-
-        <div class="seperator" />
-
-        <Button
-            style="flex: 1;"
-            on:click={() => {
-                eventEdit.set(null)
-                popupData.set({})
-                activePopup.set("edit_event")
-            }}
-            center
-        >
-            <Icon id="add" right={!$labelsDisabled} />
-            {#if !$labelsDisabled}<T id="new.{active === 'action' ? 'event_action' : 'event'}" />{/if}
-        </Button>
-
-        <div class="seperator" />
-
-        <Button style="width: 75px;" on:click={() => previousMonth()} center>
-            <Icon id="previous" size={1.1} />
-        </Button>
-        <Button style="width: 75px;" on:click={() => nextMonth()} center>
-            <Icon id="next" size={1.1} />
-        </Button>
-    </div>
 </div>
+
+<FloatingInputs style="margin-left: 25px;" side="left">
+    <MaterialButton title="media.previous" on:click={() => previousMonth()}>
+        <Icon id="previous" size={1.1} />
+    </MaterialButton>
+    <MaterialButton title="media.next" on:click={() => nextMonth()}>
+        <Icon id="next" size={1.1} />
+    </MaterialButton>
+
+    <div class="divider"></div>
+
+    <MaterialButton title="calendar.today" isActive={isPresentDay} on:click={setToPresentDay}>
+        <Icon id="home" white={!isPresentDay} size={1.1} />
+    </MaterialButton>
+
+    <div class="divider"></div>
+
+    <span style="opacity: 0.8;text-transform: capitalize;white-space: nowrap;align-self: center;padding: 0 10px;">
+        {translateText("month." + (current.getMonth() + 1))}
+        {current.getFullYear()}
+    </span>
+</FloatingInputs>
+
+<FloatingInputs onlyOne>
+    <MaterialButton
+        on:click={() => {
+            eventEdit.set(null)
+            popupData.set({})
+            activePopup.set("edit_event")
+        }}
+    >
+        <Icon id="add" right={!$labelsDisabled} />
+        {#if !$labelsDisabled}<T id="new.{active === 'action' ? 'event_action' : 'event'}" />{/if}
+    </MaterialButton>
+</FloatingInputs>
 
 <style>
     .calendar {
@@ -370,17 +365,5 @@
         width: 10px;
         border-radius: 50%;
         margin: 2px;
-    }
-
-    .bottom {
-        display: flex;
-        justify-content: space-between;
-        background-color: var(--primary-darkest);
-    }
-
-    .seperator {
-        width: 1px;
-        height: 100%;
-        background-color: var(--primary);
     }
 </style>

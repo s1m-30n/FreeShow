@@ -1,14 +1,14 @@
 import { get } from "svelte/store"
 import { uid } from "uid"
 import type { Item, Layout, Line, Slide, SlideData } from "../../types/Show"
+import { DEFAULT_ITEM_STYLE } from "../components/edit/scripts/itemHelpers"
 import { getExtension, getFileName, getMediaType } from "../components/helpers/media"
 import { checkName, getGlobalGroup, initializeMetadata, newSlide } from "../components/helpers/show"
+import { translateText } from "../utils/language"
 import { ShowObj } from "./../classes/Show"
-import { activePopup, alertMessage, dictionary, groups, shows } from "./../stores"
+import { activePopup, alertMessage, groups, shows } from "./../stores"
 import { createCategory, setTempShows } from "./importHelpers"
 import { xml2json } from "./xml"
-
-const itemStyle = "inset-inline-start:50px;top:120px;width:1820px;height:840px;"
 
 export function convertProPresenter(data: any) {
     alertMessage.set("popup.importing")
@@ -102,7 +102,7 @@ export function convertProPresenter(data: any) {
 
             layouts.forEach((layout: any, i: number) => {
                 show.layouts[i === 0 ? layoutID : layout.id] = {
-                    name: layout.name || get(dictionary).example?.default || "",
+                    name: layout.name || translateText("example.default"),
                     notes: i === 0 ? song["@notes"] || "" : "",
                     slides: layout.slides
                 }
@@ -133,7 +133,7 @@ function convertJSONBundleToSlides(song: any) {
         lyrics = lyrics.replaceAll("<p>", "").replaceAll("</p>", "")
         const items = [
             {
-                style: itemStyle,
+                style: DEFAULT_ITEM_STYLE,
                 lines: lyrics.split("<br>").map((a: any) => ({ align: "", text: [{ style: "", value: a }] }))
             }
         ]
@@ -163,7 +163,7 @@ function convertJSONToSlides(song: any) {
     let slidesList: string[] = []
     const slidesRef: any = {}
 
-    song.verses.forEach(([text, label]) => {
+    song.verses?.forEach(([text, label]) => {
         if (!text) return
 
         const id: string = uid()
@@ -174,7 +174,7 @@ function convertJSONToSlides(song: any) {
 
         const items = [
             {
-                style: itemStyle,
+                style: DEFAULT_ITEM_STYLE,
                 lines: text.split("\n").map((a: any) => ({ align: "", text: [{ style: "", value: a }] }))
             }
         ]
@@ -225,7 +225,7 @@ function convertToSlides(song: any, extension: string) {
         let slideIndex = -1
         groupSlides.forEach((slide) => {
             const items = getSlideItems(slide)
-            console.log(slide, items)
+            // console.log(slide, items)
             if (!items?.length) return
             slideIndex++
 
@@ -307,6 +307,8 @@ function getSlideItems(slide: any) {
     if (!itemStrings) itemStrings = [elements.RVTextElement["@RTFData"]]
     else if (itemStrings["#text"]) itemStrings = [itemStrings]
 
+    itemStrings = itemStrings.filter(Boolean)
+
     const rtf = itemStrings.find((a) => a["@rvXMLIvarName"] === "RTFData")
     const plain = itemStrings.find((a) => a["@rvXMLIvarName"] === "PlainText")
     // rtf includes line breaks
@@ -327,7 +329,7 @@ function getSlideItems(slide: any) {
         // console.log(text)
 
         if (text === "Double-click to edit") text = ""
-        items.push({ style: itemStyle, lines: splitTextToLines(text) })
+        items.push({ style: DEFAULT_ITEM_STYLE, lines: splitTextToLines(text) })
     })
 
     return items
@@ -336,6 +338,7 @@ function getSlideItems(slide: any) {
 function makeParentSlide(slide, { label, color = "" }) {
     slide.group = label
     if (color) slide.color = rgbStringToHex(color)
+    if (color === "#000000") slide.color = "#ffffff"
 
     // set global group
     if (label.toLowerCase() === "group") label = "verse"
@@ -364,8 +367,8 @@ function arrangeLayouts(arrangements, sequences) {
 
 function splitTextToLines(text: string) {
     let lines: Line[] = []
-    const data = text.split("\n\n")
-    lines = data.map((lineText: string) => ({ align: "", text: [{ style: "", value: lineText }] }))
+    const data = text.replaceAll("\n\n", "<br>").split("<br>")
+    lines = data.map((lineText: string) => ({ align: "", text: [{ style: "", value: lineText.trim() }] }))
 
     return lines
 }
@@ -375,6 +378,7 @@ const latin1 = {
     "93": "‘", // “
     "94": "’", // ”
     "96": "–",
+    "97": "—",
     e6: "æ",
     f8: "ø",
     e5: "å",
@@ -395,6 +399,7 @@ const latin1 = {
     e9: "é",
     fa: "ú",
     ed: "í",
+    f3: "ó",
     f4: "ô",
     "9e": "ž",
     c1: "Á",
@@ -456,7 +461,16 @@ function decodeBase64(text: string) {
 }
 
 function RTFToText(input: string) {
-    input = input.slice(0, input.lastIndexOf("}"))
+    // Handle the binary ending characters that sometimes appear
+    const binaryEndPos = input.search(/[ÿ¿\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\xFF]+$/)
+    if (binaryEndPos > -1) {
+        input = input.slice(0, binaryEndPos)
+    }
+
+    // Remove the last } if it exists
+    input = input.slice(0, input.lastIndexOf("}") > 0 ? input.lastIndexOf("}") : input.length)
+
+    // Convert common RTF commands to line breaks
     input = input.replaceAll("\\pard", "\\remove")
     input = input.replaceAll("\\part", "\\remove")
     input = input.replaceAll("\\par", "__BREAK__")
@@ -468,7 +482,7 @@ function RTFToText(input: string) {
     const regex = /\{\*?\\[^{}]+}|[{}]|\\\n?[A-Za-z]+\n?(?:-?\d+)?[ ]?/gm
     let newInput = input.replace(regex, "").replaceAll("\\*", "")
 
-    // some files have {} wapped around the text, so it gets removed
+    // some files have {} wrapped around the text, so it gets removed
     if (!newInput.replaceAll("__BREAK__", "").trim().length) {
         input = input.replaceAll("}", "").replaceAll("{", "")
         newInput = input.replace(regex, "").replaceAll("\\*", "")
@@ -479,11 +493,19 @@ function RTFToText(input: string) {
         newInput = newInput.replaceAll(";;", "")
     }
 
-    const splitted = newInput.split("__BREAK__").filter((a) => a)
+    // Clean up remaining formatting artifacts
+    newInput = newInput.replace(/\s+/g, " ").trim()
+
+    const splitted = newInput.split("__BREAK__").filter((a) => a.trim())
     return splitted.join("\n").trim()
 }
 
 function decodeHex(input: string) {
+    // If input looks like RTF but doesn't contain hex encodings, use RTF parser
+    if (input.includes("\\rtf") && !input.includes("\\'")) {
+        return RTFToText(input)
+    }
+
     const textStart = input.indexOf("\\ltrch")
     // remove RTF before text
     if (textStart > -1) {
@@ -642,12 +664,12 @@ function convertProToSlides(song: any) {
 
 function convertItem(item: any) {
     const text = item.text
-    let style = itemStyle
+    let style = DEFAULT_ITEM_STYLE
     if (item.bounds) {
         const pos = item.bounds.origin
         const size = item.bounds.size
         if (Object.keys(pos).length === 2 && Object.keys(size).length === 2) {
-            style = `inset-inline-start:${pos.x}px;top:${pos.y}px;width:${size.width}px;height:${size.height}px;`
+            style = `left:${pos.x}px;top:${pos.y}px;width:${size.width}px;height:${size.height}px;`
         }
     }
 
@@ -736,9 +758,9 @@ function getColorValue(color: { red: number; green: number; blue: number; alpha:
     if (!color) return ""
 
     color = {
-        red: color.red || 0,
-        green: color.green || 0,
-        blue: color.blue || 0,
+        red: color.red || 255,
+        green: color.green || 255,
+        blue: color.blue || 255,
         alpha: color.alpha || 1
     }
 

@@ -6,7 +6,7 @@
     import type { Styles } from "../../../../types/Settings"
     import type { OutBackground, Transition } from "../../../../types/Show"
     import { AudioAnalyser } from "../../../audio/audioAnalyser"
-    import { allOutputs, currentWindow, media, outputs, playerVideos, playingVideos, special, videosData, videosTime, volume } from "../../../stores"
+    import { audioChannelsData, currentWindow, media, outputs, playerVideos, playingVideos, special, videosData, videosTime, volume } from "../../../stores"
     import { destroy, receive, send } from "../../../utils/request"
     import BmdStream from "../../drawer/live/BMDStream.svelte"
     import NdiStream from "../../drawer/live/NDIStream.svelte"
@@ -66,7 +66,7 @@
     function setPreviewVideoTime() {
         // timeout in case video is going to fade out
         setTimeout(() => {
-            if (fadingOut) return
+            if (fadingOut || (!videoData.paused && videoTime < 2)) return
 
             const diff = Math.abs($videosTime[outputId] - videoTime)
             if (diff > 0.5) {
@@ -98,25 +98,15 @@
         }, timeUpdateTimeout)
     }
 
-    // key output parent
-    let keyParentId = ""
-    if ($outputs[outputId]?.isKeyOutput) getKeyParent()
-    function getKeyParent() {
-        Object.keys($allOutputs).forEach((id) => {
-            if (keyParentId) return
-            if ($allOutputs[id].keyOutput === outputId) keyParentId = id
-        })
-    }
-
     const videoReceiver = {
         TIME: (data: any) => {
-            let outputData = data[keyParentId || outputId]
+            let outputData = data[outputId]
             if (!outputData || fadingOut) return
 
             videoTime = outputData
         },
         DATA: (data: any) => {
-            let outputData = data[keyParentId || outputId]
+            let outputData = data[outputId]
             if (!outputData || fadingOut) return
 
             videoData = { ...outputData, duration: videoData.duration || 0 }
@@ -130,7 +120,8 @@
     onMount(() => (mounted = true))
     $: if (id && !fadingOut && mounted) startReceiver()
     function startReceiver() {
-        if (mirror || receiving) return
+        const isStage = !!Object.values($outputs)[0]?.stageOutput
+        if ((mirror && !isStage) || receiving) return
         receiving = true
 
         destroy(OUTPUT, listenerId)
@@ -163,8 +154,16 @@
 
     // FADE OUT AUDIO
 
+    $: audioChannelVolume = $audioChannelsData[outputId]?.volume ?? 1
+    $: isMuted = !!($audioChannelsData[outputId]?.isMuted || $audioChannelsData.main?.isMuted)
+    // $: if (isMuted !== undefined) setMuted(isMuted)
+    // function setMuted(muted: boolean) {
+    //     if (!video) return
+    //     video.muted = muted
+    // }
+
     $: if (fadingOut && !videoData.muted) fadeoutVideo()
-    $: if (!fadingOut && !videoData.muted && id) setVolume($volume * (($media[id]?.volume ?? 100) / 100))
+    $: if (!fadingOut && !videoData.muted && id) setVolume($volume * (isMuted ? 0 : 1) * audioChannelVolume * (($media[id]?.volume ?? currentStyle?.volume ?? 100) / 100))
     const speed = 0.01
     const margin = 0.9 // video should fade to 0 before clearing
     function fadeoutVideo() {
@@ -179,8 +178,8 @@
         }, time)
     }
     function setVolume(volume: number) {
-        if (!video) return
-        video.volume = volume
+        if (!video || !isFinite(volume) || isNaN(volume)) return
+        video.volume = Math.max(0, Math.min(1, volume))
     }
 
     // AUDIO
@@ -235,7 +234,7 @@
     {:else if type === "player"}
         <!-- prevent showing controls in output -->
         {#if $special.hideCursor || $playerVideos[id]?.type !== "youtube"}<div class="overlay" />{/if}
-        <Player {outputId} {id} bind:videoData bind:videoTime title={data.title} startAt={data.startAt} on:loaded on:ended={videoEnded} />
+        <Player {outputId} {id} bind:videoData bind:videoTime startAt={data.startAt} on:loaded on:ended={videoEnded} />
     {/if}
 </OutputTransition>
 
@@ -248,7 +247,7 @@
     .overlay {
         position: absolute;
         top: 0;
-        inset-inline-start: 0;
+        left: 0;
         width: 100%;
         height: 100%;
         background-color: transparent;

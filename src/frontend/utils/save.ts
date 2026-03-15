@@ -10,17 +10,21 @@ import {
     actions,
     activePopup,
     activeProject,
+    alertMessage,
     alertUpdates,
+    audioChannelsData,
     audioFolders,
     audioPlaylists,
     autoOutput,
     autosave,
     calendarAddShow,
     categories,
-    chumsSyncCategories,
+    cloudSyncData,
+    contentProviderData,
     customMetadata,
     customizedIcons,
     dataPath,
+    deletedDefaults,
     deletedShows,
     disabledServers,
     drawSettings,
@@ -31,7 +35,9 @@ import {
     effects,
     effectsLibrary,
     emitters,
-    errorHasOccured,
+    eqPresets,
+    equalizerConfig,
+    errorHasOccurred,
     events,
     folders,
     formatNewShow,
@@ -56,8 +62,10 @@ import {
     overlays,
     playerVideos,
     ports,
+    profiles,
     projectTemplates,
     projects,
+    providerConnections,
     redoHistory,
     remotePassword,
     renamedShows,
@@ -75,6 +83,7 @@ import {
     special,
     splitLines,
     stageShows,
+    statusIndicator,
     styles,
     templateCategories,
     templates,
@@ -82,6 +91,8 @@ import {
     theme,
     themes,
     timeFormat,
+    timecode,
+    timeline,
     timers,
     transitionData,
     triggers,
@@ -94,14 +105,23 @@ import {
 } from "../stores"
 import type { SaveActions, SaveData, SaveList, SaveListSettings, SaveListSyncedSettings } from "./../../types/Save"
 import { audioStreams, companion } from "./../stores"
-import { newToast } from "./common"
+import { socketDisconnect, syncWithCloud } from "./cloudSync"
+import { newToast, setStatus } from "./common"
 import { syncDrive } from "./drive"
 
 export function save(closeWhenFinished = false, customTriggers: SaveActions = {}) {
+    // don't save again while saving
+    if (get(statusIndicator) === "saving") return
+
     console.info("SAVING...")
     if ((!customTriggers.autosave || !get(saved)) && !customTriggers.backup) {
-        newToast("$toast.saving")
+        setStatus("saving")
         customActionActivation("save")
+    }
+
+    if (closeWhenFinished) {
+        alertMessage.set("actions.closing")
+        activePopup.set("alert")
     }
 
     const settings: { [key in SaveListSettings]: any } = {
@@ -117,8 +137,8 @@ export function save(closeWhenFinished = false, customTriggers: SaveActions = {}
         autosave: get(autosave),
         timeFormat: get(timeFormat),
         // events: get(events),
-        showsPath: get(showsPath),
-        dataPath: get(dataPath),
+        showsPath: get(showsPath), // DEPRECATED
+        dataPath: get(dataPath), // DEPRECATED
         lockedOverlays: get(lockedOverlays),
         drawer: get(drawer),
         drawerTabsData: get(drawerTabsData),
@@ -133,7 +153,6 @@ export function save(closeWhenFinished = false, customTriggers: SaveActions = {}
         outLocked: get(outLocked),
         outputs: get(outputs),
         sorted: get(sorted),
-        styles: get(styles),
         remotePassword: get(remotePassword),
         resized: get(resized),
         slidesOptions: get(slidesOptions),
@@ -144,51 +163,32 @@ export function save(closeWhenFinished = false, customTriggers: SaveActions = {}
         // themes: get(themes),
         volume: get(volume),
         gain: get(gain),
+        audioChannelsData: get(audioChannelsData),
+        cloudSyncData: get(cloudSyncData),
         driveData: get(driveData),
         calendarAddShow: get(calendarAddShow),
         metronome: get(metronome),
+        equalizerConfig: get(equalizerConfig),
+        eqPresets: get(eqPresets),
         effectsLibrary: get(effectsLibrary),
         special: get(special),
-        chumsSyncCategories: get(chumsSyncCategories)
+        timeline: get(timeline),
+        timecode: get(timecode),
+        contentProviderData: get(contentProviderData)
     }
 
-    // settings exclusive to the local mashine (path names that shouldn't be synced with cloud)
-    const syncedSettings: { [key in SaveListSyncedSettings]: any } = {
-        categories: get(categories),
-        drawSettings: get(drawSettings),
-        groups: get(groups),
-        overlayCategories: get(overlayCategories),
-        scriptures: get(scriptures),
-        scriptureSettings: get(scriptureSettings),
-        templateCategories: get(templateCategories),
-        timers: get(timers),
-        variables: get(variables),
-        triggers: get(triggers),
-        audioStreams: get(audioStreams),
-        audioPlaylists: get(audioPlaylists),
-        midiIn: get(actions),
-        emitters: get(emitters),
-        playerVideos: get(playerVideos),
-        videoMarkers: get(videoMarkers),
-        mediaTags: get(mediaTags),
-        actionTags: get(actionTags),
-        variableTags: get(variableTags),
-        customizedIcons: get(customizedIcons),
-        companion: get(companion),
-        globalTags: get(globalTags),
-        customMetadata: get(customMetadata),
-        effects: get(effects)
-    }
+    const syncedSettings: { [key: string]: any } = {}
+    Object.entries(getSyncedSettings()).forEach(([key, store]) => {
+        syncedSettings[key] = get(store)
+    })
 
     const allSavedData: SaveData = {
-        path: get(showsPath) || "",
-        dataPath: get(dataPath),
         // SETTINGS
         SETTINGS: settings,
         SYNCED_SETTINGS: syncedSettings,
         // SHOWS
         SHOWS: get(shows),
-        STAGE_SHOWS: get(stageShows),
+        STAGE: get(stageShows),
         // STORES
         PROJECTS: { projects: get(projects), folders: get(folders), projectTemplates: get(projectTemplates) },
         OVERLAYS: get(overlays),
@@ -198,10 +198,10 @@ export function save(closeWhenFinished = false, customTriggers: SaveActions = {}
         THEMES: get(themes),
         DRIVE_API_KEY: get(driveKeys),
         // CACHES SAVED TO MULTIPLE FILES
-        showsCache: clone(get(showsCache)),
-        scripturesCache: clone(get(scripturesCache)),
-        deletedShows: clone(get(deletedShows)),
-        renamedShows: clone(get(renamedShows)),
+        showsCache: get(showsCache),
+        scripturesCache: get(scripturesCache),
+        deletedShows: get(deletedShows),
+        renamedShows: get(renamedShows),
         // CACHES
         CACHE: { text: get(textCache) },
         HISTORY: { undo: get(undoHistory), redo: get(redoHistory) },
@@ -211,24 +211,76 @@ export function save(closeWhenFinished = false, customTriggers: SaveActions = {}
         customTriggers
     }
 
+    const saveData = clone(allSavedData)
+
     deletedShows.set([])
     renamedShows.set([])
 
-    if (customTriggers.backup) newToast("$settings.backup_started")
+    if (customTriggers.backup) newToast("settings.backup_started")
     // trigger toast before saving
-    setTimeout(() => sendMain(Main.SAVE, allSavedData))
+    setTimeout(() => sendMain(Main.SAVE, saveData))
 }
 
-export function saveComplete({ closeWhenFinished, customTriggers }: { closeWhenFinished: boolean; customTriggers?: SaveActions }) {
+export function getSyncedSettings(): { [key in SaveListSyncedSettings]: any } {
+    return {
+        categories,
+        drawSettings,
+        groups,
+        overlayCategories,
+        scriptures,
+        scriptureSettings,
+        templateCategories,
+        styles,
+        profiles,
+        timers,
+        variables,
+        triggers,
+        audioStreams,
+        audioPlaylists,
+        midiIn: actions,
+        emitters,
+        playerVideos,
+        videoMarkers,
+        mediaTags,
+        actionTags,
+        variableTags,
+        customizedIcons,
+        companion,
+        globalTags,
+        customMetadata,
+        effects,
+        deletedDefaults
+    }
+}
+
+export async function saveComplete({ closeWhenFinished, customTriggers }: { closeWhenFinished: boolean; customTriggers?: SaveActions }) {
+    const alreadySaved = get(saved)
     if (!closeWhenFinished) {
-        if ((!customTriggers?.autosave || !get(saved)) && !customTriggers?.backup) newToast("$toast.saved")
+        if ((!customTriggers?.autosave || !alreadySaved) && !customTriggers?.backup) setStatus("saved", 1)
 
         saved.set(true)
         console.info("SAVED!")
     }
 
-    if (customTriggers?.backup || customTriggers?.changeUserData) return
+    // cloud sync
+    if ((customTriggers?.autosave || closeWhenFinished) && (get(providerConnections).churchApps || !get(driveData)?.mainFolderId)) {
+        if (closeWhenFinished) {
+            alertMessage.set("actions.closing")
+            activePopup.set("alert")
+        }
 
+        // only sync when autosaving or closing
+        if (!customTriggers?.autosave || !alreadySaved) await syncWithCloud(false, closeWhenFinished)
+        if (closeWhenFinished) {
+            await socketDisconnect()
+            closeApp()
+        }
+        return
+    }
+
+    if (customTriggers?.backup || customTriggers?.reset) return
+
+    // DEPRECATED drive sync
     const mainFolderId = get(driveData)?.mainFolderId
     if (!mainFolderId || get(driveData)?.disabled === true || !Object.keys(get(driveKeys)).length) {
         if (closeWhenFinished) closeApp()
@@ -240,7 +292,8 @@ export function saveComplete({ closeWhenFinished, customTriggers }: { closeWhenF
 }
 
 export function initializeClosing(skipPopup = false) {
-    if (!skipPopup && (get(special).showClosePopup || get(errorHasOccured))) activePopup.set("unsaved")
+    // don't save automatically if an error has happened in case it breaks something
+    if (!skipPopup && (get(special).showClosePopup || get(errorHasOccurred))) activePopup.set("unsaved")
     // "saved" does not count for all minor changes, but should be fine
     else if (get(saved)) saveComplete({ closeWhenFinished: true })
     else save(true)
@@ -252,11 +305,11 @@ export function closeApp() {
 
 // GET SAVED STATE
 
-let initialized = false
 export function unsavedUpdater() {
     const cachedValues: { [key: string]: string } = {}
     const s = { ...saveList, folders, projects, showsCache, stageShows, deletedShows, renamedShows }
 
+    let initialized = false
     Object.keys(s).forEach((id) => {
         if (!s[id]) return
 
@@ -269,7 +322,9 @@ export function unsavedUpdater() {
                 cachedValues[id] = stringObj
             }
 
-            if (initialized) saved.set(false)
+            if (!initialized) return
+
+            saved.set(false)
             if (id === "deletedShows" || id === "renamedShows") {
                 setTimeout(() => saved.set(false))
             }
@@ -303,7 +358,7 @@ const customSavedListener = {
     },
     projects: (data: Projects) => {
         removeDeleted(keysToID(data)).forEach((a) => {
-            data[a.id].shows.map((show) => {
+            data[a.id].shows?.map((show) => {
                 delete show.layout
             })
         })
@@ -326,8 +381,8 @@ const saveList: { [key in SaveList]: any } = {
     disabledServers,
     serverData,
     events,
-    showsPath,
-    dataPath,
+    showsPath: null,
+    dataPath: null,
     lockedOverlays: null,
     drawer: null,
     drawerTabsData: null,
@@ -345,6 +400,7 @@ const saveList: { [key in SaveList]: any } = {
     outputs: null,
     sorted: null,
     styles,
+    profiles,
     overlayCategories,
     overlays,
     playerVideos,
@@ -366,6 +422,7 @@ const saveList: { [key in SaveList]: any } = {
     transitionData,
     volume: null,
     gain: null,
+    audioChannelsData,
     midiIn: actions,
     emitters,
     videoMarkers,
@@ -374,14 +431,20 @@ const saveList: { [key in SaveList]: any } = {
     variableTags,
     customizedIcons,
     driveKeys,
+    cloudSyncData,
     driveData,
     calendarAddShow: null,
     metronome: null,
+    equalizerConfig: null,
+    eqPresets: null,
     effectsLibrary: null,
     special,
+    timeline: null,
+    timecode: null,
     companion: null,
     globalTags,
     customMetadata: null,
-    chumsSyncCategories: null,
-    effects
+    contentProviderData,
+    effects,
+    deletedDefaults: null
 }

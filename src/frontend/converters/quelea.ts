@@ -1,14 +1,15 @@
-import { get } from "svelte/store"
 import { uid } from "uid"
 import type { Item, Line } from "../../types/Show"
 import { ShowObj } from "../classes/Show"
 import { isChordLine, parseChordLine } from "../components/edit/scripts/chords"
+import { DEFAULT_ITEM_STYLE } from "../components/edit/scripts/itemHelpers"
 import { clone } from "../components/helpers/array"
+import { setQuickAccessMetadata } from "../components/helpers/setShow"
 import { checkName, getGlobalGroup } from "../components/helpers/show"
-import { activePopup, alertMessage, dictionary } from "../stores"
+import { activePopup, alertMessage } from "../stores"
+import { translateText } from "../utils/language"
 import { createCategory, setTempShows } from "./importHelpers"
 import { xml2json } from "./xml"
-import { setQuickAccessMetadata } from "../components/helpers/setShow"
 
 type Song = {
     title: string
@@ -57,6 +58,8 @@ export function convertQuelea(data: any) {
     }, 50)
 
     function convertSong(song: Song) {
+        if (!song) return
+
         const layoutID = uid()
         let show = new ShowObj(false, categoryId, layoutID)
         show.origin = "quelea"
@@ -71,12 +74,12 @@ export function convertQuelea(data: any) {
             author: song.author || "",
             key: song.key || "",
             publisher: song.publisher || "",
-            year: song.year || "",
+            year: song.year || ""
         }
         if (show.meta.CCLI) show = setQuickAccessMetadata(show, "CCLI", show.meta.CCLI)
 
         show.slides = slides
-        show.layouts = { [layoutID]: { name: get(dictionary).example?.default || "", notes: song.notes || "", slides: layout } }
+        show.layouts = { [layoutID]: { name: translateText("example.default"), notes: song.notes || "", slides: layout } }
 
         tempShows.push({ id: uid(), show })
     }
@@ -105,9 +108,9 @@ function createSlides(song: Song) {
 
         let items: Item[] = [
             {
-                style: "inset-inline-start:50px;top:120px;width:1820px;height:840px;",
-                lines: parseLines(allLines),
-            },
+                style: DEFAULT_ITEM_STYLE,
+                lines: parseLines(allLines)
+            }
         ]
 
         // custom translations
@@ -126,7 +129,7 @@ function createSlides(song: Song) {
             color: null,
             settings: {},
             notes: "",
-            items,
+            items
         }
 
         const globalGroup = getGlobalGroup(groupName) || "verse"

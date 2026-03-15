@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount } from "svelte"
+    import { onDestroy, onMount } from "svelte"
     import type { MediaStyle } from "../../../../types/Main"
     import type { Resolution } from "../../../../types/Settings"
     import type { MediaType, ShowType } from "../../../../types/Show"
@@ -31,6 +31,26 @@
 
     let width = 0
     let height = 0
+    let mainElem: HTMLDivElement | null = null
+
+    let resizeObserver: ResizeObserver | null = null
+    onMount(() => {
+        if (!mainElem) return
+
+        resizeObserver = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                const { width: w, height: h } = entry.contentRect
+                if (width !== w || height !== h) {
+                    width = w
+                    height = h
+                }
+            }
+        })
+        resizeObserver.observe(mainElem)
+    })
+    onDestroy(() => {
+        if (resizeObserver && mainElem) resizeObserver.unobserve(mainElem)
+    })
 
     // type
     $: if (!type && path) {
@@ -44,13 +64,19 @@
 
     $: if (!videoElem) duration = 0
     function getCurrentDuration() {
-        if (!videoElem || duration === videoElem.duration) return
+        if (!videoElem) return
 
-        duration = videoElem.duration
+        const videoDuration = videoElem.duration
+        if (!Number.isFinite(videoDuration) || videoDuration <= 0) {
+            duration = 0
+            return
+        }
+
+        duration = videoDuration
 
         // set video time
         if (hover || !useOriginal) return
-        videoElem.currentTime = duration / 2
+        videoElem.currentTime = videoDuration / 2
     }
 
     // retry on error
@@ -72,9 +98,6 @@
         }, time)
     }
 
-    // path starting at "/" auto completes to app root, but should be file://
-    $: if (typeof path === "string" && path[0] === "/") path = `file://${path}`
-
     $: useOriginal = hover || loadFullImage || retryCount > MAX_RETRIES || !thumbnailPath
 
     // get duration
@@ -85,7 +108,8 @@
         setTimeout(() => {
             let video = document.createElement("video")
             video.onloadeddata = () => {
-                duration = video.duration || 0
+                const loadedDuration = video.duration
+                duration = Number.isFinite(loadedDuration) ? loadedDuration : 0
                 // video.pause()
                 video.src = ""
             }
@@ -111,7 +135,7 @@
     }
 </script>
 
-<div class="main" style="aspect-ratio: {customResolution.width}/{customResolution.height};" bind:offsetWidth={width} bind:offsetHeight={height}>
+<div class="main" style="aspect-ratio: {customResolution.width}/{customResolution.height};" bind:this={mainElem}>
     {#key path}
         {#if type === "camera"}
             <div bind:clientWidth={width} bind:clientHeight={height} style="height: 100%;">
@@ -127,18 +151,9 @@
             {:else if type !== "video" || (thumbnailPath && retryCount <= MAX_RETRIES)}
                 {#key retryCount}
                     {#if mediaStyle.fit === "blur"}
-                        <img src={type !== "video" && useOriginal ? (croppingActive ? croppedImage : encodeFilePath(path)) : thumbnailPath} alt={name} style={mediaStyleBlurString} loading="lazy" class:loading={!loaded} class="hideError" />
+                        <img src={type !== "video" && useOriginal ? (croppingActive ? croppedImage : encodeFilePath(path)) : encodeFilePath(thumbnailPath)} alt={name} style={mediaStyleBlurString} loading="lazy" class:loading={!loaded} class="hideError" />
                     {/if}
-                    <img
-                        src={type !== "video" && useOriginal ? (croppingActive ? croppedImage : encodeFilePath(path)) : thumbnailPath}
-                        alt={name}
-                        style={mediaStyleString}
-                        loading="lazy"
-                        class:loading={!loaded}
-                        class:hideError={ghost}
-                        on:error={reload}
-                        on:load={() => (loaded = true)}
-                    />
+                    <img src={type !== "video" && useOriginal ? (croppingActive ? croppedImage : encodeFilePath(path)) : encodeFilePath(thumbnailPath)} alt={name} style={mediaStyleString} loading="lazy" class:loading={!loaded} class:hideError={ghost} on:error={reload} on:load={() => (loaded = true)} />
                 {/key}
             {/if}
             {#if type === "video" && useOriginal && !ghost}

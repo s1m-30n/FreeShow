@@ -5,7 +5,7 @@ import { getLayoutRef } from "../helpers/show"
 import { _show } from "../helpers/shows"
 import { getTextboxes } from "./formatTextEditor"
 
-export function getPlainEditorText(showId = "", allowEmpty: boolean = false) {
+export function getPlainEditorText(showId = "", allowEmpty = false) {
     if (!showId) showId = "active"
     const ref = getLayoutRef(showId)
     const slides = _show(showId).get("slides")
@@ -91,7 +91,7 @@ function getItems(items: Item[]) {
 const br = "||__$BREAK$__||"
 
 function replaceValues(text: string, revert = false) {
-    if (!text) return ""
+    if (typeof text !== "string") return ""
 
     if (revert) return text.replaceAll(br, "\n")
     return text.replaceAll("\n", br)

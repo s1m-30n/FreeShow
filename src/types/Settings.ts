@@ -16,22 +16,29 @@ export interface Styles {
     background?: string
     backgroundImage?: string
     clearStyleBackgroundOnText?: boolean
+    transition?: { [key: string]: Transition }
     fit?: MediaFit | null
+    blurAmount?: number
+    blurOpacity?: number
+    volume?: number
     resolution?: Resolution // pre 1.3.9
     aspectRatio?: AspectRatio
     cropping?: Cropping // pre 1.3.3
     lines?: number
+    skipVirtualBreaks?: boolean // break on [_VB] chars only for templates with this option
     template?: string // slide
     templateScripture?: string
     templateScripture_2?: string
     templateScripture_3?: string
     templateScripture_4?: string
-    metadataDivider?: string
-    metadataLayout?: string // not in use yet 1.2.8
-    displayMetadata?: string
-    metadataTemplate?: string
-    messageTemplate?: string
-    transition?: { [key: string]: Transition }
+    metadata?: Metadata
+}
+
+export interface Metadata {
+    display?: string
+    template?: string // default or last slide only
+    templateFirst?: string // first slide only
+    templateAll?: string // all slides (old "message")
 }
 
 export interface Resolution {

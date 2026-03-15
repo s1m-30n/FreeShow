@@ -6,6 +6,7 @@
 
     export let value: number
     export let title = ""
+    export let visibleTitle = false
     export let style = ""
     export let inputMultiplier = 1
     export let decimals = 0
@@ -24,7 +25,11 @@
 
     const input = (e: any) => {
         let inputValue = e.target.value || 0
-        inputValue = new Function(`return ${inputValue}`)() // calculate without eval()
+        try {
+            inputValue = new Function(`return ${inputValue}`)() // calculate without eval()
+        } catch (err) {
+            inputValue = value
+        }
 
         let newVaule = Math.max(Math.min(inputValue, max * inputMultiplier), min * inputMultiplier) / inputMultiplier
         dispatch("change", newVaule !== null ? newVaule.toFixed(decimals) : value)
@@ -96,8 +101,14 @@
         </Button>
     {/if}
 
-    <span class="input" {title}>
+    <span class="input" data-title={title}>
         <TextInput {disabled} value={(value * inputMultiplier).toFixed(fixed)} on:change={input} center />
+
+        {#if visibleTitle}
+            <div class="title">
+                {title}
+            </div>
+        {/if}
     </span>
 
     {#if buttons}
@@ -111,8 +122,8 @@
     .numberInput {
         display: flex;
         /* align-items: center; */
-        background-color: var(--primary-darker);
-        border-radius: var(--border-radius);
+        background-color: var(--primary-darkest);
+        border-radius: 4px;
         flex-flow: wrap;
         transition: opacity 0.3s;
     }
@@ -132,9 +143,24 @@
         height: 100%;
         /* font-size: 1.5em; */
         /* font-weight: bold; */
+
+        position: relative;
     }
 
     .input :global(input) {
         padding: 5px;
+        background-color: var(--primary-darkest);
+        border-radius: 4px;
+    }
+
+    .title {
+        position: absolute;
+        bottom: -20px;
+        left: 50%;
+        transform: translateX(-50%);
+
+        font-size: 0.18em;
+
+        pointer-events: none;
     }
 </style>

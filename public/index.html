@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
 
+<<<<<<< HEAD
     <!-- Live reload (dev):        http://localhost:35729/livereload.js -->
     <!-- Svelte inspector (dev):   http://localhost:5001 -->
     <!-- YouTube iframe:           http://www.youtube.com/iframe_api -->
@@ -14,15 +15,32 @@
       http-equiv="Content-Security-Policy"
       content="script-src 'self' http://localhost:35729/livereload.js http://localhost:5001 http://www.youtube.com/iframe_api https://* 'unsafe-inline' 'unsafe-eval';"
     />
+=======
+        <!-- Live reload (dev):        http://localhost:35729/livereload.js -->
+        <!-- Svelte inspector (dev):   http://localhost:5001 -->
+        <!-- YouTube iframe:           http://www.youtube.com/iframe_api -->
+        <!-- Other sites (vimeo):      https://* -->
+        <!-- Inline <script>/<style>:  unsafe-inline -->
+        <!-- NumberInput math:         unsafe-eval -->
+        <meta http-equiv="Content-Security-Policy" content="script-src 'self' http://www.youtube.com/iframe_api https://* 'unsafe-inline' 'unsafe-eval';" />
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 
     <title>RCF VisionCast | Powered by FreeShow</title>
 
+<<<<<<< HEAD
     <!-- <link rel="preload" href="./fonts/CMGSans-Regular.ttf" as="font" crossorigin="anonymous" /> -->
     <link rel="stylesheet" href="./global.css" />
     <link rel="stylesheet" href="./build/bundle.css" />
 
     <script defer src="./build/bundle.js"></script>
   </head>
+=======
+        <!-- <link rel="preload" href="./fonts/CMGSans-Regular.ttf" as="font" crossorigin="anonymous" /> -->
+        <link rel="stylesheet" href="./global.css" />
+
+        <script type="module" src="/src/frontend/main.ts"></script>
+    </head>
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 
   <body></body>
 </html>

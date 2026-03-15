@@ -6,8 +6,8 @@
     import { EffectRender } from "./effectRenderer"
 
     export let effect: Effect & { id?: string }
-    export let preview: boolean = false
-    export let edit: boolean = false
+    export let preview = false
+    export let edit = false
 
     let items: any[]
     $: items = effect?.items || [] // .filter((a) => !a.hidden)
@@ -33,10 +33,12 @@
         renderer?.stop()
     })
 
-    const fullReloadTypes = ["stars", "galaxy"]
+    const fullReloadTypes = ["stars", "galaxy", "bloom"]
     const fullReloadKeys = ["count", "color", "flareDiscNum"]
     const fullReloadKeysSpecific = {
-        rain: ["length", "width"],
+        rain: ["length", "width", "speed"],
+        snow: ["size", "speed", "drift"],
+        bubbles: ["size", "speed", "pulseSpeed"],
         city: ["height", "width"],
         grass: ["height", "speed"]
     }

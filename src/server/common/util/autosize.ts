@@ -9,7 +9,7 @@ const MIN_FONT_SIZE = 10
 
 export type AutosizeTypes = "shrinkToFit" | "growToFit"
 type Options = {
-    type?: AutosizeTypes // "shrinkToFit"
+    type?: AutosizeTypes | "none" // "shrinkToFit"
     textQuery?: string // all children by default (or self)
     defaultFontSize?: number // 50
     maxFontSize?: number // 800

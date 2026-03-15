@@ -1,13 +1,14 @@
 <script lang="ts">
     import { activeStage, stageShows, theme, themes } from "../../../stores"
+    import { MAX_FONT_SIZE } from "../../edit/scripts/autosize"
     import { addStyleString } from "../../edit/scripts/textStyle"
     import EditValues from "../../edit/tools/EditValues.svelte"
-    import { boxes, type EditInput, setBoxInputValue } from "../../edit/values/boxes"
+    import { itemBoxes, setBoxInputValue } from "../../edit/values/boxes"
     import { clone } from "../../helpers/array"
     import { history } from "../../helpers/history"
     import { getStyles } from "../../helpers/style"
     import { updateStageShow } from "../stage"
-    import { slideNotesEdit, slideTextEdits, variableEdits } from "../values/text"
+    import { slideTextSections } from "../values/text"
 
     let activeItemIds: string[] = []
     $: activeItemIds = $activeStage.items?.length ? $activeStage.items : Object.keys(stageItems)
@@ -19,156 +20,34 @@
     $: type = item?.type || ""
     $: {
         if (activeItemId.includes("tracker")) type = "slide_tracker"
-        else if (item?.type === "slide_text" || item?.type === "slide_notes" || item?.type === "variable" || activeItemId.includes("text") || activeItemId.includes("slide") || activeItemId.includes("notes") || activeItemId.includes("variable"))
-            type = "text"
+        else if (item?.type === "slide_text" || item?.type === "slide_notes" || item?.type === "variable" || activeItemId.includes("text") || activeItemId.includes("slide") || activeItemId.includes("notes") || activeItemId.includes("variable")) type = "text"
         else if (activeItemId.includes("clock")) type = "clock"
         else if (activeItemId.includes("timer")) type = "timer"
     }
 
-    let edits: { [key: string]: EditInput[] } = {}
-    let defaultEdits = edits
-    $: if (item) initEdits()
-    function initEdits() {
-        if (!item) return
+    $: isSlideText = item?.type === "slide_text" // || activeItemId?.includes("slide_text")
+    $: isTextItem = item?.type === "slide_text" || item?.type === "text"
+    $: stageSections = item ? clone(isSlideText ? slideTextSections : itemBoxes[item.type || ""]?.sections) || {} : {}
 
-        edits = clone(boxes[type]?.edit || {})
+    $: if (item?.type === "text" && stageSections) {
+        delete stageSections.chords
+        delete stageSections.scrolling
+    }
+    $: if (isSlideText) {
+        stageSections = clone(item?.keepStyle ? { default: slideTextSections.default, chords: slideTextSections.chords, special: slideTextSections.special } : slideTextSections)
 
-        if (type === "text") {
-            setBoxInputValue(edits, "default", "font-family", "value", "Arial")
+        // line height
+        if (stageSections.text) stageSections.text = { inputs: [...stageSections.text.inputs, [{ id: "style", key: "line-height", type: "number", value: 1.1, multiplier: 10, extension: "em", values: { label: "edit.line_height", max: 50 } }]] }
 
-            removeInput(edits.default, "textFit")
-            removeInput(edits.text, "nowrap")
-            removeInput(edits.lines, "specialStyle.lineRadius") // no need for radius without bg color
-            removeInput(edits.lines, "specialStyle.lineBg")
-            removeInput(edits.lines, "specialStyle.opacity")
+        // setBoxInputValue(stageSections, "font", "font-weight", "default", "bold")
 
-            delete edits.list
-
-            if (item.type === "text") {
-                removeInput(edits.special, "scrolling.type")
-                removeInput(edits.special, "scrolling.speed")
-            } else {
-                delete edits.special
-            }
-        }
-
-        if (item.type === "slide_text" || activeItemId.includes("slide_text")) {
-            let newEdits = clone(edits)
-            delete newEdits.default
-
-            if (item.keepStyle) {
-                let textEdits = clone(slideTextEdits)
-                removeInput(textEdits, "invertItems")
-                edits = { default: textEdits, chords: edits.chords }
-            } else {
-                edits = { default: clone(slideTextEdits), font: edits.default, ...newEdits }
-            }
-        } else if (item.type === "slide_notes") {
-            let newEdits = clone(edits)
-            delete newEdits.default
-            delete newEdits.chords
-            edits = { default: slideNotesEdit, font: edits.default, ...newEdits }
-            // } else if (item.type === "text") {
-            //     removeInput(edits.default, "auto")
-        } else if (item.type === "variable") {
-            let newEdits = clone(edits)
-            delete newEdits.default
-            delete newEdits.chords
-            edits = { default: variableEdits, font: edits.default, ...newEdits }
-        } else if (item.type === "clock") {
-            // show seconds by default on stage
-            setBoxInputValue(edits, "default", "clock.seconds", "value", true)
-        }
-
-        defaultEdits = clone(edits)
+        // allow no color (inherit from slide)
+        if (stageSections.font) stageSections.font.inputs[0][1].values.allowEmpty = true
     }
 
-    function removeInput(edits: any, id: string) {
-        let index = edits.findIndex((a) => a.id === id || a.input === id)
-        if (index > -1) edits.splice(index, 1)
+    $: if (stageSections?.CSS) {
+        setBoxInputValue(stageSections, "CSS", "CSS_text", "value", item?.style || "")
     }
-
-    let data: { [key: string]: any } = {}
-    $: if (item?.style || item === null) data = getStyles(item?.style, true)
-
-    // $: if (edits) updateAuto(item?.auto || true)
-    $: if (item) updateAuto(item?.auto ?? true)
-
-    $: if (item && type === "text") {
-        let sectionId = edits.font ? "font" : "default"
-        setBoxInputValue(edits, sectionId, "font-family", "styleValue", data["font"] || "")
-        setBoxInputValue(edits, sectionId, "font-size", "disabled", item.type === "text" ? item.auto === true : item.auto !== false)
-        // setBoxInputValue(edits, sectionId, "textFit", "hidden", item?.auto !== false)
-    }
-    $: if (item && item.type === "slide_notes") {
-        setBoxInputValue(edits, "default", "slideOffset", "value", item.slideOffset || 0)
-    }
-    $: if (item && (item.type === "slide_text" || activeItemId?.includes("slide_text"))) {
-        setBoxInputValue(edits, "default", "slideOffset", "value", item.slideOffset || 0)
-
-        setBoxInputValue(edits, "default", "lineCount", "value", item.lineCount || 0)
-        setBoxInputValue(edits, "default", "lineCount", "hidden", Number(item.slideOffset || 0) === 0)
-
-        setBoxInputValue(edits, "default", "includeMedia", "value", !!item.includeMedia)
-        setBoxInputValue(edits, "default", "keepStyle", "value", !!item.keepStyle)
-        setBoxInputValue(edits, "default", "itemNumber", "value", Number(item.itemNumber || 0))
-        setBoxInputValue(edits, "default", "invertItems", "value", !!item.invertItems)
-        setBoxInputValue(edits, "default", "invertItems", "hidden", Number(item.itemNumber || 0) !== 0)
-    }
-    $: if (item && item.type === "text") {
-        setBoxInputValue(edits, "default", "auto", "value", !!item.auto)
-
-        setBoxInputValue(edits, "special", "button.press", "value", item?.button?.press || "")
-        setBoxInputValue(edits, "special", "button.release", "value", item?.button?.release || "")
-    }
-
-    $: if (edits.chords) {
-        let enabled = typeof item?.chords === "boolean" ? item?.chords : !!item?.chords?.enabled
-        setBoxInputValue(edits, "chords", "chords.enabled", "value", enabled)
-        setBoxInputValue(edits, "chords", "chords.color", "hidden", !enabled)
-        setBoxInputValue(edits, "chords", "chords.size", "hidden", !enabled)
-        setBoxInputValue(edits, "chords", "chords.offsetY", "hidden", !enabled)
-
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-        let data = (typeof item?.chords === "boolean" ? (item as any)?.chordsData : item?.chords) || {}
-        if (data.color) setBoxInputValue(edits, "chords", "chords.color", "value", data.color)
-        if (data.size) setBoxInputValue(edits, "chords", "chords.size", "value", data.size)
-        if (data.offsetY) setBoxInputValue(edits, "chords", "chords.offsetY", "value", data.offsetY)
-    }
-    $: if (item?.type === "slide_tracker" || activeItemId?.includes("tracker")) {
-        if (item?.tracker?.type) setBoxInputValue(edits, "default", "tracker.type", "value", item.tracker.type)
-        setBoxInputValue(edits, "default", "tracker.accent", "value", item?.tracker?.accent || $themes[$theme]?.colors?.secondary || "#F0008C")
-
-        setBoxInputValue(edits, "default", "tracker.childProgress", "hidden", item?.tracker?.type !== "group")
-        setBoxInputValue(edits, "default", "tracker.oneLetter", "hidden", item?.tracker?.type !== "group")
-    }
-
-    $: if (item?.type === "variable") {
-        setBoxInputValue(edits, "default", "variable.id", "value", item.variable?.id)
-    }
-    $: if (item?.type === "camera") {
-        if (item.device?.name) setBoxInputValue(edits, "default", "device", "name", item.device.name)
-    }
-
-    $: if (item?.type === "timer" && item) {
-        setBoxInputValue(edits, "default", "timer.circleMask", "hidden", item.timer?.viewType !== "circle")
-        setBoxInputValue(edits, "default", "timer.showHours", "value", item.timer?.showHours !== false)
-        setBoxInputValue(edits, "default", "timer.showHours", "hidden", (item.timer?.viewType || "time") !== "time")
-        setBoxInputValue(edits, "font", "auto", "value", item.auto ?? true)
-    }
-    $: if (item?.type === "clock" && item) {
-        const clockType = item.clock?.type || "digital"
-        const dateFormat = item.clock?.dateFormat || "none"
-
-        setBoxInputValue(edits, "default", "clock.dateFormat", "hidden", clockType !== "digital")
-        setBoxInputValue(edits, "default", "clock.showTime", "hidden", clockType !== "digital" || dateFormat === "none")
-        setBoxInputValue(edits, "default", "clock.seconds", "hidden", clockType === "custom" || (clockType === "digital" && item.clock?.showTime === false && dateFormat !== "none"))
-        setBoxInputValue(edits, "default", "clock.customFormat", "hidden", clockType !== "custom")
-    }
-
-    // CSS
-    // WIP get only text related item styles (& combine again)?
-    $: if (edits?.CSS && item?.style) edits.CSS[0].value = item.style
 
     // align
     let alignStyle: any = {}
@@ -176,27 +55,67 @@
     $: if (item?.align) alignStyle = { "align-items": item.align }
     $: if (item?.alignX) lineAlignStyle = { "text-align": item.alignX }
 
-    function updateAuto(value) {
-        if (!edits.default) return
+    $: customValues = {
+        "text-align": lineAlignStyle["text-align"] || "center",
+        "align-items": alignStyle["align-items"] || "center"
+    }
 
-        let autoIndex = edits.default.findIndex((a) => a.id === "auto")
-        if (autoIndex < 0) {
-            // items with custom default have auto size in "font"
-            if (edits.font) autoIndex = edits.font.findIndex((a) => a.id === "auto")
-            if (autoIndex >= 0) edits.font[autoIndex].value = value
+    let styles: { [key: string]: any } = {}
+    $: if (item?.style || item === null) styles = getStyles(item?.style, true)
 
-            return
-        }
+    $: if (stageSections?.font || type === "text") {
+        setBoxInputValue(stageSections, "font", "font-size", "disabled", !isTextItem && item?.textFit === "growToFit")
+        setBoxInputValue(stageSections, "font", "textFit", "value", item?.textFit || "growToFit")
+        // setBoxInputValue(stageSections, "font", "auto", "value", item.auto ?? true)
 
-        edits.default[autoIndex].value = value
+        setBoxInputValue(stageSections, "text", "nowrap", "value", !!styles["white-space"]?.includes("nowrap"))
+    }
+
+    $: if (item && type === "text") {
+        let sectionId = stageSections?.font ? "font" : "default"
+        setBoxInputValue(stageSections, sectionId, "font-family", "default", "Arial")
+        setBoxInputValue(stageSections, sectionId, "font-family", "styleValue", styles["font"] || "")
+        // setBoxInputValue(stageSections, sectionId, "font-size", "disabled", item.type === "text" ? item.auto === true : item.auto !== false)
+        // setBoxInputValue(edits, sectionId, "textFit", "hidden", item?.auto !== false)
+    }
+    $: if (item && isSlideText) {
+        setBoxInputValue(stageSections, "default", "lineCount", "hidden", Number(item.slideOffset || 0) === 0)
+        setBoxInputValue(stageSections, "default", "invertItems", "hidden", Number(item.itemNumber || 0) !== 0)
+    }
+
+    $: if (item?.type === "slide_tracker" || activeItemId?.includes("tracker")) {
+        setBoxInputValue(stageSections, "default", "tracker.accent", "value", item?.tracker?.accent || $themes[$theme]?.colors?.secondary || "#F0008C")
+
+        setBoxInputValue(stageSections, "default", "tracker.childProgress", "hidden", item?.tracker?.type !== "group")
+        setBoxInputValue(stageSections, "default", "tracker.oneLetter", "hidden", item?.tracker?.type !== "group")
+    }
+
+    $: if (item?.type === "camera") {
+        if (item.device?.name) setBoxInputValue(stageSections, "default", "device", "name", item.device.name)
+    }
+
+    $: if (item?.type === "timer" && item) {
+        setBoxInputValue(stageSections, "default", "timer.circleMask", "hidden", item.timer?.viewType !== "circle")
+        // setBoxInputValue(stageSections, "default", "timer.showHours", "value", item.timer?.showHours !== false)
+        setBoxInputValue(stageSections, "default", "timer.showHours", "hidden", (item.timer?.viewType || "time") !== "time")
+    }
+    $: if (item?.type === "clock" && item) {
+        const clockType = item.clock?.type || "digital"
+        const dateFormat = item.clock?.dateFormat || "none"
+
+        setBoxInputValue(stageSections, "default", "clock.dateFormat", "hidden", clockType !== "digital")
+        setBoxInputValue(stageSections, "default", "clock.showTime", "hidden", clockType !== "digital" || dateFormat === "none")
+        setBoxInputValue(stageSections, "default", "clock.seconds", "hidden", clockType === "custom" || (clockType === "digital" && item.clock?.showTime === false && dateFormat !== "none"))
+        setBoxInputValue(stageSections, "default", "clock.customFormat", "hidden", clockType !== "custom")
+
+        // show seconds by default on stage
+        setBoxInputValue(stageSections, "default", "clock.seconds", "value", true)
     }
 
     function setValue(input: any) {
         let value: any = input.value
         // if (input.id === "filter") value = addFilterString(item?.filter || "", [input.key, value])
         // else if (input.key) value = { ...((item as any)?.[input.key] || {}), [input.key]: value }
-
-        if (input.id === "auto") updateAuto(value)
 
         if (input.id.includes(".")) {
             let splitted = input.id.split(".")
@@ -232,16 +151,21 @@
     function updateStyle(e: any) {
         let input = e.detail
 
-        if (input.key === "text-align" || input.key === "align-items") updateAlign(input)
+        if (input.key === "text-align" || input.key === "align-items") {
+            updateAlign(input)
+            return
+        }
 
-        if (input.id !== "style" && input.id !== "CSS") {
+        if (input.id === "nowrap") input = { ...input, id: "style", key: "white-space", value: input.value ? "nowrap" : undefined }
+
+        if (input.id !== "style" && !input.id.includes("CSS")) {
             setValue(input)
             return
         }
 
         let value: string = addStyleString(item?.style || "", [input.key, input.value]) || ""
 
-        if (input.id === "CSS") value = input.value.replaceAll("\n", "")
+        if (input.id.includes("CSS")) value = input.value.replaceAll("\n", "")
 
         if (!value) return
 
@@ -254,7 +178,7 @@
             let item = stageItems[itemId]
             if (!item || (!$activeStage.items?.length && item.type !== updateType)) return
 
-            styles[itemId] = input.id === "CSS" ? value : addStyleString(item.style, [input.key, input.value])
+            styles[itemId] = input.id.includes("CSS") ? value : addStyleString(item.style, [input.key, input.value])
         })
 
         history({
@@ -273,15 +197,27 @@
         }
     }
 
+    function updateStyle2(e: any) {
+        const input = e.detail
+        input.value = input.values.value
+        input.input = input.type
+
+        if (input.id === "textFit") {
+            updateStyle({ detail: { id: "auto", value: input.value !== "none" } })
+
+            if (isTextItem) {
+                let newFontSize = 0
+                // change font size to more clearly indicate what the different text fit does
+                if (input.value !== "growToFit" && Number(styles["font-size"]) < 200) newFontSize = 0
+                else newFontSize = input.value !== "growToFit" ? 100 : MAX_FONT_SIZE
+                if (newFontSize) updateStyle({ detail: { name: "font_size", id: "style", key: "font-size", value: newFontSize + "px" } })
+            }
+        }
+
+        updateStyle({ detail: input })
+    }
+
     let timeout: NodeJS.Timeout | null = null
 </script>
 
-<!-- {#if item} -->
-<!-- {#key edits} -->
-<EditValues {edits} {defaultEdits} {alignStyle} {lineAlignStyle} styles={data} {item} on:change={updateStyle} isStage />
-<!-- {/key} -->
-<!-- {:else}
-    <Center faded>
-        <T id="empty.items" />
-    </Center>
-{/if} -->
+<EditValues sections={stageSections} {styles} {item} {customValues} on:change={updateStyle2} isStage />

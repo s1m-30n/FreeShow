@@ -1,13 +1,15 @@
 import { get } from "svelte/store"
 import { uid } from "uid"
+import type { Chords } from "../../types/Show"
+import { DEFAULT_ITEM_STYLE } from "../components/edit/scripts/itemHelpers"
+import { setQuickAccessMetadata } from "../components/helpers/setShow"
 import { checkName, formatToFileName } from "../components/helpers/show"
-import type { Bible } from "./../../types/Bible"
+import { translateText } from "../utils/language"
+import type { Bible, Book, Chapter, Verse } from "json-bible/lib/Bible"
 import { ShowObj } from "./../classes/Show"
-import { activePopup, alertMessage, dictionary, groups, scriptures, scripturesCache } from "./../stores"
+import { activePopup, alertMessage, groups, scriptures, scripturesCache } from "./../stores"
 import { setActiveScripture } from "./bible"
 import { createCategory, setTempShows } from "./importHelpers"
-import { setQuickAccessMetadata } from "../components/helpers/setShow"
-import type { Chords } from "../../types/Show"
 
 interface Song {
     title: string
@@ -44,7 +46,7 @@ export function convertOpenSong(data: any) {
             let song: any = {}
             if (content.includes("<html>")) song = HTMLtoObject(content)
             else song = XMLtoObject(content)
-            console.log(content, song)
+            // console.log(content, song)
 
             const layoutID = uid()
             let show = new ShowObj(false, categoryId, layoutID)
@@ -65,7 +67,7 @@ export function convertOpenSong(data: any) {
 
             show.slides = slides
             show.media = media
-            show.layouts = { [layoutID]: { name: get(dictionary).example?.default || "", notes: song.aka || "", slides: layout } }
+            show.layouts = { [layoutID]: { name: translateText("example.default"), notes: song.aka || "", slides: layout } }
 
             tempShows.push({ id: uid(), show })
         })
@@ -74,7 +76,8 @@ export function convertOpenSong(data: any) {
     }, 10)
 }
 
-const OSgroups: any = { V: "verse", C: "chorus", B: "bridge", T: "tag", O: "outro" }
+// Added Pre-chorus as a common global group
+const OSgroups: any = { V: "verse", C: "chorus", B: "bridge", T: "tag", O: "outro", I: "intro", P: "pre_chorus" }
 function createSlides({ lyrics, presentation, backgrounds }: Song) {
     const slides: any = {}
     const media: any = {}
@@ -82,19 +85,71 @@ function createSlides({ lyrics, presentation, backgrounds }: Song) {
     if (!lyrics) return { slides, layout }
 
     // fix incorrect formatting
-    lyrics = lyrics.replaceAll("\n \n", "\n\n").replaceAll("[", "\n\n[").trim()
+    lyrics = lyrics.replaceAll("\n \n", "\n\n").trim()
     lyrics = lyrics.replaceAll("\n\n\n\n", "\n\n")
     lyrics = lyrics.replaceAll("||", "__CHILD_SLIDE__")
 
     const slideRef: any = {}
     let slideOrder: string[] = []
 
-    lyrics.split("\n\n").forEach((slide) => {
-        const groupText = slide.trim()
-        let group = groupText
-            .split("\n")
-            .splice(0, 1)[0]
-            ?.replace(/[\[\]]/g, "")
+    // split into groups: if square-bracket group markers exist, split at each '[' (keep '[' with group)
+    let splittedgroups = lyrics.includes("[") ? lyrics.split(/(?=\[)/) : [lyrics]
+
+    // Mimic Opensong handling of duplicate [] tags. 
+    // Combine groups with identical [] tags into the first occurrence (remove extra [] markers and later groups)
+    if (splittedgroups.length > 1) {
+        const seen: Record<string, number> = {}
+        for (let i = 0; i < splittedgroups.length; i++) {
+            const grp = splittedgroups[i]
+            if (!grp) continue
+            const firstLine = grp.split("\n")[0] || ""
+            let tag = ""
+            const openIdx = firstLine.indexOf("[")
+            if (openIdx !== -1) {
+                const closeIdx = firstLine.indexOf("]", openIdx + 1)
+                tag = closeIdx !== -1 ? firstLine.slice(openIdx + 1, closeIdx) : firstLine.slice(openIdx + 1)
+            } else {
+                tag = ""
+            }
+            tag = (tag || "").trim()
+            if (!tag) continue
+            if (!(tag in seen)) {
+                seen[tag] = i
+                continue
+            }
+
+            const firstIdx = seen[tag]
+            // remove the leading [tag] from this duplicate group
+            const escapedTag = tag.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&")
+            const newContent = grp.replace(new RegExp("^\\[" + escapedTag + "\\]"), "").trim()
+            // append to first occurrence with spacing
+            splittedgroups[firstIdx] = (splittedgroups[firstIdx].trim() + "\n\n" + newContent).trim()
+            // mark duplicate for removal
+            splittedgroups[i] = ""
+        }
+        splittedgroups = splittedgroups.filter((g) => g && g.length)
+    }
+
+    splittedgroups.forEach((slide) => {
+        // Trim each line and remove empty lines (keep significant content only)
+        const groupText = slide
+            .split('\n')
+            .map((l) => l.trim())
+            .filter((l) => l.length)
+            .join('\n')
+            .replaceAll("|", "\n")
+
+        // Determine group from first line: take text between '[' and ']', or from '[' to end-of-line if no closing ']'.
+        const firstLine = groupText.split("\n")[0] || ""
+        let group = ""
+        const openIdx = firstLine.indexOf("[")
+        if (openIdx !== -1) {
+            const closeIdx = firstLine.indexOf("]", openIdx + 1)
+            group = closeIdx !== -1 ? firstLine.slice(openIdx + 1, closeIdx) : firstLine.slice(openIdx + 1)
+        } else {
+            group = "V" // default to Verse if no group found
+        }
+        group = (group || "").trim()
         if (group.startsWith(".")) group = "V"
         if (!groupText) return
 
@@ -104,29 +159,48 @@ function createSlides({ lyrics, presentation, backgrounds }: Song) {
         groupText.split("__CHILD_SLIDE__").forEach((slideText, i) => {
             const lines = slideText.trim().split("\n")
             if (i === 0 && lines[0].includes("[")) lines.shift()
-            const chordData = lines.filter((_v: string) => _v.startsWith(".")).join("")
-            const text = lines.filter((_v: string) => !_v.startsWith("."))
+
+            // extract comment lines (starting with ';'), to add as slide notes
+            const commentData = lines
+                .filter((l: string) => l.trim().startsWith(";"))
+                .map((l: string) => l.trim().slice(1).trim())
+
+            const contentLines = lines.filter((l) => !l.trim().startsWith(";"))
+
+            const newLines: any[] = []
+            let pendingChords: Chords[] | null = null
+
+            for (const line of contentLines) {
+                if (line.startsWith(".")) {
+                    const chords: Chords[] = []
+                    let pos = -1
+                    line.slice(1)
+                        .split(" ")
+                        .forEach((letter) => {
+                            pos++
+                            if (letter === "") return
+                            chords.push({ id: uid(5), pos, key: letter })
+                            pos++ // add extra " " removed by split
+                        })
+                    pendingChords = chords
+                } else if (line.trim() !== "") {
+                    newLines.push({
+                        align: "",
+                        text: [{ style: "", value: line.replaceAll("_", "").trim() }],
+                        chords: pendingChords || []
+                    })
+                    pendingChords = null // Reset for next line
+                }
+            }
 
             const id: string = i === 0 ? parentId : uid()
             if (i === 0) slideRef[group] = id
             else children.push(id)
 
-            const chords: Chords[] = []
-            let pos = -1
-            chordData
-                .slice(1)
-                .split(" ")
-                .forEach((letter) => {
-                    pos++
-                    if (letter === "") return
-                    chords.push({ id: uid(5), pos, key: letter })
-                    pos++ // add extra " " removed by split
-                })
-
             const items = [
                 {
-                    style: "inset-inline-start:50px;top:120px;width:1820px;height:840px;",
-                    lines: text.map((a: any) => ({ align: "", text: [{ style: "", value: a.replace("|", "&nbsp;").replaceAll("_", "") }], chords }))
+                    style: DEFAULT_ITEM_STYLE,
+                    lines: newLines
                 }
             ]
 
@@ -134,13 +208,13 @@ function createSlides({ lyrics, presentation, backgrounds }: Song) {
                 group: i === 0 ? "" : null,
                 color: null,
                 settings: {},
-                notes: "",
+                notes: commentData && commentData.length ? commentData.join("\n") : "",
                 items
             }
 
             if (i > 0) return
 
-            const globalGroup = OSgroups[group.replace(/[0-9]/g, "")]
+            const globalGroup = OSgroups[group.replace(/[0-9]/g, "").trim().toUpperCase()]
             if (get(groups)[globalGroup]) slides[id].globalGroup = globalGroup
             else slides[id].group = group
         })
@@ -155,7 +229,12 @@ function createSlides({ lyrics, presentation, backgrounds }: Song) {
     if (slideOrder.length) {
         layout = []
         slideOrder.forEach((group) => {
-            const id = slideRef[group]
+            // case-insensitive lookup in slideRef
+            let id = slideRef[group]
+            if (!id) {
+                const key = Object.keys(slideRef).find((k) => k.toLowerCase() === group.toLowerCase())
+                if (key) id = slideRef[key]
+            }
             if (id) layout.push({ id })
         })
     }
@@ -205,7 +284,7 @@ function XMLtoObject(xml: string) {
 
 export function convertOpenSongBible(data: any[]) {
     data.forEach((bible) => {
-        const obj: Bible = XMLtoBible(bible.content)
+        const obj = XMLtoBible(bible.content)
         obj.name = bible.name || ""
         obj.name = formatToFileName(obj.name)
 
@@ -225,23 +304,25 @@ export function convertOpenSongBible(data: any[]) {
     })
 }
 
-function XMLtoBible(xml: string): Bible {
+function XMLtoBible(xml: string) {
     const parser = new DOMParser()
     // remove first line (standalone attribute): <?xml version="1.0"?>
     xml = xml.split("\n").slice(1, xml.split("\n").length).join("\n")
     const xmlDoc = parser.parseFromString(xml, "text/xml").children[0]
 
     const booksObj = getChildren(xmlDoc, "b")
-    const books: any[] = []
+    const books: Book[] = []
 
     ;[...booksObj].forEach((book: any, i: number) => {
         let length = 0
         const name = book.getAttribute("n")
         const number = i + 1
-        const chapters: any[] = []
+        const chapters: Chapter[] = []
+
         ;[...getChildren(book, "c")].forEach((chapter: any) => {
             const chapterNumber = chapter.getAttribute("n")
-            const verses: any[] = []
+            const verses: Verse[] = []
+
             ;[...getChildren(chapter, "v")].forEach((verse: any) => {
                 const text = verse.innerHTML
                     .toString()
@@ -250,12 +331,14 @@ function XMLtoBible(xml: string): Bible {
                 length += text.length
                 if (text.length) verses.push({ number: verse.getAttribute("n"), text })
             })
+
             chapters.push({ number: chapterNumber, verses })
         })
+
         if (length) books.push({ name, number, chapters })
     })
 
-    return { name: "", metadata: { copyright: "" }, books }
+    return { name: "", metadata: { copyright: "" }, books } as Bible
 }
 
 const getChildren = (parent: any, name: string) => parent.getElementsByTagName(name)

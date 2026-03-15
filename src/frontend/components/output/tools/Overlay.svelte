@@ -9,7 +9,7 @@
 
     // $: if (!currentOutput?.out?.overlays?.length) {
     //   // get all overlays
-    //   let outs = getActiveOutputs().map((id) => $outputs[id])
+    //   let outs = getAllActiveOutputs()
     //   currentOutput = outs.find((output) => output.out?.overlays)
     // }
 
@@ -72,7 +72,7 @@
         display: flex;
         flex-direction: column;
         justify-content: center;
-        max-height: 50px;
+        max-height: 60px;
         overflow-y: auto;
     }
 

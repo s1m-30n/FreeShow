@@ -1,10 +1,11 @@
 <script lang="ts">
     import { activeStage, labelsDisabled, outputs, stageShows } from "../../stores"
+    import { getAccess } from "../../utils/profile"
     import { keysToID, sortByName } from "../helpers/array"
     import { history } from "../helpers/history"
-    import Icon from "../helpers/Icon.svelte"
     import T from "../helpers/T.svelte"
-    import Button from "../inputs/Button.svelte"
+    import FloatingInputs from "../input/FloatingInputs.svelte"
+    import MaterialButton from "../inputs/MaterialButton.svelte"
     import Autoscroll from "../system/Autoscroll.svelte"
     import Center from "../system/Center.svelte"
     import StageSlide from "./StageSlide.svelte"
@@ -13,7 +14,10 @@
         history({ id: "UPDATE", location: { page: "stage", id: "stage" } })
     }
 
-    $: sortedStageSlides = sortByName(keysToID($stageShows))
+    const profile = getAccess("stage")
+    const readOnly = profile.global === "read"
+
+    $: sortedStageSlides = sortByName(keysToID($stageShows)).filter((a) => profile[a.id] !== "none")
 
     $: if ($activeStage.id === null && Object.keys($stageShows).length) setActiveStage()
     function setActiveStage() {
@@ -76,6 +80,8 @@
                         }}
                     />
                 {/each}
+
+                <div class="padding" style="height: 60px;width: 1px;"></div>
             </div>
         </Autoscroll>
     {:else}
@@ -83,11 +89,12 @@
             <T id="empty.layouts" />
         </Center>
     {/if}
-    <!-- Add -->
-    <Button on:click={addSlide} center dark>
-        <Icon id="add" right={!$labelsDisabled} />
-        {#if !$labelsDisabled}<T id="show.new_layout" />{/if}
-    </Button>
+
+    <FloatingInputs onlyOne>
+        <MaterialButton disabled={readOnly} icon="add" title="new.slide" on:click={addSlide}>
+            {#if !$labelsDisabled}<T id="show.new_layout" />{/if}
+        </MaterialButton>
+    </FloatingInputs>
 </div>
 
 <style>
@@ -99,6 +106,10 @@
         overflow: auto;
         background-color: var(--primary-darker);
     }
+
+    /* .main :global(.scroll) {
+        padding-bottom: 60px;
+    } */
 
     /* .main :global(button) {
     width: 100%;
@@ -112,5 +123,8 @@
         width: 100%;
         height: 100%;
         align-content: flex-start;
+
+        /* overflow: auto;
+        padding-bottom: 60px; */
     }
 </style>

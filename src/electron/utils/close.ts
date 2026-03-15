@@ -1,5 +1,5 @@
-import { app, ipcMain } from "electron"
-import { mainWindow, resetMainWindow } from ".."
+import { app, ipcMain, powerSaveBlocker } from "electron"
+import { mainWindow, powerSaveBlockerId, resetMainWindow } from ".."
 import { Main } from "../../types/IPC/Main"
 import { ToMain } from "../../types/IPC/ToMain"
 import { sendMain, sendToMain } from "../IPC/main"
@@ -47,6 +47,10 @@ export async function exitApp() {
 
     resetMainWindow()
 
+    if (powerSaveBlockerId !== null) {
+        powerSaveBlocker.stop(powerSaveBlockerId)
+    }
+
     try {
         app.quit()
 
@@ -64,6 +68,7 @@ export function closeMain() {
     mainWindow?.close()
 }
 
+// not in use currently - was used when custom data location changed previously
 export function forceCloseApp() {
     sendToMain(ToMain.ALERT, "actions.closing")
     // let user read message and action finish

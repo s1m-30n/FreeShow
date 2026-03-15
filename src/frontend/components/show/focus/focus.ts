@@ -1,6 +1,7 @@
 import { get } from "svelte/store"
 import type { ProjectShowRef } from "../../../../types/Projects"
-import { categories, dictionary, overlays, playerVideos, showsCache } from "../../../stores"
+import { categories, overlays, playerVideos, showsCache } from "../../../stores"
+import { translateText } from "../../../utils/language"
 import { loadShows } from "../../helpers/setShow"
 
 export async function getAllProjectItems(projectShows: ProjectShowRef[]) {
@@ -9,6 +10,8 @@ export async function getAllProjectItems(projectShows: ProjectShowRef[]) {
 
     // get names & icons
     projectShows = projectShows.map((a) => {
+        if (typeof a !== "object") return a
+
         // same icon as ShowButton.svelte
         if ((a.type || "show") === "show") {
             const show = get(showsCache)[a.id] || {}
@@ -23,7 +26,7 @@ export async function getAllProjectItems(projectShows: ProjectShowRef[]) {
             a.name = get(playerVideos)[a.id]?.name
         }
 
-        if (!a.name) a.name = get(dictionary).main?.unnamed || "Unnamed"
+        if (!a.name) a.name = translateText("main.unnamed")
         if (!a.icon) a.icon = a.type
 
         return a

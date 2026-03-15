@@ -1,18 +1,21 @@
 <script lang="ts">
     import { createEventDispatcher } from "svelte"
-    import { activePopup, categories, dictionary, popupData } from "../../stores"
-    import { translate } from "../../utils/language"
+    import { actionRevealUsed, actions, activePopup, audioPlaylists, audioStreams, categories, effects, emitters, outputs, overlays, popupData, projects, shows, stageShows, styles, templates, timers, triggers, variables } from "../../stores"
+    import { translateText } from "../../utils/language"
     import { formatSearch } from "../../utils/search"
     import Icon from "../helpers/Icon.svelte"
     import T from "../helpers/T.svelte"
     import { clone } from "../helpers/array"
     import { _show } from "../helpers/shows"
     import HRule from "../input/HRule.svelte"
+    import InputRow from "../input/InputRow.svelte"
     import Button from "../inputs/Button.svelte"
-    import Checkbox from "../inputs/Checkbox.svelte"
     import CombinedInput from "../inputs/CombinedInput.svelte"
     import Dropdown from "../inputs/Dropdown.svelte"
-    import TextInput from "../inputs/TextInput.svelte"
+    import MaterialButton from "../inputs/MaterialButton.svelte"
+    import MaterialTextInput from "../inputs/MaterialTextInput.svelte"
+    import MaterialToggleSwitch from "../inputs/MaterialToggleSwitch.svelte"
+    import { getGlobalGroupName } from "../show/tools/groups"
     import Center from "../system/Center.svelte"
     import CustomInput from "./CustomInput.svelte"
     import { actionData } from "./actionData"
@@ -40,28 +43,28 @@
 
     const slideActions = [
         "start_show",
-        "set_template",
         "clear_background",
         "clear_overlays",
         "clear_audio",
-        "change_volume",
+        // "change_volume",
         "start_audio_stream",
         "start_playlist",
         "start_metronome",
         "start_slide_timers",
         "stop_timers",
-        "start_slide_recording",
         "change_output_style",
+        "change_stage_output_layout",
         "start_trigger",
         "send_midi",
         "run_action"
     ]
     // remove actions that are not fully implemented to CustomInput yet
     const removeActions = ["change_transition"]
-    // remove run action if creating an action (not "template" or "slide")
-    if (!mode) removeActions.push("run_action")
-    // remove toggle action from anything other than drawer actions
-    else removeActions.push("toggle_action")
+    // // remove run action if creating an action (not "template" or "slide")
+    // if (!mode) removeActions.push("run_action")
+    // // remove toggle action from anything other than drawer actions
+    // else removeActions.push("toggle_action")
+    if (mode) removeActions.push("toggle_action")
     // slide action only
     if (mode !== "slide") removeActions.push("start_slide_timers")
 
@@ -72,7 +75,7 @@
         ...Object.keys(API_ACTIONS)
             .map((id) => {
                 let data = actionData[id] || {}
-                let name = translate(data.name || "") || id
+                let name = translateText(data.name || "") || id
                 let icon = data.icon || "actions"
                 let common = !!data.common
 
@@ -82,6 +85,8 @@
             .filter(({ id }) => {
                 // don't show actions with no custom data
                 if (!actionData[id]) return false
+                // remove uncommon
+                if (commonOnly && !actionData[id].common) return false
                 // show if it is the currently selected
                 if (id === actionId) return true
                 // don't show action if incompatible with any existing action (and no wait action is added)
@@ -100,7 +105,7 @@
                 return true
             }),
         // custom special
-        ...((list && !full) || mode ? [] : [{ id: "wait", name: $dictionary.animate?.wait || "", icon: "time_in", common: false, section: "popup.action" }])
+        ...((list && !full) || mode ? [] : [{ id: "wait", name: translateText("animate.wait"), icon: "time_in", common: true, section: "popup.action" }])
     ].map((a, i) => {
         if (i === 0) usedSections = []
 
@@ -123,7 +128,8 @@
 
         if (!input) {
             // close popup if no custom inputs
-            activePopup.set(null)
+            // let action update first
+            setTimeout(() => activePopup.set(null), 50)
             return
         }
     }
@@ -147,20 +153,27 @@
     // SEARCH
 
     let searchedActions = clone(ACTIONS) // initially empty
-    $: if (ACTIONS) search()
+    $: if (ACTIONS || commonOnly !== undefined) search()
     let searchValue = ""
     // let previousSearchValue = ""
-    function search(e: any = null) {
-        searchValue = formatSearch(e?.target?.value || "")
+    function search(value: string | null = null) {
+        if (value?.length && commonOnly) {
+            commonOnly = false
+            actionRevealUsed.set(true)
+        }
+
+        searchValue = formatSearch(value || "")
+
+        let actionsList = clone(ACTIONS) //.filter((a) => (commonOnly ? a.common : true))
 
         if (searchValue.length < 2) {
-            searchedActions = clone(ACTIONS)
+            searchedActions = actionsList
             return
         }
 
-        let currentActionsList = clone(ACTIONS) // searchedActions
+        let currentActionsList = actionsList // searchedActions
         // reset if search value changed
-        // if (!searchValue.includes(previousSearchValue)) currentActionsList = clone(ACTIONS)
+        // if (!searchValue.includes(previousSearchValue)) currentActionsList = list
 
         searchedActions = currentActionsList.filter((a) => formatSearch(a.name || "").includes(searchValue))
 
@@ -172,7 +185,40 @@
         changeAction({ ...searchedActions[0], index: full ? undefined : 0 })
     }
 
-    const isChecked = (e: any) => e.target.checked
+    const getName = (object) => object[actionValue.id]?.name || ""
+    function getActionInfo(actionId: string): string {
+        const id = actionId.split(":")[0]
+        // console.log(id, actionValue)
+
+        if (id === "change_variable") return getName($variables)
+        if (id === "id_start_timer") return getName($timers)
+        if (id === "start_playlist") return getName($audioPlaylists)
+        if (id === "id_select_overlay" || id === "clear_overlay") return getName($overlays)
+        if (id === "emit_action") return $emitters[actionValue.emitter]?.name || ""
+        if (id === "start_trigger") return getName($triggers)
+        if (id === "run_action" || id === "toggle_action") return getName($actions)
+        if (id === "id_start_effect") return getName($effects)
+        if (id === "start_show") return getName($shows)
+        if (id === "id_select_project") return getName($projects)
+        if (id === "set_template") return getName($templates)
+        if (id === "toggle_output") return getName($outputs)
+        if (id === "id_select_stage_layout") return getName($stageShows)
+        if (id === "start_audio_stream") return getName($audioStreams)
+        if (id === "wait") return Number(actionValue.number) + "s"
+        if (id === "id_select_group") return getGlobalGroupName(actionValue.id)
+        if (id === "start_camera") return actionValue.label || ""
+        if (id === "start_screen") return actionValue.name || ""
+        if (id === "change_volume") return ((actionValue.volume || 1) * 100).toString()
+        if (id.includes("index")) return actionValue.index || "0"
+        if (id.includes("name")) return actionValue.value || ""
+        if (id === "change_stage_output_layout") return `${actionValue.outputId ? ($outputs[actionValue.outputId]?.name || "—") + ": " : ""}${$stageShows[actionValue.stageLayoutId]?.name || ""}`
+        if (id === "change_output_style") return `${actionValue.outputId ? ($outputs[actionValue.outputId]?.name || "—") + ": " : ""}${actionValue.styleId ? $styles[actionValue.styleId]?.name || "" : translateText("main.none")}`
+        if (id === "set_next_slide_timer") return Number(actionValue.value) + "s"
+
+        return ""
+    }
+
+    let commonOnly = !$actionRevealUsed && full && mode !== "slide"
 </script>
 
 <svelte:window on:keydown={chooseAction} />
@@ -186,28 +232,38 @@
             </Button>
         </CombinedInput>
     {:else}
-        <CombinedInput style="border-bottom: 2px solid var(--secondary);">
-            <TextInput placeholder={$dictionary.main?.search} value="" on:input={search} autofocus />
-        </CombinedInput>
+        <MaterialTextInput label="main.search" value="" on:input={(e) => search(e.detail)} autofocus />
+
+        {#if mode !== "slide"}
+            <MaterialButton
+                class="popup-options {!commonOnly ? 'active' : ''}"
+                icon={!commonOnly ? "eye" : "hide"}
+                iconSize={1.3}
+                title={!commonOnly ? "actions.close" : "create_show.more_options"}
+                on:click={() => {
+                    commonOnly = !commonOnly
+                    actionRevealUsed.set(!commonOnly)
+                }}
+                white
+            />
+        {/if}
 
         {#if searchedActions.length}
-            <div class="buttons" style={searchValue.length ? "padding-top: 20px;" : ""}>
+            <div class="buttons" style="margin-top: 10px;">
                 {#each searchedActions as action, i}
                     {#if action.section && !searchValue.length}
-                        <HRule title={action.section} />
+                        <!-- might not properly update always on common toggle, without the key refresh -->
+                        {#key action.section}
+                            <HRule title={action.section} />
+                        {/key}
                     {/if}
 
                     <!-- disabled={$popupData.existing.includes(action.id)} -->
-                    <Button
-                        on:click={() => changeAction({ ...action, index: full ? undefined : 0 })}
-                        outline={getActionTriggerId(actionId) === action.id}
-                        active={(existingActionsFiltered || $popupData.existing || []).map(getActionTriggerId).includes(action.id)}
-                        style="width: 100%;{searchValue.length && i === 0 ? 'background-color: var(--primary-lighter);' : ''}"
-                        bold={action.common}
-                    >
-                        <Icon id={action.icon} right />
+                    <!-- bold={action.common} -->
+                    <MaterialButton style="width: 100%;font-weight: normal;justify-content: start;padding: 5px 20px;gap: 12px;{searchValue.length && i === 0 ? 'background-color: var(--primary-lighter);' : ''}" showOutline={getActionTriggerId(actionId) === action.id} isActive={(existingActionsFiltered || $popupData.existing || []).map(getActionTriggerId).includes(action.id)} on:click={() => changeAction({ ...action, index: full ? undefined : 0 })}>
+                        <Icon id={action.icon} />
                         <p>{action.name}</p>
-                    </Button>
+                    </MaterialButton>
                 {/each}
             </div>
         {:else}
@@ -217,20 +273,34 @@
         {/if}
     {/if}
 {:else}
-    <CombinedInput textWidth={38} style={actionNameIndex > 1 || !actionId ? "border-top: 2px solid var(--primary-lighter);" : ""}>
-        <p style="font-weight: 600;">
-            <T id="midi.start_action" />
-            <span style="color: var(--secondary);display: flex;align-items: center;margin-inline-start: 8px;">
-                {#if actionNameIndex}#{actionNameIndex}{/if}
-            </span>
-        </p>
+    <div class="box" style={actionNameIndex > 1 ? "margin-top: 5px;" : ""}>
+        <div class="part">
+            <p style="font-weight: 600;padding: 0 10px;display: flex;align-items: center;">
+                <T id="midi.start_action" />
+                <span style="color: var(--secondary);display: flex;align-items: center;margin-inline-start: 8px;">
+                    {#if actionNameIndex}#{actionNameIndex}{/if}
+                </span>
+            </p>
 
-        {#if !choosePopup}
-            <Dropdown activeId={actionId} value={findName(actionId) || "—"} options={[...(actionNameIndex ? [{ id: "remove", name: "—" }] : []), ...ACTIONS]} on:click={(e) => changeAction(e.detail)} />
-        {:else}
-            <Button on:click={() => dispatch("choose")} title={$dictionary.actions?.choose_action} bold={!actionId}>
-                <div style="display: flex;align-items: center;padding: 0;">
-                    <Icon id={findIcon(actionId)} style="margin-inline-start: 0.5em;" right />
+            <div style="display: flex;align-items: center;gap: 3px;">
+                {#if actionId && existingActions.length > 1}
+                    {#if actionNameIndex > 1}
+                        <MaterialButton style="padding: 8px;" icon="up" on:click={() => changeAction({ id: "move_up", index: actionNameIndex - 1 })} />
+                    {/if}
+                    <MaterialButton style="padding: 6.5px;" title="actions.remove" on:click={() => changeAction({ id: "remove", index: actionNameIndex - 1 })}>
+                        <Icon id="close" size={1.2} white />
+                    </MaterialButton>
+                {/if}
+            </div>
+        </div>
+
+        <InputRow style="background-color: var(--primary-darker);" arrow={dataInputs && !dataOpened} bind:open={dataMenuOpened}>
+            {#if !choosePopup}
+                <Dropdown activeId={actionId} value={findName(actionId) || "—"} options={[...(actionNameIndex ? [{ id: "remove", name: "—" }] : []), ...ACTIONS]} on:click={(e) => changeAction(e.detail)} />
+                <!-- <MaterialDropdown value={actionId} options={[...(actionNameIndex ? [{ value: "remove", label: "—" }] : []), ...ACTIONS]} on:change={(e) => changeAction(e.detail)} /> -->
+            {:else}
+                <MaterialButton style="flex: 1;justify-content: start;{actionId ? 'font-weight: normal;' : ''}" title="actions.choose_action" on:click={() => dispatch("choose")}>
+                    <Icon id={findIcon(actionId)} style="margin-inline-start: 0.5em;" />
                     <p>
                         {#if actionId}
                             {findName(actionId) || "—"}
@@ -238,48 +308,70 @@
                             <T id="actions.choose_action" />
                         {/if}
                     </p>
-                </div>
-            </Button>
-        {/if}
 
-        <!-- isLast -->
-        {#if actionId && existingActions.length > 1}
-            <Button title={$dictionary.actions?.remove} on:click={() => changeAction({ id: "remove", index: actionNameIndex - 1 })} redHover>
-                <Icon id="close" size={1.2} white />
-            </Button>
-        {/if}
-
-        {#if dataInputs && !dataOpened}
-            <Button style="padding: 0 8.5px !important" class="submenu_open" on:click={() => (dataMenuOpened = !dataMenuOpened)}>
-                {#if dataMenuOpened}
-                    <Icon class="submenu_open" id="arrow_down" size={1.4} style="fill: var(--secondary);" />
-                {:else}
-                    <Icon class="submenu_open" id="arrow_right" size={1.4} style="fill: var(--text);" />
-                {/if}
-            </Button>
-        {/if}
-    </CombinedInput>
+                    {#if dataInputs && !dataOpened && !dataMenuOpened}
+                        <span style="opacity: 0.5;font-size: 0.8em;">
+                            {getActionInfo(actionId)}
+                        </span>
+                    {/if}
+                </MaterialButton>
+            {/if}
+        </InputRow>
+    </div>
 {/if}
 
 {#if dataInputs && (dataOpened || dataMenuOpened)}
-    <CustomInput {mainId} inputId={input} actionIndex={actionNameIndex} value={actionValue} actionId={getActionTriggerId(actionId)} on:change={(e) => changeAction({ id: actionId, actionValue: e.detail })} list />
+    <div class="menu-indent">
+        <CustomInput {mainId} inputId={input} actionIndex={actionNameIndex} value={actionValue} actionId={getActionTriggerId(actionId)} on:change={(e) => changeAction({ id: actionId, actionValue: e.detail })} list />
+    </div>
 {/if}
 
 {#if mode === "slide" && getActionTriggerId(actionId) === "run_action" && $categories[_show().get().category]?.action}
-    <CombinedInput>
-        <p style="flex: 1;"><T id="actions.override_category_action" /></p>
-        <span class="alignRight" style="flex: 0;padding: 0 10px;">
-            <Checkbox checked={customData.overrideCategoryAction} on:change={(e) => changeAction({ id: actionId, customDataKey: "overrideCategoryAction", customDataValue: isChecked(e) })} />
-        </span>
-    </CombinedInput>
+    <MaterialToggleSwitch label="actions.override_category_action" checked={customData.overrideCategoryAction} defaultValue={false} on:change={(e) => changeAction({ id: actionId, customDataKey: "overrideCategoryAction", customDataValue: e.detail })} />
 {/if}
 
 <style>
+    .box {
+        display: flex;
+        flex-direction: column;
+
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .part {
+        padding: 3px;
+        font-size: 0.8em;
+
+        background-color: var(--primary-darker);
+        border-bottom: 1px solid var(--primary-lighter);
+
+        display: flex;
+        justify-content: space-between;
+        gap: 5px;
+    }
+
+    /* list */
+
     .buttons {
         display: flex;
         flex-direction: column;
+
+        background-color: var(--primary-darker);
+        border: 1px solid var(--primary-lighter);
+        border-radius: 8px;
+        overflow: hidden;
+
+        padding: 10px 0;
     }
-    .buttons :global(button:not(.active):nth-child(even)) {
-        background-color: rgb(0 0 20 / 0.08);
+    .buttons :global(button:not(.active):nth-child(odd)) {
+        background-color: rgb(0 0 20 / 0.08) !important;
+    }
+
+    .menu-indent {
+        display: flex;
+        flex-direction: column;
+
+        border-left: 4px solid var(--primary-lighter);
     }
 </style>

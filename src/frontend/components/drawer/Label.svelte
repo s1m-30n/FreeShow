@@ -1,5 +1,6 @@
 <script lang="ts">
     import { effects, fullColors, overlays, playerVideos, templates } from "../../stores"
+    import { getAccess } from "../../utils/profile"
     import { getContrast } from "../helpers/color"
     import Icon from "../helpers/Icon.svelte"
     import T from "../helpers/T.svelte"
@@ -17,15 +18,26 @@
     // RENAME!! (duplicate of NavigationButton.svelte)
 
     const nameCategories = {
-        overlay: (c: { name: string; id: string }) => overlays.update((a) => setName(a, c)),
-        template: (c: { name: string; id: string }) => templates.update((a) => setName(a, c)),
-        effect: (c: { name: string; id: string }) => effects.update((a) => setName(a, c)),
+        overlay: (c: { name: string; id: string }) => {
+            if (getAccess("overlays").global === "read" || getAccess("overlays")[c.id] === "read") return
+            overlays.update((a) => setName(a, c, true))
+        },
+        template: (c: { name: string; id: string }) => {
+            if (getAccess("templates").global === "read" || getAccess("templates")[c.id] === "read") return
+            templates.update((a) => setName(a, c, true))
+        },
+        effect: (c: { name: string; id: string }) => {
+            if (getAccess("overlays").global === "read" || getAccess("overlays")[c.id] === "read") return
+            effects.update((a) => setName(a, c))
+        },
         player: (c: { name: string; id: string }) => playerVideos.update((a) => setName(a, c))
     }
-    const setName = (a: any, { name, id }: any, nameKey = "name") => {
+    const setName = (a: any, { name, id }: any, modify: boolean = false) => {
         if (!a[id]) return a
 
-        a[id][nameKey] = name
+        a[id].name = name
+
+        if (modify) a[id].modified = Date.now()
         return a
     }
 
@@ -41,16 +53,9 @@
     let editActive = false
 </script>
 
-<div
-    class="label"
-    class:alignRight={icon}
-    class:padding={!renameId}
-    {title}
-    class:list={mode !== "grid"}
-    style={$fullColors ? `background-color: ${color};color: ${getContrast(color || "")};` : mode !== "list" ? `border-bottom: 2px solid ${color};` : ""}
->
+<div class="label" class:alignRight={icon} class:padding={!renameId} data-title={title} class:list={mode !== "grid"} style={$fullColors ? `background-color: ${color};color: ${getContrast(color || "")};` : mode !== "list" ? `border-bottom: 2px solid ${color};` : ""}>
     {#if icon}
-        <Icon id={icon} class="icon" size={icon === "protected" ? 0.8 : 1} {white} />
+        <Icon id={icon} class="icon" style={icon === "protected" ? "opacity: 0.6;" : ""} size={icon === "protected" ? 0.6 : 1} {white} />
     {/if}
 
     {#if renameId}

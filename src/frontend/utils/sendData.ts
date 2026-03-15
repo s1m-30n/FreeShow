@@ -1,16 +1,22 @@
 import { get } from "svelte/store"
 import { CONTROLLER, REMOTE, STAGE } from "../../types/Channels"
 import type { ClientMessage, Clients } from "../../types/Socket"
-import { connections, currentWindow, shows } from "../stores"
+import { API_ACTIONS } from "../components/actions/api"
+import { checkWindowCapture } from "../components/helpers/output"
+import { connections, shows } from "../stores"
+import { isMainWindow } from "./common"
 import { receiveCONTROLLER } from "./controllerTalk"
 import { receiveREMOTE } from "./remoteTalk"
 import { receiveSTAGE } from "./stageTalk"
-import { API_ACTIONS } from "../components/actions/api"
 
 export function filterObjectArray(object: any, keys: string[], filter: null | string = null) {
-    return Object.entries(object)
-        .map(([id, a]: any) => ({ id, ...keys.reduce((o, key) => ({ ...o, [key]: a[key] }), {}) }))
-        .filter((a: any) => (filter ? a[filter] : true))
+    return (
+        Object.entries(object)
+            // sometimes object value can be undefined
+            .filter(([_id, a]: any) => a)
+            .map(([id, a]: any) => ({ id, ...keys.reduce((o, key) => ({ ...o, [key]: a[key] }), {}) }))
+            .filter((a: any) => (filter ? a[filter] : true))
+    )
 }
 export function arrayToObject(array: any[], key = "id") {
     return array.reduce((o, a) => ({ ...o, [a[key]]: a }), {})
@@ -28,6 +34,8 @@ export function client(id: Clients, msg: ClientMessage) {
             return c
         })
         console.info("SERVER: " + msgId + " connected")
+
+        if (id === "STAGE") checkWindowCapture()
     } else if (msg.channel === "DISCONNECT") {
         connections.update((c: any) => {
             if (c[id]) delete c[id][msgId]
@@ -49,7 +57,7 @@ export function setConnectedState(type: string, connectionId: string, key = "act
 // send data to client
 export async function sendData(id: Clients, msg: ClientMessage, check = false) {
     // console.log(id, msg)
-    if (get(currentWindow) !== null) return
+    if (!isMainWindow()) return
 
     let channel = msg.channel
     if (channel.includes("API:")) {

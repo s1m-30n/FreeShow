@@ -6,7 +6,7 @@ import { categories, drawerTabsData, textCache } from "../stores"
 
 const specialChars = /[.,\/#!?$%\^&\*;:{}=\-_'"´`~()]/g
 export function formatSearch(value: string, removeSpaces = false) {
-    if (typeof value !== "string") return value
+    if (typeof value !== "string") return ""
     let newValue = value
         .toLowerCase()
         .replace(specialChars, "")
@@ -23,10 +23,12 @@ export function tokenize(str: string): string[] {
 
 // check if all old tokens are still in new tokens
 export function isRefinement(newTokens: string[], oldTokens: string[]): boolean {
-    return oldTokens.every((token) => newTokens.includes(token))
+    return oldTokens.length ? oldTokens.every((token) => newTokens.includes(token)) : false
 }
 
-export function showSearch(searchValue: string, shows: ShowList[]) {
+export function showSearch(searchValue: string, shows: ShowList[]): ShowList[] {
+    // WIP return fastSearch(searchValue, shows)
+
     let newShows: ShowList[] = []
 
     // fix invalid regular expression
@@ -50,32 +52,45 @@ export function showSearch(searchValue: string, shows: ShowList[]) {
 }
 
 export function showSearchFilter(searchValue: string, show: ShowList) {
+    if (!show.name) return 0
+
     // WIP tag search?
 
-    // Priority 0: Number Exact Match
+    // Priority 0: Song Number Exact Match (supports alphanumeric like "MP133")
     const songNumber: string = show.quickAccess?.number || ""
-    if (songNumber && Number(songNumber) === Number(searchValue)) return 100
+    const formattedSongNumber = formatSearch(songNumber, true)
+    const formattedSearchValue = formatSearch(searchValue, true)
+    if (songNumber && formattedSongNumber === formattedSearchValue) return 100
     // Priority 0.5: CCLI Exact Match
     const songId = show.quickAccess?.metadata?.CCLI || ""
     if (songId.toString() === searchValue) return 100
 
-    const showName = songNumber + formatSearch(show.name, true)
+    const showName = formatSearch(show.name, true)
+    const showNameWithNumber = songNumber + showName
 
     // Priority 1: Title Exact Match
-    const formattedSearchValue = formatSearch(searchValue, true)
-    if (formattedSearchValue === showName) return 100
+    if (formattedSearchValue === showName || formattedSearchValue === showNameWithNumber) return 100
+
+    // Priority 1.25: Song Number Starts With Match
+    // if (songNumber && formattedSongNumber.startsWith(formattedSearchValue)) return 100
+
+    // Priority 1.5: Title Word Start Match
+    if (showName.startsWith(formattedSearchValue)) return 100
 
     const cache = get(textCache)[show.id] || ""
+
+    // Multi-word search - check if ALL words appear in content
+    const multiWordMatchScore = calculateMultiWordMatch(searchValue, cache, show.name)
 
     // Priority 2: Content Includes Percentage Match
     const contentIncludesMatchScore = calculateContentIncludesScore(cache, searchValue) // + calculateContentIncludesScore(cache, searchValue, true)
 
     // Priority 3: Title Word-for-Word Match
-    const titleWordMatch = matchWords(showName, searchValue)
+    const titleWordMatch = matchWords(showNameWithNumber, searchValue)
     const titleIncludesMatchScore = titleWordMatch * 0.5 * 100 // max 50%
 
     // Priority 4: Title Letter-for-Letter Match
-    const titleSimilarity = similarity(showName, removeShortWords(formatSearch(searchValue, true)))
+    const titleSimilarity = similarity(showNameWithNumber, removeShortWords(formatSearch(searchValue, true)))
     const titleSimilarityMatchScore = titleSimilarity * 0.3 * 100 // max 30%
 
     // Priority 5: Content Word-for-Word Match
@@ -94,8 +109,35 @@ export function showSearchFilter(searchValue: string, show: ShowList) {
     //     contentSimilarityMatchScore = contentSimilarity * 0.05 * 100 // max 5%
     // }
 
-    const combinedScore = contentIncludesMatchScore + titleIncludesMatchScore + titleSimilarityMatchScore + contentWordMatchScore
+    const combinedScore = multiWordMatchScore + contentIncludesMatchScore + titleIncludesMatchScore + titleSimilarityMatchScore + contentWordMatchScore
     return combinedScore >= 100 ? 99 : combinedScore < 3 ? 0 : combinedScore
+}
+
+function calculateMultiWordMatch(searchValue: string, cache: string, showName: string): number {
+    return 0 // WIP got worse results with this
+    const queryWords = tokenize(searchValue).filter((w) => w.length >= 3)
+    const contentLower = formatSearch(cache, false)
+    const nameLower = formatSearch(showName, false)
+
+    let wordMatchScore = 0
+    if (queryWords.length > 0) {
+        let nameMatches = 0
+        let contentMatches = 0
+
+        for (const word of queryWords) {
+            if (nameLower.includes(word)) nameMatches++
+            if (contentLower.includes(word)) contentMatches++
+        }
+
+        // Score based on percentage of words matched
+        const nameMatchRatio = nameMatches / queryWords.length
+        const contentMatchRatio = contentMatches / queryWords.length
+
+        // Name matches are more valuable
+        wordMatchScore = nameMatchRatio * 40 + contentMatchRatio * 30
+    }
+
+    return wordMatchScore
 }
 
 function calculateContentIncludesScore(cache: string, search: string, noShortWords = false): number {

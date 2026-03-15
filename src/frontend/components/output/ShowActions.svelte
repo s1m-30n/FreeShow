@@ -1,13 +1,13 @@
 <script lang="ts">
     import type { Output } from "../../../types/Output"
     import type { LayoutRef } from "../../../types/Show"
-    import { activeEdit, activePage, activePopup, activeShow, activeSlideRecording, dictionary, outLocked, showsCache } from "../../stores"
+    import { activeEdit, activePage, activePopup, activeShow, outLocked, popupData, showsCache } from "../../stores"
     import { previewShortcuts } from "../../utils/shortcuts"
     import Icon from "../helpers/Icon.svelte"
     import { refreshOut, setOutput } from "../helpers/output"
     import { getLayoutRef } from "../helpers/show"
     import { updateOut } from "../helpers/showActions"
-    import Button from "../inputs/Button.svelte"
+    import MaterialButton from "../inputs/MaterialButton.svelte"
 
     export let currentOutput: Output
     export let ref: (LayoutRef | { temp: boolean; items: any; id: string })[]
@@ -71,7 +71,7 @@
         //     return
         // }
 
-        if (!currentShow) return
+        if (!currentShow || !$showsCache[currentShow.id]?.settings) return
 
         const layout = $showsCache[currentShow.id].settings.activeLayout
         if (isEdit) setOutput("slide", { id: currentShow.id, layout, index: $activeEdit.slide })
@@ -85,39 +85,35 @@
 </script>
 
 <span class="group">
-    <Button
-        on:click={() => previewShortcuts.ArrowLeft({ preview: true })}
-        title={$dictionary.preview?._previous_slide + " [Arrow Left]"}
-        disabled={$outLocked || (!$activeSlideRecording && (outSlide?.id === "temp" || (outSlide ? (outSlide.index || 0) < 1 && (linesIndex || 0) < 1 : !layoutLength)))}
-        center
-    >
+    <MaterialButton title="preview._previous_slide [Arrow Left]" disabled={$outLocked || outSlide?.id === "temp" || (outSlide ? (outSlide.index || 0) < 1 && (linesIndex || 0) < 1 : !layoutLength)} on:click={() => previewShortcuts.ArrowLeft({ preview: true })}>
         <Icon id="previous" size={1.2} />
-    </Button>
-    <Button
-        on:click={() => previewShortcuts.ArrowRight({ preview: true, key: "ArrowRight" })}
-        title={$dictionary.preview?._next_slide + " [Arrow Right]"}
-        disabled={$outLocked || (!$activeSlideRecording && (outSlide?.id === "temp" || (outSlide ? (outSlide.index || 0) + 1 >= length && (linesIndex || 0) + 1 >= (maxLines || 0) : !layoutLength)))}
-        center
-    >
+    </MaterialButton>
+    <MaterialButton title="preview._next_slide [Arrow Right]" disabled={$outLocked || outSlide?.id === "temp" || (outSlide ? (outSlide.index || 0) + 1 >= length && (linesIndex || 0) + 1 >= (maxLines || 0) : !layoutLength)} on:click={() => previewShortcuts.ArrowRight({ preview: true, key: "ArrowRight" })}>
         <Icon id="next" size={1.2} />
-    </Button>
+    </MaterialButton>
 
     {#if shouldRefresh}
-        <Button on:click={() => refreshOut()} title={$dictionary.preview?._update + " [Ctrl+R]"} disabled={$outLocked} center>
+        <MaterialButton title="preview._update [Ctrl+R]" disabled={$outLocked} on:click={() => refreshOut()}>
             <Icon id="refresh" size={1.1} />
-        </Button>
+        </MaterialButton>
     {:else}
-        <Button on:click={playCurrent} title={$dictionary.preview?._start + " [Space]"} disabled={$outLocked || !shouldPlay || ($activePage === "edit" && $activeEdit.type === "effect")} center>
+        <MaterialButton title="preview._start [Space]" disabled={$outLocked || !shouldPlay || ($activePage === "edit" && ($activeEdit.type === "template" || $activeEdit.type === "effect"))} on:click={playCurrent}>
             <Icon id="play" size={1.2} white />
-        </Button>
+        </MaterialButton>
     {/if}
 
-    <Button on:click={() => outLocked.set(!$outLocked)} red={$outLocked} title={($outLocked ? $dictionary.preview?._unlock : $dictionary.preview?._lock) + " [Ctrl+L]"} center>
-        <Icon id={$outLocked ? "locked" : "unlocked"} size={1.1} />
-    </Button>
-    <Button on:click={() => activePopup.set("transition")} title={$dictionary.popup?.transition} center>
+    <MaterialButton title={($outLocked ? "preview._unlock" : "preview._lock") + " [Ctrl+L]"} on:click={() => outLocked.set(!$outLocked)} red={$outLocked}>
+        <Icon id={$outLocked ? "locked" : "unlocked"} size={1.1} white={$outLocked} />
+    </MaterialButton>
+    <MaterialButton
+        title="popup.transition"
+        on:click={() => {
+            popupData.set({})
+            activePopup.set("transition")
+        }}
+    >
         <Icon size={1.2} id="transition" white={!!customTransition} />
-    </Button>
+    </MaterialButton>
 </span>
 
 <style>
@@ -130,6 +126,6 @@
         flex-grow: 1;
         /* height: 40px; */
 
-        padding: 0.2em 0.8em !important;
+        padding: 0.4em 0.8em !important;
     }
 </style>

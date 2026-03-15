@@ -4,16 +4,17 @@
     import type { Project } from "../../../../../types/Projects"
     import { Show } from "../../../../../types/Show"
     import { sendMain } from "../../../../IPC/main"
-    import { activePopup, activeProject, dataPath, dictionary, projects, showsCache, showsPath, special } from "../../../../stores"
+    import { activePopup, activeProject, projects, shows, showsCache, special } from "../../../../stores"
+    import { translateText } from "../../../../utils/language"
     import { send } from "../../../../utils/request"
     import { exportProject } from "../../../export/project"
     import { clone } from "../../../helpers/array"
-    import Icon from "../../../helpers/Icon.svelte"
     import { loadShows } from "../../../helpers/setShow"
     import T from "../../../helpers/T.svelte"
-    import Button from "../../../inputs/Button.svelte"
-    import Checkbox from "../../../inputs/Checkbox.svelte"
-    import CombinedInput from "../../../inputs/CombinedInput.svelte"
+    import HRule from "../../../input/HRule.svelte"
+    import MaterialButton from "../../../inputs/MaterialButton.svelte"
+    import MaterialMultiChoice from "../../../inputs/MaterialMultiChoice.svelte"
+    import MaterialToggleSwitch from "../../../inputs/MaterialToggleSwitch.svelte"
     import Center from "../../../system/Center.svelte"
     import Loader from "../../Loader.svelte"
     import { convertShowSlidesToImages, exportFormats, exportTypes, getActiveShowId, getShowIdsFromType } from "./exportHelper"
@@ -28,10 +29,16 @@
 
     const excludedFormats = {
         project: ["show", "txt", "image"],
-        all_shows: ["project", "pdf", "image"],
+        all_shows: ["project", "pdf", "image"]
     }
     function filterFormats(exportFormats) {
-        return clone(exportFormats).filter((a) => !(excludedFormats[exportType] || []).find((id) => id === a.id))
+        return clone(exportFormats)
+            .filter((a) => !(excludedFormats[exportType] || []).find((id) => id === a.id))
+            .map((a) => {
+                a.name = translateText(a.name)
+                a.icon = `./import-logos/${formatIcons[a.id]}.webp`
+                return a
+            })
     }
 
     const formatIcons = {
@@ -39,7 +46,7 @@
         txt: "txt",
         pdf: "pdf",
         project: "zip",
-        image: "jpg",
+        image: "jpg"
     }
 
     $: typeName = exportTypes.find((a) => a.id === exportType)?.name || ""
@@ -70,7 +77,7 @@
 
         if (exportType === "all_shows") {
             loading = true
-            send(EXPORT, ["ALL_SHOWS"], { type: exportFormat, path: $dataPath, showsPath: $showsPath })
+            send(EXPORT, ["ALL_SHOWS"], { type: exportFormat })
             return
         }
 
@@ -84,7 +91,7 @@
                     notes: "",
                     created: previewShow.timestamps.created,
                     parent: "/",
-                    shows: showIds.map((id) => ({ type: "show", id })),
+                    shows: showIds.map((id) => ({ type: "show", id }))
                 }
             }
 
@@ -97,11 +104,18 @@
             const images = await convertShowSlidesToImages(showIds[0])
             images.forEach((base64, i) => {
                 if (!base64) return
-                sendMain(Main.SAVE_IMAGE, { path: $dataPath, base64, filePath: ["Images", showName, `${i + 1}.jpg`], format: "jpg" })
+                sendMain(Main.SAVE_IMAGE, { base64, filePath: ["Images", showName, `${i + 1}.jpg`], format: "jpg" })
             })
             loading = false
+        } else if (exportFormat === "pdf") {
+            const showNames = showIds.map((id) => $shows[id]?.name || "")
+            // const ratio = getResolution() // { width: 16, height: 9 }
+            // const size = { width: 1920, height: Math.round(1920 / ratio.width) * ratio.height }
+            // const micronsSize = { width: Math.round((size.width / 96) * 25400), height: Math.round((size.height / 96) * 25400) }
+            send(EXPORT, ["GENERATE"], { type: exportFormat, showIds, showNames, options: pdfOptions })
         } else {
-            send(EXPORT, ["GENERATE"], { type: exportFormat, path: $dataPath, showsPath: $showsPath, showIds, options: exportFormat === "pdf" ? pdfOptions : {} })
+            const showNames = showIds.map((id) => $shows[id]?.name || "")
+            send(EXPORT, ["GENERATE"], { type: exportFormat, showIds, showNames })
         }
 
         activePopup.set(null)
@@ -110,77 +124,46 @@
     let pdfOptions: any = {}
 
     function setSpecial(e: any, key: string) {
-        let value = e?.target?.checked
+        let value = e.detail
         special.update((a) => {
             a[key] = value
             return a
         })
     }
+
+    $: exportTypesList = clone(exportTypes).map((a: any) => {
+        a.name = translateText(a.name)
+        if (!getShowIdsFromType[a.id || ""]?.(false)?.length) a.disabled = true
+        return a
+    })
 </script>
 
 {#if !exportType}
-    <p><T id="export.option_type" /></p>
+    <p style="margin-bottom: 10px;"><T id="export.option_type" /></p>
 
-    <div class="choose">
-        {#each exportTypes as type, i}
-            <Button disabled={!getShowIdsFromType[type.id || ""]?.(false)?.length} on:click={() => (exportType = type.id || "")} style={i === 0 ? "border: 2px solid var(--focus);" : ""}>
-                <Icon id={type.icon || ""} size={4} white />
-                <p><T id={type.name} /></p>
-            </Button>
-        {/each}
-    </div>
+    <MaterialMultiChoice options={exportTypesList} on:click={(e) => (exportType = e.detail)} />
 {:else if !exportFormat}
-    <Button class="popup-back" title={$dictionary.actions?.back} on:click={() => (exportType = "")}>
-        <Icon id="back" size={2} white />
-    </Button>
+    <MaterialButton class="popup-back" icon="back" iconSize={1.3} title="actions.back" on:click={() => (exportType = "")} />
 
-    <p><T id="export.option_format" /></p>
+    <p style="margin-bottom: 10px;"><T id="export.option_format" /></p>
 
-    <div class="choose">
-        {#each filterFormats(exportFormats) as format, i}
-            <Button disabled={false} on:click={() => (exportFormat = format.id || "")} style={i === 0 ? "border: 2px solid var(--focus);" : ""}>
-                <!-- {#if format.id === "project"}
-                    <Icon id={format.id} size={4} white />
-                {:else} -->
-                <img src="./import-logos/{formatIcons[format.id || '']}.webp" alt="{format.id}-logo" draggable={false} />
-                <!-- {/if} -->
-
-                <p>
-                    {#if format.name.includes("$:")}<T id={format.name} />{:else}{format.name}{/if}
-                </p>
-            </Button>
-        {/each}
-    </div>
+    <MaterialMultiChoice options={filterFormats(exportFormats)} on:click={(e) => (exportFormat = e.detail)} />
 {:else}
-    <Button class="popup-back" title={$dictionary.actions?.back} on:click={() => (exportFormat = "")}>
-        <Icon id="back" size={2} white />
-    </Button>
+    <MaterialButton class="popup-back" icon="back" iconSize={1.3} title="actions.back" on:click={() => (exportFormat = "")} />
 
     <!-- margin-bottom: 10px; -->
     <div style="display: flex;">
         <p style="white-space: break-spaces;opacity: 0.6;"><T id="export.export_as" /></p>
-        <p><T id={typeName} /></p>
+        <p>{translateText(typeName)}</p>
         <p style="white-space: break-spaces;opacity: 0.6;"><T id="export.export_as" index={1} />&nbsp;</p>
-        <p>
-            {#if formatName.includes("$:")}<T id={formatName} />{:else}{formatName}{/if}
-        </p>
+        <p>{translateText(formatName)}</p>
     </div>
 
-    <hr />
-
     {#if exportFormat === "pdf"}
+        <HRule />
         <PdfExport bind:pdfOptions {previewShow} />
-
-        <hr />
     {:else if exportFormat === "project"}
-        <CombinedInput>
-            <p><T id="export.include_media" /></p>
-            <div class="alignRight">
-                <Checkbox checked={$special.projectIncludeMedia ?? true} on:change={(e) => setSpecial(e, "projectIncludeMedia")} />
-            </div>
-        </CombinedInput>
-
-        <hr />
+        <MaterialToggleSwitch label="export.include_media" style="margin-top: 20px;" checked={$special.projectIncludeMedia ?? true} defaultValue={true} on:change={(e) => setSpecial(e, "projectIncludeMedia")} />
     {/if}
 
     {#if loading}
@@ -189,56 +172,7 @@
         </Center>
     {/if}
 
-    <CombinedInput>
-        <Button style="width: 100%;" disabled={exportType === "project" ? !$projects[$activeProject || ""]?.shows?.length : !showIds.length && exportType !== "all_shows"} on:click={exportClick} center dark>
-            <div style="display: flex;align-items: center;">
-                <Icon id="export" size={1.2} right />
-                <T id="export.export" />
-                {#if showIds.length > 1 && exportFormat !== "project"}
-                    <span style="opacity: 0.5;padding-inline-start: 10px;align-content: center;">({showIds.length})</span>
-                {/if}
-            </div>
-        </Button>
-    </CombinedInput>
+    <MaterialButton variant="contained" style="margin-top: 20px;" icon="export" info={showIds.length > 1 && exportFormat !== "project" ? showIds.length.toString() : ""} disabled={exportType === "project" ? !$projects[$activeProject || ""]?.shows?.length : !showIds.length && exportType !== "all_shows"} on:click={exportClick}>
+        <T id="export.export" />
+    </MaterialButton>
 {/if}
-
-<style>
-    .choose {
-        margin-top: 20px;
-
-        width: 100%;
-        display: flex;
-        align-self: center;
-        justify-content: space-between;
-        gap: 10px;
-    }
-
-    .choose :global(button) {
-        width: 180px;
-        height: 180px;
-
-        display: flex;
-        gap: 10px;
-        flex-direction: column;
-        justify-content: center;
-        flex: 1;
-    }
-    .choose p {
-        display: flex;
-        align-items: center;
-    }
-
-    img {
-        height: 100px;
-        max-width: 100%;
-        object-fit: contain;
-        padding: 10px;
-    }
-
-    hr {
-        border: none;
-        height: 2px;
-        margin: 20px 0;
-        background-color: var(--primary-lighter);
-    }
-</style>

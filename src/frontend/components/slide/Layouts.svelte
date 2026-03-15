@@ -1,19 +1,22 @@
 <script lang="ts">
-    import { slide } from "svelte/transition"
     import { uid } from "uid"
+    import type { ClickEvent } from "../../../types/Main"
     import { changeSlidesView } from "../../show/slides"
-    import { actions, activePopup, activeProject, activeShow, alertMessage, dictionary, labelsDisabled, notFound, openToolsTab, projects, showsCache, slidesOptions } from "../../stores"
+    import { actions, activeEdit, activePage, activePopup, activeProject, activeShow, activeStyle, alertMessage, labelsDisabled, outputs, projects, settingsTab, showsCache, slidesOptions, special, styles, templates } from "../../stores"
+    import { getAccess } from "../../utils/profile"
     import { getActionIcon, runAction } from "../actions/actions"
     import Icon from "../helpers/Icon.svelte"
     import T from "../helpers/T.svelte"
     import { keysToID, sortByName } from "../helpers/array"
     import { duplicate } from "../helpers/clipboard"
     import { history } from "../helpers/history"
+    import { allOutputsHasStyleTemplate, getAllEnabledOutputs, getFirstActiveOutput } from "../helpers/output"
     import { _show } from "../helpers/shows"
     import { joinTime, secondsToTime } from "../helpers/time"
-    import Button from "../inputs/Button.svelte"
+    import FloatingInputs from "../input/FloatingInputs.svelte"
     import HiddenInput from "../inputs/HiddenInput.svelte"
-    import Center from "../system/Center.svelte"
+    import MaterialButton from "../inputs/MaterialButton.svelte"
+    import MaterialZoom from "../inputs/MaterialZoom.svelte"
     import SelectElem from "../system/SelectElem.svelte"
     import Reference from "./Reference.svelte"
 
@@ -46,8 +49,8 @@
         )
     }
 
-    function addLayout(e: any) {
-        if (!e.ctrlKey && !e.metaKey) {
+    function addLayout(e: ClickEvent) {
+        if (!e.detail.ctrl) {
             duplicate({ id: "layout" })
             return
         }
@@ -57,20 +60,31 @@
 
     function changeName(e: any) {
         let currentLayout = e.detail?.id?.slice("layout_".length)
-        if (!currentLayout) return
+        if (!currentLayout || isLocked) return
 
-        history({ id: "UPDATE", newData: { key: "layouts", keys: [currentLayout], subkey: "name", data: e.detail.value }, oldData: { id: showId }, location: { page: "show", id: "show_key" } })
+        const newName = e.detail.value
+        history({ id: "UPDATE", newData: { key: "layouts", keys: [currentLayout], subkey: "name", data: newName }, oldData: { id: showId }, location: { page: "show", id: "show_key" } })
+
+        if ($projects[$activeProject!]?.shows?.[$activeShow?.index ?? -1]?.layout === currentLayout) {
+            projects.update((a) => {
+                a[$activeProject!].shows[$activeShow!.index!].layoutInfo = { name: newName }
+                return a
+            })
+        }
     }
 
     function setLayout(id: string, layoutInfo) {
-        showsCache.update((s) => {
-            s[showId].settings.activeLayout = id
-            return s
+        if (!$showsCache[showId]) return
+
+        showsCache.update((a) => {
+            if (!a[showId].settings) a[showId].settings = { activeLayout: "", template: null }
+            a[showId].settings.activeLayout = id
+            return a
         })
 
         // set active layout in project
         if (sortedLayouts?.length < 2) return
-        if (($activeShow?.type === undefined || $activeShow?.type === "show") && $activeShow?.index !== undefined && $activeProject && $projects[$activeProject].shows[$activeShow.index]) {
+        if (($activeShow?.type === undefined || $activeShow?.type === "show") && $activeShow?.index !== undefined && $activeProject && $projects[$activeProject]?.shows?.[$activeShow.index]) {
             projects.update((a) => {
                 a[$activeProject!].shows[$activeShow!.index!].layout = id
                 a[$activeProject!].shows[$activeShow!.index!].layoutInfo = layoutInfo
@@ -81,191 +95,192 @@
 
     let edit: string | boolean = false
 
-    let zoomOpened = false
-    function mousedown(e: any) {
-        if (e.target.closest(".zoom_container") || e.target.closest("button")) return
-
-        zoomOpened = false
-    }
-
-    let loading = false
-    $: if (showId) startLoading()
-    $: if ($notFound.show?.includes(showId)) loading = false
-    function startLoading() {
-        loading = true
-        setTimeout(() => {
-            loading = false
-        }, 8000)
-    }
-
     $: reference = currentShow.reference
     $: multipleLayouts = sortedLayouts.length > 1
 
-    const openTab = (id: string) => openToolsTab.set(id)
-
     $: customActionId = currentShow?.settings?.customAction
     $: customAction = customActionId && $actions[customActionId] ? customActionId : ""
-    function runCustomAction() {
-        if (!customAction) {
+    function runCustomAction(edit = false) {
+        if (edit || !customAction) {
             activePopup.set("custom_action")
             return
         }
 
         runAction($actions[customAction])
     }
+
+    let profile = getAccess("shows")
+    $: isLocked = currentShow?.locked || profile.global === "read" || profile[currentShow?.category || ""] === "read"
+
+    $: referenceType = currentShow?.reference?.type
+
+    // style template
+    $: outputStyleId = getFirstActiveOutput($outputs)?.style || ""
+    $: outputStyleTemplate = allOutputsHasStyleTemplate(referenceType === "scripture") ? $styles[outputStyleId]?.[referenceType === "scripture" ? "templateScripture" : "template"] || "" : ""
+    function editStyleTemplate() {
+        activeStyle.set(outputStyleId)
+        settingsTab.set("styles")
+        activePage.set("settings")
+        // scroll to bottom
+        setTimeout(() => {
+            document.querySelector(".row")?.querySelector(".center")?.querySelector(".scroll")?.scrollTo(0, 1000)
+        }, 80)
+    }
+
+    const outputsCount = getAllEnabledOutputs().length
+    $: enableStylePreview = !!(outputStyleTemplate && $special.styleTemplatePreview !== false && $templates[outputStyleTemplate])
+    $: showTemplateId = currentShow?.settings?.template || ""
+    $: showTemplateIcon = !!(showTemplateId && $templates[showTemplateId])
 </script>
 
-<svelte:window on:mousedown={mousedown} />
+{#if referenceType === "lessons"}
+    <MaterialZoom hidden columns={$slidesOptions.columns} on:change={(e) => slidesOptions.set({ ...$slidesOptions, columns: e.detail })} />
+{:else if layoutSlides.length}
+    <FloatingInputs arrow={!isLocked} let:open>
+        <div slot="menu">
+            {#if Object.keys($actions).length && !reference && (!isLocked || customAction)}
+                <MaterialButton title="show.custom_action_tip" on:click={() => runCustomAction(true)}>
+                    <Icon size={1.1} id="actions" white={!customAction} />
+                </MaterialButton>
 
-{#if $slidesOptions.mode === "grid"}
-    <!-- one at a time, in prioritized order -->
-    {#if layouts?.[activeLayout]?.notes}
-        <div class="notes" title={$dictionary.tools?.notes} on:click={() => openTab("notes")}>
-            <Icon id="notes" right white />
-            {#if typeof layouts[activeLayout].notes === "string"}
-                <p>{@html layouts[activeLayout].notes.replaceAll("\n", "&nbsp;")}</p>
+                <div class="divider" />
             {/if}
+
+            <MaterialButton on:click={() => activePopup.set("translate")} title="popup.translate">
+                <Icon size={1.1} id="translate" white={!isTranslated} />
+            </MaterialButton>
         </div>
-    {:else if currentShow.message?.text}
-        <div class="notes" title={$dictionary.meta?.message} on:click={() => openTab("metadata")}>
-            <Icon id="message" right white />
-            <p>{@html currentShow.message?.text.replaceAll("\n", "&nbsp;")}</p>
-        </div>
-    {:else if !currentShow.metadata?.autoMedia && Object.values(currentShow.meta || {}).reduce((v, a) => (v += a), "").length}
-        <div class="notes" title={$dictionary.tools?.metadata} on:click={() => openTab("metadata")}>
-            <Icon id="info" right white />
-            <p>
-                <!-- currentStyle.metadataDivider -->
-                {@html Object.values(currentShow.meta)
-                    .filter((a) => a?.length)
-                    .join("; ")
-                    .replaceAll("<br>", " ")}
-            </p>
-        </div>
+
+        {#if !open && customAction}
+            <MaterialButton style="aspect-ratio: unset;" class="context #edit_custom_action" title="actions.run_action: {$actions[customAction].name}" on:click={() => runCustomAction()}>
+                <Icon size={1.1} id={getActionIcon(customAction)} />
+                <p>{$actions[customAction].name}</p>
+            </MaterialButton>
+
+            <div class="divider" />
+        {/if}
+
+        {#if isLocked}
+            <MaterialButton
+                title="show.locked"
+                on:click={() => {
+                    alertMessage.set(currentShow?.locked ? "show.locked" : "profile.locked")
+                    activePopup.set("alert")
+                }}
+            >
+                <Icon size={1.1} id="locked" />
+            </MaterialButton>
+        {:else}
+            {#if !open && (isTranslated || referenceType === "scripture")}
+                <MaterialButton on:click={() => activePopup.set("translate")} title="popup.translate">
+                    <Icon size={1.1} id="translate" white={!isTranslated} />
+                </MaterialButton>
+            {/if}
+
+            {#if open || totalTime !== "0s" || referenceType !== "scripture"}
+                <MaterialButton title="popup.next_timer{totalTime !== '0s' ? ': ' + totalTime : ''} [Ctrl+Shift+D]" on:click={() => activePopup.set("next_timer")}>
+                    <Icon size={1.1} id="clock" white={totalTime === "0s"} />
+                </MaterialButton>
+            {/if}
+
+            {#if enableStylePreview && outputsCount === 1 ? false : showTemplateIcon && (!referenceType || referenceType === "scripture" || open)}
+                {#if open}
+                    <div class="divider"></div>
+                {/if}
+
+                <MaterialButton
+                    class="context #show_template"
+                    title="menu.edit: <b>{$templates[showTemplateId].name || 'info.template'}</b>"
+                    on:click={() => {
+                        activeEdit.set({ type: "template", id: showTemplateId, items: [] })
+                        activePage.set("edit")
+                    }}
+                >
+                    <Icon size={1.1} id="templates" />
+                </MaterialButton>
+                <!-- use context menu to remove! -->
+                <!-- {#if open}
+                    <MaterialButton title="actions.remove_template_from_show" on:click={() => removeTemplatesFromShow($activeShow?.id || "", true)}>
+                        <Icon size={1.1} id="remove_circle" />
+                    </MaterialButton>
+                {/if} -->
+            {/if}
+
+            <!-- output style template -->
+            {#if enableStylePreview}
+                {#if open}
+                    <div class="divider"></div>
+                {/if}
+
+                <MaterialButton title="formats.template: {$templates[outputStyleTemplate].name || ''}" on:click={editStyleTemplate}>
+                    <Icon size={1.1} id="styles" />
+                </MaterialButton>
+            {/if}
+        {/if}
+
+        {#if open}
+            <div class="divider"></div>
+        {/if}
+
+        <MaterialZoom hidden={!open} columns={$slidesOptions.columns} on:change={(e) => slidesOptions.set({ ...$slidesOptions, columns: e.detail })} />
+
+        <MaterialButton class="context #slideViews" title="show.change_view: show.{$slidesOptions.mode} [Ctrl+Shift+V]" on:click={changeSlidesView}>
+            <Icon size={1.3} id={$slidesOptions.mode} white={$slidesOptions.mode === "grid"} />
+        </MaterialButton>
+    </FloatingInputs>
+{:else}
+    <!-- template (so you can remove it if you want to) -->
+    {#if enableStylePreview && outputsCount === 1 ? false : showTemplateIcon && (!referenceType || referenceType === "scripture")}
+        <FloatingInputs>
+            <MaterialButton
+                class="context #show_template"
+                title="menu.edit: <b>{$templates[showTemplateId].name || 'info.template'}</b>"
+                on:click={() => {
+                    activeEdit.set({ type: "template", id: showTemplateId, items: [] })
+                    activePage.set("edit")
+                }}
+            >
+                <Icon size={1.1} id="templates" />
+            </MaterialButton>
+        </FloatingInputs>
     {/if}
 {/if}
 
-<div>
-    {#if reference}
-        <Reference show={currentShow} />
-    {:else if layouts}
-        <span style="display: flex;overflow-x: hidden;">
+{#if $slidesOptions.mode !== "simple"}
+    <FloatingInputs style="max-width: {referenceType ? 90 : 70}%;" side="left" onlyOne={!reference && !multipleLayouts}>
+        {#if reference}
+            <Reference show={currentShow} />
+        {:else if layouts}
             {#if multipleLayouts}
-                <span style="display: flex;overflow-x: auto;">
+                <span class="layouts">
                     {#each sortedLayouts as layout}
                         <SelectElem id="layout" data={layout.id} fill={!edit || edit === layout.id}>
-                            <Button
-                                class={currentShow.locked ? "" : "context #layout"}
+                            <MaterialButton
+                                class={isLocked ? "" : "context #layout"}
                                 on:click={() => {
                                     if (!edit) setLayout(layout.id, { name: layout.name })
                                 }}
-                                active={activeLayout === layout.id}
-                                center
+                                isActive={activeLayout === layout.id}
                             >
-                                <HiddenInput value={layout.name} id={"layout_" + layout.id} on:edit={changeName} bind:edit />
-                            </Button>
+                                <HiddenInput value={layout.name} id={"layout_" + layout.id} on:edit={changeName} bind:edit allowEdit={!isLocked} />
+                            </MaterialButton>
                         </SelectElem>
                     {/each}
                 </span>
-
-                <Button disabled={currentShow.locked} on:click={addLayout} style="white-space: nowrap;" title={$dictionary.show?.new_layout} center>
-                    <Icon id="add" />
-                </Button>
             {/if}
-        </span>
-    {:else}
-        <Center faded size={0.8}>
-            {#if loading}
-                <T id="remote.loading" />
-            {:else}
-                <T id="error.no_layouts" />
-            {/if}
-        </Center>
-    {/if}
-    <span style="display: flex; align-items: center;position: relative;{multipleLayouts || reference || !layouts ? '' : 'width: 100%;'}">
-        {#if !multipleLayouts && layouts && !reference}
-            <!-- left aligned to prevent accidental clicks -->
-            <span style="width: 100%;">
-                <Button disabled={!layoutSlides.length || currentShow.locked} on:click={addLayout} style="white-space: nowrap;" title={$dictionary.show?.new_layout} center>
-                    <Icon id="add" right={!$labelsDisabled} />
-                    {#if !$labelsDisabled}<T id="show.new_layout" />{/if}
-                </Button>
-            </span>
+
+            <MaterialButton disabled={!layoutSlides.length || isLocked || !layoutSlides?.some((a) => currentShow?.slides?.[a.id]?.group && currentShow?.slides?.[a.id]?.group !== ".")} on:click={addLayout} style="white-space: nowrap;" title="show.new_layout" center>
+                <Icon id="add" size={1.1} white={multipleLayouts} />
+                {#if !multipleLayouts && !$labelsDisabled}<T id="show.new_layout" />{/if}
+            </MaterialButton>
         {/if}
-
-        <!-- RIGHT BUTTONS -->
-
-        <!-- action button -->
-        {#if Object.keys($actions).length && !reference}
-            <div class="seperator" />
-
-            <Button class="context #edit_custom_action" on:click={runCustomAction} title={customAction ? `${$dictionary.actions?.run_action}: ${$actions[customAction].name}` : $dictionary.show?.custom_action_tip}>
-                <Icon size={1.1} id={customAction ? getActionIcon(customAction) : "actions"} white={!customAction} right={!!customAction} />
-                {#if customAction}<p>{$actions[customAction].name}</p>{/if}
-            </Button>
-        {/if}
-
-        <div class="seperator" />
-
-        {#if currentShow.locked}
-            <Button
-                on:click={() => {
-                    alertMessage.set("show.locked_info")
-                    activePopup.set("alert")
-                }}
-                title={$dictionary.show?.locked}
-            >
-                <Icon size={1.1} id="locked" />
-            </Button>
-        {:else}
-            <Button disabled={!layoutSlides.length} on:click={() => activePopup.set("translate")} title={$dictionary.popup?.translate}>
-                <Icon size={1.1} id="translate" white={!isTranslated} />
-            </Button>
-            <Button disabled={!layoutSlides.length} on:click={() => activePopup.set("next_timer")} title="{$dictionary.popup?.next_timer}{totalTime !== '0s' ? ': ' + totalTime : ''}">
-                <Icon size={1.1} id="clock" white={totalTime === "0s"} />
-            </Button>
-        {/if}
-
-        <div class="seperator" />
-
-        <Button class="context #slideViews" on:click={changeSlidesView} title="{$dictionary.show?.change_view}: {$dictionary.show?.[$slidesOptions.mode]} [Ctrl+Shift+V]">
-            <Icon size={1.3} id={$slidesOptions.mode} white />
-        </Button>
-        <Button on:click={() => (zoomOpened = !zoomOpened)} title={$dictionary.actions?.zoom}>
-            <Icon size={1.3} id="zoomIn" white />
-        </Button>
-        {#if zoomOpened}
-            <div class="zoom_container" transition:slide={{ duration: 150 }}>
-                <Button style="padding: 0 !important;" on:click={() => slidesOptions.set({ ...$slidesOptions, columns: 4 })} bold={false} center>
-                    <p class="text" title={$dictionary.actions?.resetZoom}>{(100 / $slidesOptions.columns).toFixed()}%</p>
-                </Button>
-                <Button disabled={$slidesOptions.columns <= 2} on:click={() => slidesOptions.set({ ...$slidesOptions, columns: Math.max(2, $slidesOptions.columns - 1) })} title={$dictionary.actions?.zoomIn} center>
-                    <Icon size={1.3} id="add" white />
-                </Button>
-                <Button disabled={$slidesOptions.columns >= 10} on:click={() => slidesOptions.set({ ...$slidesOptions, columns: Math.min(10, $slidesOptions.columns + 1) })} title={$dictionary.actions?.zoomOut} center>
-                    <Icon size={1.3} id="remove" white />
-                </Button>
-            </div>
-        {/if}
-    </span>
-</div>
+    </FloatingInputs>
+{/if}
 
 <style>
-    .notes {
-        background-color: var(--primary);
-        border-radius: var(--border-radius);
-        /* position: absolute;bottom: 0;transform: translateY(-100%); */
-        padding: 0 8px;
-        min-height: 28px;
-
+    .layouts {
         display: flex;
-        align-items: center;
-        justify-content: start;
-        /* justify-content: center; */
-    }
-
-    .notes p :global(*) {
-        display: inline;
+        overflow-x: auto;
     }
 
     div {
@@ -287,35 +302,5 @@
         /* color: var(--secondary) !important; */
         /* color: rgb(255 255 255 /0.5) !important; */
         background-color: var(--primary) !important;
-    }
-
-    .seperator {
-        width: 1px;
-        height: 100%;
-        background-color: var(--primary);
-        /* margin: 0 10px; */
-    }
-
-    .text {
-        opacity: 0.8;
-        text-align: center;
-        padding: 0.5em 0;
-    }
-
-    /* div .zoom_container :global(button) {
-        padding: 0.3em calc(0.8em - 1px) !important;
-    } */
-    .zoom_container {
-        position: absolute;
-        inset-inline-end: 0;
-        top: 0;
-        transform: translateY(-100%);
-        overflow: hidden;
-
-        flex-direction: column;
-        width: auto;
-        /* border-left: 3px solid var(--primary-lighter); */
-
-        z-index: 2;
     }
 </style>

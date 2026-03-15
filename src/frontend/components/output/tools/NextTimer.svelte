@@ -1,8 +1,9 @@
 <script lang="ts">
     import type { Output } from "../../../../types/Output"
-    import { dictionary, slideTimers } from "../../../stores"
+    import { slideTimers } from "../../../stores"
+    import { translateText } from "../../../utils/language"
     import Icon from "../../helpers/Icon.svelte"
-    import { getActiveOutputs } from "../../helpers/output"
+    import { getAllActiveOutputIds } from "../../helpers/output"
     import Button from "../../inputs/Button.svelte"
     import Slider from "../../inputs/Slider.svelte"
 
@@ -10,7 +11,7 @@
     export let timer: any
 
     // $: if (!currentOutput?.out?.transition) {
-    //   let outs = getActiveOutputs().map((id) => $outputs[id])
+    //   let outs = getAllActiveOutputs()
     //   currentOutput = outs.find((output) => output.out?.transition)
     // }
 
@@ -19,7 +20,7 @@
     function transitionChange(e: any) {
         step = true
 
-        let outputIds = getActiveOutputs()
+        const outputIds = getAllActiveOutputIds()
         outputIds.forEach((id) => {
             let timer = $slideTimers[id]
             if (timer) updateTime(e.target.value, timer)
@@ -37,7 +38,7 @@
         step = false
 
         if (autoPause) {
-            let outputIds = getActiveOutputs()
+            const outputIds = getAllActiveOutputIds()
             outputIds.forEach((id) => {
                 let timer = $slideTimers[id]
                 if (timer) timer.timer.resume()
@@ -48,7 +49,7 @@
     }
 
     function playPause(isPaused: boolean) {
-        let outputIds = getActiveOutputs()
+        const outputIds = getAllActiveOutputIds()
         outputIds.forEach((id) => {
             let timer = $slideTimers[id]
             if (timer) {
@@ -72,7 +73,7 @@
 {#if timer.timer && timer.max}
     <span class="group">
         <!-- padding: 0.3em; -->
-        <Button style="flex: 0;" center title={timer.paused ? $dictionary.media?.play : $dictionary.media?.pause} on:click={() => playPause(timer.paused)}>
+        <Button style="flex: 0;" center title={translateText(timer.paused ? "media.play" : "media.pause")} on:click={() => playPause(timer.paused)}>
             <Icon id={timer.paused ? "play" : "pause"} size={1.2} white={timer.paused} />
         </Button>
         <span style="color: var(--secondary);padding: 0 10px;">{round(timer.time)}</span>

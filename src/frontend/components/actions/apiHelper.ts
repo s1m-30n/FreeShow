@@ -3,37 +3,10 @@ import { get } from "svelte/store"
 import { OUTPUT, STAGE } from "../../../types/Channels"
 import type { History } from "../../../types/History"
 import type { DropData, Selected, Variable } from "../../../types/Main"
+import { clearAudio } from "../../audio/audioFading"
 import { AudioPlayer } from "../../audio/audioPlayer"
 import { AudioPlaylist } from "../../audio/audioPlaylist"
-import {
-    activeDrawerTab,
-    activeEdit,
-    activePage,
-    activeProject,
-    activeTimers,
-    audioPlaylists,
-    dictionary,
-    folders,
-    gain,
-    groupNumbers,
-    groups,
-    media,
-    openScripture,
-    outLocked,
-    outputs,
-    overlays,
-    playingAudio,
-    playingMetronome,
-    projects,
-    refreshEditSlide,
-    selected,
-    showsCache,
-    sortedShowsList,
-    styles,
-    timers,
-    variables,
-    volume
-} from "../../stores"
+import { activeDrawerTab, activeEdit, activePage, activeProject, activeShow, activeTimers, audioPlaylists, draw, drawSettings, drawTool, folders, groupNumbers, groups, media, openScripture, outLocked, outputs, overlays, playingAudio, playingMetronome, projects, refreshEditSlide, selected, showsCache, sortedShowsList, special, styles, timers, variables, volume } from "../../stores"
 import { newToast } from "../../utils/common"
 import { send } from "../../utils/request"
 import { getDynamicValue } from "../edit/scripts/itemHelpers"
@@ -43,7 +16,7 @@ import { dropActions } from "../helpers/dropActions"
 import { history } from "../helpers/history"
 import { setDrawerTabData } from "../helpers/historyHelpers"
 import { getExtension, getFileName, getMediaStyle, getMediaType, removeExtension } from "../helpers/media"
-import { getActiveOutputs, getCurrentStyle, isOutCleared, setOutput } from "../helpers/output"
+import { getAllActiveOutputs, getAllEnabledOutputs, getCurrentStyle, getFirstActiveOutput, isOutCleared, setOutput } from "../helpers/output"
 import { setRandomValue } from "../helpers/randomValue"
 import { loadShows, setShow } from "../helpers/setShow"
 import { getLabelId, getLayoutRef } from "../helpers/show"
@@ -52,11 +25,12 @@ import { _show } from "../helpers/shows"
 import { clearBackground } from "../output/clear"
 import { getPlainEditorText } from "../show/getTextEditor"
 import { getSlideGroups } from "../show/tools/groups"
-import { activeShow } from "./../../stores"
-import type { API_add_to_project, API_create_project, API_edit_timer, API_group, API_id_index, API_id_value, API_layout, API_media, API_rearrange, API_scripture, API_seek, API_slide_index, API_variable } from "./api"
+import type { API_add_to_project, API_create_project, API_draw_zoom, API_edit_timer, API_group, API_id_index, API_id_value, API_layout, API_media, API_output_lock, API_rearrange, API_scripture, API_seek, API_slide_index, API_toggle_specific, API_variable } from "./api"
 
 // WIP combine with click() in ShowButton.svelte
 export function selectShowByName(name: string) {
+    if (typeof name !== "string") return
+
     const shows = get(sortedShowsList)
     if (name.includes("{")) name = getDynamicValue(name)
     const sortedShows = sortByClosestMatch(shows, name)
@@ -72,9 +46,8 @@ export function selectShowByName(name: string) {
 export function gotoGroup(dataGroupId: string) {
     if (get(outLocked)) return
 
-    const outputId = getActiveOutputs(get(outputs))[0]
-    const currentOutput = get(outputs)[outputId] || null
-    const outSlide = currentOutput.out?.slide
+    const currentOutput = getFirstActiveOutput()
+    const outSlide = currentOutput?.out?.slide
     const currentShowId = outSlide?.id || (get(activeShow) !== null ? (get(activeShow)!.type === undefined || get(activeShow)!.type === "show" ? get(activeShow)!.id : null) : null)
     if (!currentShowId) return
 
@@ -107,7 +80,7 @@ export function selectProjectByIndex(index: number) {
     // select project
     const selectedProject = sortByName(removeDeleted(keysToID(get(projects))))[index]
     if (!selectedProject) {
-        newToast(get(dictionary).toast?.midi_no_project + " " + index)
+        newToast("toast.midi_no_project " + index)
         return
     }
 
@@ -131,14 +104,16 @@ export async function selectSlideByIndex(data: API_slide_index) {
     const showRef = _show(data.showId || "active")
         .layouts(data.layoutId ? [data.layoutId] : "active")
         .ref()[0]
-    if (!showRef) return newToast("$toast.midi_no_show")
+    if (!showRef) return newToast("toast.midi_no_show")
 
     const slideRef = showRef[data.index]
-    if (!slideRef) return newToast(get(dictionary).toast?.midi_no_slide + " " + data.index)
+    if (!slideRef) return newToast("toast.midi_no_slide " + data.index)
 
     outputSlide(showRef, data)
 }
 export function selectSlideByName(name: string) {
+    if (typeof name !== "string") return
+
     let slides = _show().slides().get()
     // group numbers
     const groupNums: { [key: string]: number } = {}
@@ -159,7 +134,7 @@ export function selectSlideByName(name: string) {
     if (!sortedSlides[0]) return
 
     const showRef = getLayoutRef()
-    if (!showRef) return newToast("$toast.midi_no_show")
+    if (!showRef) return newToast("toast.midi_no_show")
 
     const index = showRef.findIndex((a) => a.id === sortedSlides[0].id)
     const slideRef = showRef[index]
@@ -191,7 +166,7 @@ export function selectOverlayByIndex(index: number) {
 
     const sortedOverlays = getSortedOverlays()
     const overlayId = sortedOverlays[index]?.id
-    if (!overlayId) return // newToast("$toast.action_no_id": action_id)
+    if (!overlayId) return // newToast("toast.action_no_id": action_id)
 
     setOutput("overlays", overlayId, false, "", true)
 }
@@ -211,8 +186,35 @@ export function selectOverlayById(id: string) {
     setOutput("overlays", id, false, "", true)
 }
 
-export function toggleLock(value?: boolean) {
-    outLocked.set(value ?? !get(outLocked))
+export function toggleLock(data: API_output_lock) {
+    if (!data.outputId) {
+        // global lock
+        outLocked.set(data.value ?? !get(outLocked))
+        return
+    }
+
+    const outputIds = data.outputId === "all" ? getAllEnabledOutputs().map((a) => a.id) : [data.outputId]
+
+    const isLocked = get(outputs)[outputIds[0]]?.active === false
+    outputIds.forEach((outputId) => {
+        toggleOutputLock(outputId, typeof data.value === "boolean" ? !data.value : isLocked)
+    })
+}
+// similar to PreviewOutputs.svelte
+function toggleOutputLock(outputId: string, value: boolean) {
+    outputs.update((a) => {
+        if (!a[outputId]?.enabled) return a
+
+        a[outputId].active = value
+
+        const activeList = Object.values(a).filter((o) => !o.stageOutput && o.enabled && o.active === true)
+        if (!activeList.length) {
+            a[outputId].active = true
+            newToast("toast.one_output")
+        }
+
+        return a
+    })
 }
 
 export function moveStageConnection(id: string) {
@@ -261,6 +263,7 @@ export function changeVariable(data: API_variable) {
 
     let key = data.key
     if (variable.type === "random_number" && !key) key = "randomize"
+    if (variable.type === "text_set" && !key) key = "next"
     else if (!key) key = "enabled"
 
     if (key === "randomize") {
@@ -269,15 +272,47 @@ export function changeVariable(data: API_variable) {
     } else if (key === "reset") {
         resetVariable(id)
         return
+    } else if (key === "next" || key === "previous") {
+        const activeSet = variable.activeTextSet ?? 0
+        const newValue = key === "next" ? Math.min(activeSet + 1, (variable.textSets?.length ?? 1) - 1) : Math.max(activeSet - 1, 0)
+        updateVariable(newValue, id, "activeTextSet")
+        updateVariable(newValue, id, "activeTextSet")
+        return
     }
 
     let value
-    if (data.variableAction || variable.type === "number") {
+    if (key === "expression") {
+        const stringValue = (data.value || "").toString()
+        const replacedValues = stringValue.includes("{") ? getDynamicValue(stringValue) : stringValue
+        // eslint-disable-next-line
+        const calculated = new Function(`return ${replacedValues}`)()
+        value = Number(calculated)
+        key = "number"
+    } else if (data.variableAction || variable.type === "number") {
         value = Number(variable.number || variable.default || 0)
         if (data.variableAction === "increment" || key === "increment") value += Number(data.value || variable.step || 1)
         else if (data.variableAction === "decrement" || key === "decrement") value -= Number(data.value || variable.step || 1)
         else if (!data.variableAction) value = Number(data.value || variable.default || 0)
         key = "number"
+    } else if (variable.type === "text_set") {
+        if (key === "text_set") {
+            let index = (data.text_set_number ?? 1) - 1
+            if (index === -1) index = variable.activeTextSet || 0
+            const setId = data.text_set
+            if (!setId) return
+
+            const allSets = variable.textSets || []
+            const currentSet = allSets[index] || {}
+            const newValue = (data.value || "") as string
+            allSets[index] = { ...currentSet, [setId]: newValue }
+
+            key = "textSets" as any
+            value = allSets
+        } else {
+            // key = "value"
+            key = "activeTextSet" as any
+            value = Number(data.value ?? 1) - 1
+        }
     } else if (data.value !== undefined) {
         value = data.value
         if (key === "value" && typeof value !== "boolean") key = variable.type
@@ -287,7 +322,7 @@ export function changeVariable(data: API_variable) {
     }
     if (value === undefined) return
 
-    updateVariable(value, id, key)
+    updateVariable(value, id, key!)
 }
 function getVariables() {
     return keysToID(get(variables))
@@ -302,6 +337,72 @@ export function resetVariable(id: string) {
     updateVariable(0, id, "number")
     updateVariable("", id, "setName")
     updateVariable([], id, "setLog")
+}
+
+// TIMERS
+
+export function getTimersDetailed() {
+    const allTimers = get(timers)
+    const activeTimersList = get(activeTimers)
+
+    return keysToID(allTimers).map((timer) => ({
+        ...timer,
+        name: timer.name || "",
+        isActive: activeTimersList.some((activeTimer) => activeTimer.id === timer.id),
+        currentTime: activeTimersList.find((activeTimer) => activeTimer.id === timer.id)?.currentTime,
+        paused: activeTimersList.find((activeTimer) => activeTimer.id === timer.id)?.paused
+    }))
+}
+
+export function pauseTimerById(id: string) {
+    if (get(outLocked)) return
+
+    const timer = get(timers)[id]
+    if (!timer) return
+
+    // Set the specific timer to paused (similar to pauseAllTimers but for one timer)
+    activeTimers.update((active) => {
+        const timerIndex = active.findIndex((a) => a.id === id)
+        if (timerIndex >= 0) {
+            active[timerIndex].paused = true
+        }
+        return active
+    })
+}
+
+export function pauseTimerByName(name: string) {
+    if (get(outLocked)) return
+
+    if (name.includes("{")) name = getDynamicValue(name)
+    const timersList = sortByClosestMatch(keysToID(get(timers)), name)
+    const timerId = timersList[0]?.id
+    if (!timerId) return
+
+    pauseTimerById(timerId)
+}
+
+export function stopTimerById(id: string) {
+    if (get(outLocked)) return
+
+    const timer = get(timers)[id]
+    if (!timer) return
+
+    // Remove from active timers completely (this stops and resets the timer)
+    // This is the same as the existing resetTimer function
+    activeTimers.update((a) => {
+        return a.filter((activeTimer) => activeTimer.id !== id)
+    })
+}
+
+export function stopTimerByName(name: string) {
+    if (get(outLocked)) return
+
+    if (name.includes("{")) name = getDynamicValue(name)
+    const timersList = sortByClosestMatch(keysToID(get(timers)), name)
+    const timerId = timersList[0]?.id
+    if (!timerId) return
+
+    stopTimerById(timerId)
 }
 
 // SHOW
@@ -348,7 +449,7 @@ export async function rearrangeGroups(data: API_rearrange) {
     const drag: Selected = { id: "slide", data: [{ index: dragIndex, showId: data.showId }] }
     const drop: DropData = { id: "slides", data: { index: dropIndex }, index: dropIndex + pos, center: false } // , trigger, center: false
 
-    const h = dropActions.slide({ drag, drop }, { location: { page: get(activePage) } } as History)
+    const h = await dropActions.slide({ drag, drop }, { location: { page: get(activePage) } } as History)
     if (h && h.id) history(h)
 }
 
@@ -360,14 +461,45 @@ export async function addGroup(data: API_group) {
     selected.set({ id: null, data: [] })
 }
 
+export function setNextSlideTimer(time: number) {
+    const value = time || 0
+
+    const layoutRef = getLayoutRef()
+    const indexes = layoutRef.map((_, i) => i)
+
+    history({ id: "SHOW_LAYOUT", newData: { key: "nextTimer", data: value, indexes }, location: { page: "show", override: "change_slide_action_timer" } })
+
+    const allActiveSlides = layoutRef.filter((a) => !a.data.disabled)
+
+    // GO TO START
+
+    // remove existing go to start if just one applied to any slide
+    let goToStartRefs = allActiveSlides.reduce((value, ref) => (ref.data?.end ? [...value, ref] : value), [] as any[])
+    if (goToStartRefs.length === 1) {
+        const showId = get(activeShow)?.id || ""
+        const layoutId = _show().get("settings.activeLayout")
+
+        showsCache.update((a) => {
+            let ref = goToStartRefs[0]
+            if (!ref) return a
+
+            if (ref.type === "parent") delete a[showId].layouts[layoutId]?.slides?.[ref.index]?.end
+            else delete a[showId].layouts[layoutId]?.slides?.[ref.parent?.index ?? -1]?.children?.[ref.id]?.end
+            return a
+        })
+    }
+
+    history({ id: "SHOW_LAYOUT", newData: { key: "end", data: !!value, indexes: [indexes[indexes.length - 1]] }, location: { page: "show", override: "change_slide_action_loop" } })
+}
+
 export function setTemplate(templateId: string) {
     const showId = get(activeShow)?.id
     if (!showId) {
-        // newToast("$empty.show")
+        // newToast("empty.show")
         return
     }
     if (_show(showId).get("locked")) {
-        newToast("$show.locked")
+        newToast("show.locked")
         return
     }
 
@@ -390,10 +522,22 @@ export function getClearedState() {
     return { all, background, slide, overlays: overlaysCleared, audio, slideTimers }
 }
 
-// "1.1.1" = "Gen 1:1"
+// "1.1.1,2,3" = "Gen 1:1-3"
+// WIP allow "John 1:35-36" or "43:1:35" as well
 export function startScripture(data: API_scripture) {
     const split = data.reference.split(".")
-    const ref = { book: Number(split[0]) - 1, chapter: Number(split[1]), verses: [split[2]] }
+
+    const book = Number(split[0])
+    const chapter = Number(split[1])
+    const rawVerses = String(split[2] ?? "").trim()
+
+    // Support multiple verses encoded as comma-separated values, e.g. "43.3.16,17,18".
+    const verseItems = rawVerses
+        .split(",")
+        .map((v) => v.trim())
+        .filter(Boolean)
+
+    const ref = { book, chapter, verses: [verseItems.length ? verseItems : [rawVerses]] }
 
     if (get(activePage) !== "edit") activePage.set("show")
     if (data.id) setDrawerTabData("scripture", data.id) // use active if no ID
@@ -407,6 +551,7 @@ export function startScripture(data: API_scripture) {
 export function playMedia(data: API_media) {
     if (get(outLocked)) return
 
+    const mediaType = data.data?.type
     const extension = getMediaType(getExtension(data.path))
 
     if (extension === "pdf") {
@@ -416,25 +561,68 @@ export function playMedia(data: API_media) {
         return
     }
 
-    const outputId = getActiveOutputs(get(outputs))[0]
-    const currentOutput = get(outputs)[outputId] || {}
-    const currentStyle = getCurrentStyle(get(styles), currentOutput.style)
+    const currentOutput = getFirstActiveOutput()
+    const currentStyle = getCurrentStyle(get(styles), currentOutput?.style)
 
     const mediaStyle = getMediaStyle(get(media)[data.path], currentStyle)
 
-    setOutput("background", { path: data.path, ...mediaStyle })
+    // Get loop and muted settings from data, default to true
+    const loop = data.data?.loop !== undefined ? data.data.loop : true
+    const muted = data.data?.muted !== undefined ? data.data.muted : true
+
+    // Handle player (online media like YouTube/Vimeo)
+    if (mediaType === "player") {
+        setOutput("background", { type: "player", id: data.path, loop, muted, ...mediaStyle })
+    } else {
+        const type = mediaType || extension || "video"
+        setOutput("background", { type, path: data.path, loop, muted, ...mediaStyle })
+    }
 }
 
 export function videoSeekTo(data: API_seek) {
     if (get(outLocked)) return
 
-    const activeOutputIds = getActiveOutputs(get(outputs), true, true, true)
+    const activeOutputIds = getAllActiveOutputs().map((a) => a.id)
     const timeValues: any = {}
     activeOutputIds.forEach((id) => {
         timeValues[id] = data.seconds
     })
 
     send(OUTPUT, ["TIME"], timeValues)
+}
+
+export function toggleMediaLoop() {
+    if (get(outLocked)) return
+
+    const activeOutput = getFirstActiveOutput()
+    if (!activeOutput) return
+
+    const currentBg = get(outputs)[activeOutput.id]?.out?.background
+    if (!currentBg) return
+
+    const isLooping = currentBg.loop !== false
+    setOutput("background", { ...currentBg, loop: !isLooping })
+}
+
+export function getMediaLoopState(): boolean {
+    const activeOutput = getFirstActiveOutput()
+    if (!activeOutput) return true
+
+    const currentBg = get(outputs)[activeOutput.id]?.out?.background
+    return currentBg?.loop !== false
+}
+
+export function toggleMediaMute() {
+    if (get(outLocked)) return
+
+    const activeOutput = getFirstActiveOutput()
+    if (!activeOutput) return
+
+    const currentBg = get(outputs)[activeOutput.id]?.out?.background
+    if (!currentBg) return
+
+    const isMuted = currentBg.muted !== false
+    setOutput("background", { ...currentBg, muted: !isMuted })
 }
 
 // AUDIO
@@ -449,7 +637,7 @@ export function pauseAudio(data: API_media) {
 }
 export function stopAudio(data: API_media) {
     if (get(outLocked)) return
-    AudioPlayer.stop(data.path)
+    clearAudio(data.path, { clearPlaylist: true, commonClear: true })
 }
 export function audioSeekTo(data: API_seek) {
     if (get(outLocked)) return
@@ -458,15 +646,16 @@ export function audioSeekTo(data: API_seek) {
 }
 
 let unmutedValue = 1
-export function updateVolumeValues(value: number | undefined | "local", changeGain = false) {
+export function updateVolumeValues(value: number | undefined | "local") {
     // api mute(unmute)
     if (value === undefined) {
         value = get(volume) ? 0 : unmutedValue
         if (!value) unmutedValue = get(volume)
     }
 
-    if (changeGain) gain.set(Number(Number(value).toFixed(2)))
-    else volume.set(Number(Number(value).toFixed(2)))
+    volume.set(Number(Number(value).toFixed(2)))
+
+    AudioPlayer.updateVolume()
 }
 
 // TIMERS
@@ -491,23 +680,111 @@ export function timerSeekTo(data: API_seek) {
     })
 }
 
+// OTHER
+
+export function toggleLogSongUsage(data: API_toggle_specific) {
+    if ((data.value as any) === "false") data.value = false // from Companion
+
+    const newValue = data.value !== undefined ? !!data.value : !get(special).logSongUsage
+    special.update((a) => {
+        a.logSongUsage = newValue
+        return a
+    })
+}
+
 // SPECIAL
+
+function normalize(str: string) {
+    return str
+        .replace(/[ \-'’".!?]/g, "") // remove all spaces, and special characters
+        .toLowerCase()
+        .normalize("NFD") // Decompose accents
+        .replace(/[\u0300-\u036f]/g, "") // Remove accent marks
+}
 
 export function sortByClosestMatch(array: any[], value: string, key = "name") {
     if (!value) return array
 
-    // the object key must contain the input string
-    array = array.filter((a) => a[key] && a[key].toLowerCase().includes(value.toLowerCase()))
+    const normalizedValue = normalize(value)
 
-    function similaritySort(a, b) {
-        const similarityA = 1 / (1 + levenshteinDistance(a[key].toLowerCase(), value.toLowerCase()))
-        const similarityB = 1 / (1 + levenshteinDistance(b[key].toLowerCase(), value.toLowerCase()))
+    // Filter: keep if name or any alias includes the value
+    array = array.filter((a) => {
+        const keyMatch = a[key] && normalize(a[key]).includes(normalizedValue)
+        const aliasMatch = Array.isArray(a.aliases) && a.aliases.some((alias) => normalize(alias).includes(normalizedValue))
+        return keyMatch || aliasMatch
+    })
 
-        return similarityB - similarityA
+    function getSimilarityScoreAndSource(item: any) {
+        const sources: { source: string; isAlias: boolean }[] = []
+
+        if (item[key]) {
+            sources.push({ source: item[key], isAlias: false })
+        }
+
+        if (Array.isArray(item.aliases)) {
+            for (const alias of item.aliases) {
+                sources.push({ source: alias, isAlias: true })
+            }
+        }
+
+        let bestScore = -Infinity
+        let bestSource: string | undefined
+        let isAlias = false
+
+        for (const { source, isAlias: aliasFlag } of sources) {
+            const score = normalizedSimilarity(normalize(source), normalizedValue)
+            if (score > bestScore) {
+                bestScore = score
+                bestSource = source
+                isAlias = aliasFlag
+            }
+        }
+
+        return { score: bestScore, alias: isAlias ? bestSource : undefined }
     }
 
-    return array.sort(similaritySort)
+    array = array.map((item) => {
+        const { score, alias } = getSimilarityScoreAndSource(item)
+        return {
+            ...item,
+            _similarityScore: score,
+            ...(alias ? { aliasMatch: alias } : {})
+        }
+    })
+
+    // eslint-disable-next-line
+    return array.sort((a, b) => b._similarityScore - a._similarityScore).map(({ _similarityScore, ...rest }) => rest)
 }
+
+// export function sortByClosestMatch(array: any[], value: string, key = "name") {
+//     if (!value) return array
+
+//     const normalizedValue = normalize(value)
+
+//     // Filter: check key or any alias includes the normalized value
+//     array = array.filter((a) => {
+//         const keyMatch = a[key] && normalize(a[key]).includes(normalizedValue)
+//         const aliasMatch = Array.isArray(a.aliases) && a.aliases.some((alias) => normalize(alias.toLowerCase().replaceAll(" ", "")).includes(normalizedValue))
+//         return keyMatch || aliasMatch
+//     })
+
+//     function similarityScore(item) {
+//         const targets = [...(item[key] ? [normalize(item[key])] : []), ...(Array.isArray(item.aliases) ? item.aliases.map(a => normalize(a).toLowerCase().replaceAll(" ", "")) : [])]
+
+//         const match = Math.max(...targets.map((t) => 1 / (1 + levenshteinDistance(t, normalizedValue))))
+//         // if (match !== normalize(item[key]))
+//         return match
+//     }
+
+//     return array.sort((a, b) => similarityScore(b) - similarityScore(a))
+// }
+
+function normalizedSimilarity(a: string, b: string): number {
+    const dist = levenshteinDistance(a, b)
+    const maxLength = Math.max(a.length, b.length)
+    return maxLength === 0 ? 1 : 1 - dist / maxLength
+}
+
 // WIP duplicate of files.ts
 function levenshteinDistance(a, b) {
     if (a.length === 0) return b.length
@@ -555,13 +832,34 @@ export async function getPDFThumbnails({ path }: API_media) {
         canvas.height = viewport.height
         canvas.width = viewport.width
 
-        await page.render({ canvasContext: context, viewport }).promise
+        await page.render({ canvas, canvasContext: context, viewport }).promise
         const base64 = canvas.toDataURL("image/jpeg")
         pages.push(base64)
     }
 
     loadingTask.destroy()
     return { path, pages }
+}
+
+// DRAW
+
+export function changeDrawZoom(data: API_draw_zoom) {
+    const size = data.size || 100
+    drawSettings.update((a) => {
+        if (!a.zoom) a.zoom = {}
+        a.zoom.size = size
+        return a
+    })
+
+    if (size === 100) {
+        draw.set(null)
+        drawTool.set("focus")
+        return
+    }
+
+    // 0-100 %
+    draw.set({ x: 1920 * ((data.x ?? 50) / 100), y: 1080 * ((data.y ?? 50) / 100) })
+    drawTool.set("zoom")
 }
 
 // ADD
@@ -573,6 +871,7 @@ export function addToProject(data: API_add_to_project) {
     projects.update((a) => {
         if (!a[data.projectId]?.shows || a[data.projectId].shows.find((item) => item.id === data.id)) return a
         a[data.projectId].shows.push({ ...(data.data || {}), id: data.id })
+        a[data.projectId].modified = Date.now()
         return a
     })
 

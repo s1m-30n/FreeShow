@@ -1,24 +1,26 @@
 // ----- FreeShow -----
 // Here are all the global app variables
 
-import type { Family } from "css-fonts"
+import type { Bible } from "json-bible/lib/Bible"
 import type { ICommonTagsResult } from "music-metadata"
 import { type Writable, writable } from "svelte/store"
-import type { Bible } from "../types/Bible"
+import type { ContentProviderId } from "../electron/contentProviders/base/types"
+import type { TimecodeMode } from "../electron/timecode/timecode"
 import type { Event } from "../types/Calendar"
 import type { Draw, DrawLine, DrawSettings, DrawTools } from "../types/Draw"
 import type { Effects } from "../types/Effects"
 import type { History, HistoryNew } from "../types/History"
-import type { ActiveEdit, Clipboard, Media, MediaOptions, NumberObject, OS, Popups, Selected, SlidesOptions, Trigger, Variable } from "../types/Main"
+import type { ActiveEdit, Clipboard, Media, MediaOptions, NumberObject, OS, Popups, Profiles, Selected, SlidesOptions, Trigger, Variable } from "../types/Main"
 import type { Folders, Projects, ShowRef } from "../types/Projects"
 import type { Dictionary, Styles, Themes } from "../types/Settings"
 import type { Action, Emitter, ID, Overlays, ShowGroups, ShowList, Shows, ShowType, SlideTimer, Tag, Templates, Timer, Transition, TrimmedShows } from "../types/Show"
 import type { ServerData } from "../types/Socket"
 import type { ActiveStage, StageLayouts } from "../types/Stage"
 import type { BibleCategories, Categories, DrawerTabs, SettingsTabs, TopViews } from "../types/Tabs"
-import type { AudioChannel, AudioStream, Playlist } from "./../types/Audio"
+import type { AudioChannel, AudioChannelData, AudioStream, Playlist } from "./../types/Audio"
 import type { Outputs } from "./../types/Output"
 import type { DrawerTabIds } from "./../types/Tabs"
+import type { EQBand, EqualizerConfig } from "./audio/audioEqualizer"
 import type { AudioData } from "./audio/audioPlayer"
 import type { API_metronome } from "./components/actions/api"
 
@@ -56,6 +58,8 @@ export const activeRename: Writable<any> = writable(null)
 export const activeDrawerTab: Writable<DrawerTabIds> = writable("shows")
 export const drawerOpenedInEdit: Writable<boolean> = writable(false)
 export const activeStyle: Writable<string> = writable("")
+export const selectedProfile: Writable<string | null> = writable(null)
+export const activeProfile: Writable<string | null> = writable(null)
 export const settingsTab: Writable<SettingsTabs> = writable("general")
 export const projectView: Writable<boolean> = writable(false)
 export const showRecentlyUsedProjects: Writable<boolean> = writable(true)
@@ -65,14 +69,23 @@ export const currentRecordingStream: Writable<any> = writable(null)
 export const focusedArea: Writable<string> = writable("")
 export const activeAnimate: Writable<any> = writable({ slide: -1, index: -1 })
 export const allOutputs: Writable<Outputs> = writable({}) // stage data in output windows
-export const activeScripture: Writable<any> = writable({})
+export const activeScripture: Writable<{ id?: string; reference?: { book: number | string; chapters: (number | string)[]; verses: (number | string)[][] } }> = writable({})
 export const activeTriggerFunction: Writable<string> = writable("")
 export const guideActive: Writable<boolean> = writable(false)
 export const runningActions: Writable<string[]> = writable([])
-export const activeSlideRecording: Writable<any> = writable(null)
-export const pcoConnected: Writable<boolean> = writable(false)
-export const chumsConnected: Writable<boolean> = writable(false)
-export const chumsSyncCategories: Writable<string[]> = writable([])
+export const scriptureMode: Writable<"grid" | "list"> = writable("list")
+export const providerConnections: Writable<{ [key in ContentProviderId]?: boolean }> = writable({})
+export const metronomeTimer: Writable<{ beat: number; timeToNext: number }> = writable({ beat: 0, timeToNext: 0 })
+export const mediaDownloads: Writable<Map<string, { progress: number; total: number; status: string }>> = writable(new Map())
+export const showChangeProfileMenu: Writable<boolean> = writable(false)
+export const cloudUsers: Writable<{ displayName: string; color: string; lastUpdate?: number; activePage?: string; activeShow?: ShowRef }[]> = writable([])
+export const isTimelinePlaying: Writable<boolean> = writable(false)
+export const timelineRecordingAction: Writable<{ id: string; data?: any }> = writable({ id: "" })
+export const currentMetadataPopupData: Writable<any> = writable(null)
+export const editingProjectTemplate: Writable<string> = writable("")
+export const showNotesActive: Writable<boolean> = writable(false)
+export const slideNotesActive: Writable<boolean> = writable(false)
+export const templateApplied: Writable<boolean> = writable(false)
 
 // TAGS
 export const activeTagFilter: Writable<string[]> = writable([])
@@ -104,7 +117,7 @@ export const paintCache: Writable<DrawLine[]> = writable([])
 
 // OUTPUTS
 export const outputDisplay: Writable<boolean> = writable(false)
-export const outputState: Writable<{ id: string; active: boolean }[]> = writable([])
+export const outputState: Writable<{ id: string; active: boolean | "invisible" }[]> = writable([])
 export const currentOutputSettings: Writable<string | null> = writable(null)
 export const slideTimers: Writable<{ [key: string]: SlideTimer }> = writable({})
 export const outputCache: Writable<any> = writable(null)
@@ -119,8 +132,10 @@ export const toggleOutputEnabled: Writable<boolean> = writable(false)
 export const customMessageCredits: Writable<string> = writable("")
 export const presentationData: Writable<any> = writable({})
 export const presentationApps: Writable<null | string[]> = writable(null)
-export const colorbars: Writable<string> = writable("")
+export const colorbars: Writable<{ [key: string]: string }> = writable({})
+export const livePrepare: Writable<{ [key: string]: boolean }> = writable({})
 export const overlayTimers: Writable<{ [key: string]: { outputId: string; overlayId: string; timer: NodeJS.Timeout } }> = writable({})
+export const slideVideoData: Writable<{ [key: string]: { [key: string]: { currentTime: number; duration: number; isPaused: boolean; loop?: boolean } } }> = writable({})
 
 // EXPORT
 export const exportOptions: Writable<any> = writable({ pdf: { rows: 5, columns: 2, slide: true, text: true } })
@@ -130,11 +145,15 @@ export const sortedShowsList: Writable<ShowList[]> = writable([])
 export const cachedShowsData: Writable<any> = writable({})
 export const quickTextCache: Writable<{ name: string; text: string; fromSearch?: boolean }> = writable({ name: "", text: "" })
 export const loadedMediaThumbnails: Writable<{ [key: string]: string }> = writable({})
-export const tempPath: Writable<string> = writable("")
+export const cachePath: Writable<string> = writable("")
 export const scriptureHistory: Writable<any[]> = writable([])
 export const actionHistory: Writable<{ action: string; data: any; time: number; count: number }[]> = writable([])
 export const audioData: Writable<{ [key: string]: { metadata: ICommonTagsResult } }> = writable({})
 export const customScriptureBooks: Writable<{ [key: string]: string[] }> = writable({})
+export const scriptureHistoryUsed: Writable<boolean> = writable(false)
+export const actionRevealUsed: Writable<boolean> = writable(false)
+export const dynamicValuesRevealUsed: Writable<boolean> = writable(false)
+export const groupsMoreOptionsEnabled: Writable<boolean> = writable(false)
 
 // EDIT
 export const editColumns: Writable<number> = writable(1)
@@ -145,21 +164,19 @@ export const triggerAutoSplit: Writable<boolean> = writable(false)
 export const storedEditMenuState: Writable<any> = writable({})
 export const copyPasteEdit: Writable<any> = writable({})
 export const textEditActive: Writable<boolean> = writable(false)
-export const includeEmptySlides: Writable<boolean> = writable(false)
 export const textEditZoom: Writable<number> = writable(10)
 export const spellcheck: Writable<{ misspelled: string; suggestions: string[] } | null> = writable(null)
 
 // OTHER
-export const notFound: Writable<any> = writable({ show: [], bible: [] })
+export const notFound: Writable<{ show: string[]; bible: string[] }> = writable({ show: [], bible: [] })
 export const toastMessages: Writable<string[]> = writable([])
 export const alertMessage: Writable<string> = writable("")
 export const popupData: Writable<any> = writable({})
-export const systemFonts: Writable<Family[]> = writable([])
+export const shownTips: Writable<string[]> = writable([])
 export const previousShow: Writable<any> = writable(null)
 export const projectToolSize: Writable<number> = writable(150)
 export const forceClock: Writable<boolean> = writable(false)
 export const lastSavedCache: Writable<any> = writable(null)
-export const playScripture: Writable<boolean> = writable(false)
 export const openScripture: Writable<any> = writable(null)
 export const deletedShows: Writable<{ name: string; id: string }[]> = writable([])
 export const renamedShows: Writable<{ id: string; name: string; oldName: string }[]> = writable([])
@@ -171,18 +188,20 @@ export const contextData: Writable<any> = writable({})
 export const lessonsLoaded: Writable<any> = writable({})
 export const storedChordsData: Writable<any> = writable({})
 export const photoApiCredits: Writable<any> = writable({})
-export const errorHasOccured: Writable<boolean> = writable(false)
+export const errorHasOccurred: Writable<boolean> = writable(false)
 export const disableDragging: Writable<boolean> = writable(false)
 export const activeDropId: Writable<string> = writable("")
 export const randomNumberVariable: Writable<{ [key: string]: boolean }> = writable({})
 export const dynamicValueData: Writable<{ [key: string]: any }> = writable({})
+export const recentFiles: Writable<{ all: string[]; cleared: string[]; projectMedia: string[] }> = writable({ all: [], cleared: [], projectMedia: [] })
+export const statusIndicator: Writable<string> = writable("")
 
 // ----- SAVED VARIABLES -----
 
 // HISTORY
 export const undoHistory: Writable<(History | HistoryNew)[]> = writable([])
 export const redoHistory: Writable<(History | HistoryNew)[]> = writable([])
-export const historyCacheCount: Writable<number> = writable(250)
+export const historyCacheCount: Writable<number> = writable(75)
 export const usageLog: Writable<any> = writable({ all: [] })
 
 // SHOW
@@ -218,21 +237,25 @@ export const triggers: Writable<{ [key: string]: Trigger }> = writable({}) // {}
 export const media: Writable<Media> = writable({}) // {}
 export const mediaFolders: Writable<Categories> = writable({}) // {default}
 export const videoMarkers: Writable<{ [key: string]: { name: string; time: number }[] }> = writable({}) // {}
-export const checkedFiles: Writable<any[]> = writable([])
 export const effects: Writable<Effects> = writable({}) // {default}
 
 // OVERLAYS
 export const overlayCategories: Writable<Categories> = writable({}) // {default}
 export const overlays: Writable<Overlays> = writable({}) // {default}
 
+export const deletedDefaults: Writable<{ [key: string]: string[] }> = writable({}) // {}
+
 // AUDIO
 export const audioFolders: Writable<Categories> = writable({}) // {default}
 export const audioStreams: Writable<{ [key: string]: AudioStream }> = writable({}) // {}
 export const audioPlaylists: Writable<{ [key: string]: Playlist }> = writable({}) // {}
 export const volume: Writable<number> = writable(1) // 1
-export const gain: Writable<number> = writable(1) // 1
+export const gain: Writable<number> = writable(1) // DEPRECATED - only use volume
+export const audioChannelsData: Writable<{ [key: string]: AudioChannelData }> = writable({}) // {}
 export const metronome: Writable<API_metronome> = writable({}) // {}
 export const effectsLibrary: Writable<{ path: string; name: string }[]> = writable([]) // []
+export const equalizerConfig = writable<EqualizerConfig>({ enabled: false, bands: [] })
+export const eqPresets: Writable<{ [key: string]: { name: string; bands: EQBand[] } }> = writable({}) // {}
 
 // PLAYER
 export const playerVideos: Writable<Categories> = writable({}) // {default}
@@ -254,12 +277,23 @@ export const stageShows: Writable<StageLayouts> = writable({}) // {default}
 // SCRIPTURE
 export const scriptures: Writable<{ [key: string]: BibleCategories }> = writable({}) // {default}
 export const scripturesCache: Writable<{ [key: string]: Bible }> = writable({}) // {}
-export const scriptureSettings: Writable<any> = writable({ template: "scripture", versesPerSlide: 3, verseNumbers: false, showVersion: false, showVerse: true, referenceDivider: ":" }) // {default}
+export const scriptureSettings: Writable<any> = writable({
+    template: "scripture",
+    versesPerSlide: 3,
+    verseNumbers: true,
+    showVersion: false,
+    showVerse: true,
+    referenceDivider: ":",
+    splitLongVerses: false,
+    longVersesChars: 100,
+    longVersesTolerance: 0,
+    splitLongVersesSuffix: false
+}) // {default}
 
 // DRAWER
 export const drawerTabsData: Writable<DrawerTabs> = writable({}) // {default}
 export const mediaOptions: Writable<MediaOptions> = writable({ columns: 5, mode: "grid" }) // {default}
-export const drawer: Writable<{ height: number; stored: null | number }> = writable({ height: 300, stored: null }) // {default}
+export const drawer: Writable<{ height: number; stored: null | number; autoclosed?: boolean }> = writable({ height: 300, stored: null }) // {default}
 
 // TAGS
 export const globalTags: Writable<{ [key: string]: Tag }> = writable({}) // {}
@@ -270,13 +304,13 @@ export const variableTags: Writable<{ [key: string]: Tag }> = writable({}) // {}
 // OTHER
 export const resized: Writable<NumberObject> = writable({ leftPanel: 290, rightPanel: 290, leftPanelDrawer: 290, rightPanelDrawer: 290 }) // {default}
 export const sorted: Writable<any> = writable({}) // {}
-export const dataPath: Writable<string> = writable("") // ""
+export const dataPath: Writable<string> = writable("") // "" // DEPRECATED - only for setting
 export const lockedOverlays: Writable<string[]> = writable([]) // []
 export const special: Writable<any> = writable({}) // {}
 
 // SETTINGS
 export const language: Writable<string> = writable("en") // get locale
-export const autosave: Writable<string> = writable("never") // "never"
+export const autosave: Writable<string> = writable("15min") // "15min"
 export const timeFormat: Writable<string> = writable("24") // "24"
 export const alertUpdates: Writable<boolean> = writable(true) // true
 export const autoOutput: Writable<boolean> = writable(false) // false
@@ -285,7 +319,7 @@ export const groupNumbers: Writable<boolean> = writable(true) // true
 export const fullColors: Writable<boolean> = writable(false) // false
 export const formatNewShow: Writable<boolean> = writable(false) // false
 export const splitLines: Writable<number> = writable(0) // 0
-export const showsPath: Writable<null | string> = writable(null) // null
+export const showsPath: Writable<null | string> = writable(null) // null // DEPRECATED
 export const customizedIcons: Writable<any> = writable({ disabled: [], svg: [] }) // {disabled: [], svg: []}
 
 // THEME
@@ -299,9 +333,16 @@ export const styles: Writable<{ [key: string]: Styles }> = writable({}) // {}
 export const outputs: Writable<Outputs> = writable({}) // {default}
 export const outLocked: Writable<boolean> = writable(false) // false
 
+// PROFILES
+export const profiles: Writable<Profiles> = writable({}) // {}
+
 // MIDI
 export const actions: Writable<{ [key: string]: Action }> = writable({}) // {}
 export const emitters: Writable<{ [key: string]: Emitter }> = writable({}) // {}
+
+// TIMECODE
+export const timeline: Writable<{ startTime?: number }> = writable({}) // {}
+export const timecode: Writable<{ type?: "send" | "receive"; mode?: TimecodeMode; framerate?: number; offset?: number; audioOutput?: string; audioInput?: string; midiOutput?: string; midiInput?: string }> = writable({}) // {}
 
 // CONNECTIONS
 export const ports: Writable<{ [key: string]: number }> = writable({ remote: 5510, stage: 5511, controller: 5512, output_stream: 5513 }) // {default}
@@ -310,8 +351,10 @@ export const serverData: Writable<{ [key: string]: ServerData }> = writable({}) 
 export const maxConnections: Writable<number> = writable(10) // 10
 export const remotePassword: Writable<string> = writable("1234") // generate 4 numbers
 export const companion: Writable<any> = writable({ enabled: false }) // {}
+export const contentProviderData: Writable<{ [key in ContentProviderId]?: any }> = writable({}) // {}
 
 // CLOUD
+export const cloudSyncData: Writable<{ enabled?: boolean; id?: string; deviceName?: string; team?: { id: string; churchId: string; name: string; count?: number }; cloudMethod?: "merge" | "read_only" | "upload" | "replace" }> = writable({}) // {}
 export const driveKeys: Writable<any> = writable({})
 export const driveData: Writable<any> = writable({ mainFolderId: null, disabled: false, initializeMethod: null, disableUpload: false })
 
@@ -352,7 +395,6 @@ export const $ = {
     exportOptions,
     notFound,
     alertMessage,
-    systemFonts,
     previousShow,
     projectToolSize,
     forceClock,
@@ -393,7 +435,6 @@ export const $ = {
     drawer,
     mediaOptions,
     resized,
-    dataPath,
     special,
     language,
     direction: localeDirection,
@@ -405,15 +446,17 @@ export const $ = {
     fullColors,
     formatNewShow,
     splitLines,
-    showsPath,
     theme,
     themes,
     outputs,
     styles,
+    customMetadata,
+    customMessageCredits,
     outLocked,
     ports,
     maxConnections,
-    remotePassword
+    remotePassword,
+    providerConnections
 }
 
 // DEBUG STORE UPDATES

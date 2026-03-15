@@ -1,10 +1,12 @@
 import { get } from "svelte/store"
 import { uid } from "uid"
 import type { Chords, Line } from "../../types/Show"
+import { DEFAULT_ITEM_STYLE } from "../components/edit/scripts/itemHelpers"
 import { setQuickAccessMetadata } from "../components/helpers/setShow"
 import { checkName } from "../components/helpers/show"
+import { translateText } from "../utils/language"
 import { ShowObj } from "./../classes/Show"
-import { activePopup, alertMessage, dictionary, groups } from "./../stores"
+import { activePopup, alertMessage, groups } from "./../stores"
 import { createCategory, setTempShows } from "./importHelpers"
 import { xml2json } from "./xml"
 
@@ -76,7 +78,7 @@ export function convertOpenLP(data: any) {
         const { slides, layout }: any = createSlides(song)
 
         show.slides = slides
-        show.layouts = { [layoutID]: { name: get(dictionary).example?.default || "", notes: song.notes || "", slides: layout } }
+        show.layouts = { [layoutID]: { name: translateText("example.default"), notes: song.notes || "", slides: layout } }
 
         tempShows.push({ id: uid(), show })
     }
@@ -91,7 +93,7 @@ function createSlides({ verseOrder, lyrics }: Song) {
     const sequences: any = {}
 
     // split into multiple sub slides (https://github.com/ChurchApps/FreeShow/issues/1743)
-    let slidesList: ((typeof lyrics)[number] & { isChild: boolean })[] = []
+    const slidesList: ((typeof lyrics)[number] & { isChild: boolean })[] = []
     lyrics.forEach((lyricSlide) => {
         const currentSlides = lyricSlide.lines.join("__BREAK__").split(/<p\s*style=["']page-break-after:\s*always;["']\s*\/?>/i)
         currentSlides.forEach((slideData, i) => {
@@ -112,7 +114,7 @@ function createSlides({ verseOrder, lyrics }: Song) {
 
         const items = [
             {
-                style: "inset-inline-start:50px;top:120px;width:1820px;height:840px;",
+                style: DEFAULT_ITEM_STYLE,
                 lines: verse.lines.map((a, i) => {
                     const line: Line = { align: "", text: [{ style: "", value: formatText(a) }] }
                     if (verse.chords?.[i]?.length) line.chords = verse.chords[i]
@@ -160,7 +162,7 @@ function formatText(text: string) {
 
 // WIP import song books as categories
 function sqliteConvert(content: any) {
-    const songs: any[] = content.songs.map((song) => getSong(song, content))
+    const songs: any[] = (content?.songs || []).map((song) => getSong(song, content))
 
     return songs
 }
@@ -213,16 +215,7 @@ function XMLtoObject(xml: string) {
     let lyrics = song.lyrics || {}
     const properties = song.properties || {}
 
-    const notes =
-        song["#comment"] ||
-        (Array.isArray(properties.comments)
-            ? properties.comments?.map((comment) => comment["#text"] || "").join("\n")
-            : typeof properties.comments?.comment === "string"
-              ? properties.comments.comment
-              : typeof properties.comments === "string"
-                ? properties.comments
-                : "") ||
-        ""
+    const notes = song["#comment"] || (Array.isArray(properties.comments) ? properties.comments?.map((comment) => comment["#text"] || "").join("\n") : typeof properties.comments?.comment === "string" ? properties.comments.comment : typeof properties.comments === "string" ? properties.comments : "") || ""
 
     const newSong: Song = {
         title: getTitle(),
@@ -253,7 +246,7 @@ function XMLtoObject(xml: string) {
         if (!Array.isArray(currentSongAuthors)) currentSongAuthors = [currentSongAuthors]
 
         let authors: any[] = []
-        authors = currentSongAuthors.map((author) => ({ name: author["#text"] || "", type: author["@type"] || "words" }))
+        authors = currentSongAuthors.filter(Boolean).map((author) => ({ name: author["#text"] || "", type: author["@type"] || "words" }))
 
         return authors
     }
@@ -283,6 +276,7 @@ function XMLtoObject(xml: string) {
 
     function getLines(lines: string | any) {
         if (lines.tag) lines = lines.tag.tag?.["#text"]
+        if (!lines) return { lines: [], chords: [] }
 
         // might be <lines break="optional">
         if (lines["#text"]) lines = lines["#text"]
@@ -298,7 +292,7 @@ function XMLtoObject(xml: string) {
 
         if (typeof lines !== "string") lines = ""
 
-        // remove unused line seperator char
+        // remove unused line separator char
         lines = lines.replaceAll("&#8232;", "")
         // find line breaks
         lines = lines.replaceAll('xmlns="http://openlyrics.info/namespace/2009/song"', "").replaceAll("<br/>", "\n").replaceAll("<br />", "\n")

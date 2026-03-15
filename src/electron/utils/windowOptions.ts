@@ -21,6 +21,7 @@ export const loadingOptions: BrowserWindowConstructorOptions = {
 }
 
 export const mainOptions: BrowserWindowConstructorOptions = {
+<<<<<<< HEAD
   icon: "public/icon.png",
   backgroundColor: "#292c36",
   titleBarStyle: isMac ? "hidden" : "default",
@@ -35,6 +36,23 @@ export const mainOptions: BrowserWindowConstructorOptions = {
     allowRunningInsecureContent: false,
     webviewTag: true, // website item
   },
+=======
+    icon: "public/icon.png",
+    backgroundColor: "#242832",
+    titleBarStyle: isMac ? "hidden" : "default",
+    trafficLightPosition: { x: 10, y: 12 }, // mac buttons
+    show: false,
+    webPreferences: {
+        preload: join(__dirname, "..", "preload"), // browser - node communication
+        devTools: !isProd, // enable dev tools in dev
+        webSecurity: isProd, // access local files in dev
+        nodeIntegration: !isProd,
+        contextIsolation: true,
+        allowRunningInsecureContent: false,
+        webviewTag: true, // website item
+        backgroundThrottling: false // allow "timers" to run in background
+    }
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 }
 
 export const outputOptions: BrowserWindowConstructorOptions = {
@@ -82,6 +100,7 @@ export const screenIdentifyOptions: BrowserWindowConstructorOptions = {
 }
 
 export const exportOptions: BrowserWindowConstructorOptions = {
+<<<<<<< HEAD
   // show: !isProd,
   show: false,
   modal: true,
@@ -95,6 +114,20 @@ export const exportOptions: BrowserWindowConstructorOptions = {
     backgroundThrottling: false,
     autoplayPolicy: "no-user-gesture-required",
   },
+=======
+    // show: !isProd,
+    show: false,
+    modal: true,
+    frame: false,
+    webPreferences: {
+        preload: join(__dirname, "..", "preload"),
+        webSecurity: isProd,
+        nodeIntegration: !isProd,
+        // contextIsolation: true,
+        // enableRemoteModule: false,
+        autoplayPolicy: "no-user-gesture-required"
+    }
+>>>>>>> 1e60c9d2e7c3a6d9b5b111651132670e59b9d90c
 }
 
 export const captureOptions: BrowserWindowConstructorOptions = {

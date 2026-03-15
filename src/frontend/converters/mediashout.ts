@@ -1,10 +1,10 @@
-import { get } from "svelte/store"
 import { uid } from "uid"
 import type { Item, Layout, Slide } from "../../types/Show"
 import { ShowObj } from "../classes/Show"
 import { DEFAULT_ITEM_STYLE } from "../components/edit/scripts/itemHelpers"
 import { checkName, initializeMetadata, newSlide } from "../components/helpers/show"
-import { activePopup, alertMessage, dictionary } from "../stores"
+import { activePopup, alertMessage } from "../stores"
+import { translateText } from "../utils/language"
 import { createCategory, setTempShows } from "./importHelpers"
 import { xml2json } from "./xml"
 
@@ -136,7 +136,7 @@ function convertToShow(song: MediaShout5Song, { name, categoryId }) {
         title: name,
         author: song.Author,
         copyright: song.Copyright,
-        CCLI: song.CCLI,
+        CCLI: song.CCLI
     })
 
     return show
@@ -144,7 +144,7 @@ function convertToShow(song: MediaShout5Song, { name, categoryId }) {
 
 function convertToSlides(song: MediaShout5Song) {
     const slides: { [key: string]: Slide } = {}
-    const layout: Layout = { name: get(dictionary).example?.default || "", slides: [], notes: "" }
+    const layout: Layout = { name: translateText("example.default"), slides: [], notes: "" }
     const media: any = {}
 
     let elements = song.Content?.Element
@@ -161,7 +161,7 @@ function convertToSlides(song: MediaShout5Song) {
 function convertItem(text: string) {
     const newItem: Item = {
         style: DEFAULT_ITEM_STYLE,
-        lines: text.split("\n").map(getLine),
+        lines: text.split("\n").map(getLine)
     }
 
     return newItem
@@ -220,8 +220,8 @@ function mdbConvert(content: MDBContents, categoryId: string) {
 }
 
 function getSong(song: MDBSong, content: MDBContents, categoryId: string) {
-    let layoutId = uid()
-    let showId = song.SongID
+    const layoutId = uid()
+    const showId = song.SongID
     const show = new ShowObj(false, categoryId, layoutId)
     show.origin = "mediashout"
     show.name = checkName(song.Title, showId)
@@ -231,7 +231,7 @@ function getSong(song: MDBSong, content: MDBContents, categoryId: string) {
         title: song.Title,
         author: song.Author,
         copyright: song.Copyright,
-        CCLI: song.CCLI,
+        CCLI: song.CCLI
     }
 
     const DBnum = song.Record
@@ -259,7 +259,7 @@ function getSong(song: MDBSong, content: MDBContents, categoryId: string) {
 
 function convertToSlidesMDB(verses: MDBVerse[]) {
     const slides: { [key: string]: Slide } = {}
-    const layout: Layout = { name: get(dictionary).example?.default || "", slides: [], notes: "" }
+    const layout: Layout = { name: translateText("example.default"), slides: [], notes: "" }
     const media: any = {}
 
     verses.forEach((verse) => {

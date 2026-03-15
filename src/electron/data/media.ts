@@ -12,7 +12,7 @@ export const videoExtensions = [
     "ts", // MPEG Transport Stream
     "dvr-ms", // Microsoft Digital Video Recording
     "mpeg", // Moving Picture Experts Group
-    "mpg", // Moving Picture Experts Group (alternate extension)
+    "mpg" // Moving Picture Experts Group (alternate extension)
 ]
 // wmv / avchd
 
@@ -27,7 +27,7 @@ export const imageExtensions = [
     "tiff", // Tagged Image File Format
     "tif", // Tagged Image File Format (alternate extension)
     "jfif", // JPEG File Interchange Format
-    "avif", // AV1 Image File Format
+    "avif" // AV1 Image File Format
 ]
 // eps
 
@@ -42,10 +42,11 @@ export const audioExtensions = [
     "opus", // Opus Audio Codec
     "aiff", // Audio Interchange File Format
     "aif", // Audio Interchange File Format (alternate extension)
-    "weba", // WebA Audio
+    "weba" // WebA Audio
 ]
 
 export const mimeTypes: { [key: string]: string } = {
+    // video
     mp4: "video/mp4",
     webm: "video/webm",
     ogv: "video/ogg",
@@ -60,4 +61,9 @@ export const mimeTypes: { [key: string]: string } = {
     dvrms: "video/dvr-ms",
     mpeg: "video/mpeg",
     mpg: "video/mpeg",
+
+    // image
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png"
 }

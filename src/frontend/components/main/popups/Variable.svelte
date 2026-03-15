@@ -1,22 +1,24 @@
 <script lang="ts">
     import { uid } from "uid"
-    import { dictionary, drawerTabsData, selected, variables } from "../../../stores"
-    import { clone } from "../../helpers/array"
-    import Icon from "../../helpers/Icon.svelte"
+    import { activePopup, drawerTabsData, selected, variables } from "../../../stores"
+    import { translateText } from "../../../utils/language"
+    import { clone, moveToPos } from "../../helpers/array"
+    import { createStore, updateStore } from "../../helpers/historyStores"
     import T from "../../helpers/T.svelte"
     import HRule from "../../input/HRule.svelte"
-    import Button from "../../inputs/Button.svelte"
-    import CombinedInput from "../../inputs/CombinedInput.svelte"
-    import NumberInput from "../../inputs/NumberInput.svelte"
-    import TextInput from "../../inputs/TextInput.svelte"
-    import Checkbox from "../../inputs/Checkbox.svelte"
-    import { createStore, updateStore } from "../../helpers/historyStores"
+    import InputRow from "../../input/InputRow.svelte"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
+    import MaterialMultiChoice from "../../inputs/MaterialMultiChoice.svelte"
+    import MaterialNumberInput from "../../inputs/MaterialNumberInput.svelte"
+    import MaterialTextInput from "../../inputs/MaterialTextInput.svelte"
+    import MaterialToggleSwitch from "../../inputs/MaterialToggleSwitch.svelte"
 
     let chosenType = ""
     const types = [
-        { id: "number", name: "$:variables.number:$", icon: "number" },
-        { id: "random_number", name: "$:variables.random_number:$", icon: "unknown" },
-        { id: "text", name: "$:variables.text:$", icon: "text" }
+        { id: "number", name: translateText("variables.number"), icon: "number" },
+        { id: "random_number", name: translateText("variables.random_number"), icon: "unknown" },
+        { id: "text", name: translateText("variables.text"), icon: "text" },
+        { id: "text_set", name: translateText("variables.text_set"), icon: "increase_text" }
     ]
 
     const DEFAULT_VARIABLE = {
@@ -27,11 +29,11 @@
     let existing: boolean = $selected.id === "variable" && $selected.data[0]?.id
     let variableId = existing ? $selected.data[0].id : uid()
     let currentVariable = clone($variables[variableId] || DEFAULT_VARIABLE)
+    let created = !existing
 
-    function updateValue(e: any, key: string, checkbox = false) {
+    function updateValue(e: any, key: string) {
         let value = e?.target?.value ?? e
-        if (checkbox) value = e.target.checked
-        if (!value && !checkbox) return
+        if (value === undefined) return
 
         // update current number if default is changed
         if (key === "default" && Number(currentVariable.number || 0) === Number(currentVariable.default || 0)) currentVariable.number = Number(value)
@@ -102,122 +104,196 @@
     const maxAbsolute = 10000000
     const minDefault = 0
     const maxDefault = 1000
+    $: console.log(currentVariable.minValue)
     $: min = Number(currentVariable.minValue ?? minDefault)
     $: max = Number(currentVariable.maxValue ?? maxDefault)
 
     const DEFAULT_SET = { name: "", minValue: 1, maxValue: 1000 }
+
+    // TEXT SET
+
+    function addTextSet() {
+        if (!currentVariable.textSets) currentVariable.textSets = [{}]
+        currentVariable.textSets.push({})
+        currentVariable = currentVariable
+
+        variables.update((a) => {
+            a[variableId] = currentVariable
+            return a
+        })
+    }
+
+    function moveTextSetUp(index: number) {
+        if (currentVariable.textSets?.[index] === undefined) return
+
+        currentVariable.textSets = moveToPos(currentVariable.textSets, index, index - 1)
+        currentVariable = currentVariable
+
+        variables.update((a) => {
+            a[variableId] = currentVariable
+            return a
+        })
+    }
+
+    function removeTextSet(index: number) {
+        if (currentVariable.textSets?.[index] === undefined) return
+
+        currentVariable.textSets.splice(index, 1)
+        currentVariable = currentVariable
+
+        variables.update((a) => {
+            a[variableId] = currentVariable
+            return a
+        })
+    }
+
+    function addTextSetVariable() {
+        if (!currentVariable.textSetKeys) currentVariable.textSetKeys = [""]
+        currentVariable.textSetKeys.push("")
+        currentVariable = currentVariable
+
+        variables.update((a) => {
+            a[variableId] = currentVariable
+            return a
+        })
+    }
+
+    function moveKeyUp(index: number) {
+        if (currentVariable.textSetKeys?.[index] === undefined) return
+
+        currentVariable.textSetKeys = moveToPos(currentVariable.textSetKeys, index, index - 1)
+        currentVariable = currentVariable
+
+        variables.update((a) => {
+            a[variableId] = currentVariable
+            return a
+        })
+    }
+
+    function removeTextSetVariable(index: number) {
+        if (currentVariable.textSetKeys?.[index] === undefined) return
+
+        currentVariable.textSetKeys.splice(index, 1)
+        currentVariable = currentVariable
+
+        variables.update((a) => {
+            a[variableId] = currentVariable
+            return a
+        })
+    }
+
+    function updateTextSetVariableName(index: number, e: any) {
+        if (!currentVariable.textSetKeys) currentVariable.textSetKeys = [""]
+
+        let value = e.detail || ""
+        while (currentVariable.textSetKeys.find((name, i) => i !== index && name === value)) value += " 2"
+        currentVariable.textSetKeys[index] = value
+
+        variables.update((a) => {
+            a[variableId] = currentVariable
+            return a
+        })
+    }
+    function textSetKeydown(e: any) {
+        if (e.key === "Tab" && e.target?.value) {
+            addTextSetVariable()
+        }
+    }
+
+    function updateTextSetValue(index: number, name: string, e: any) {
+        if (!currentVariable.textSets) currentVariable.textSets = [{}]
+
+        if (!currentVariable.textSets[index]) currentVariable.textSets[index] = {}
+        const value = e.detail || ""
+        currentVariable.textSets[index][name] = value
+
+        variables.update((a) => {
+            a[variableId] = currentVariable
+            return a
+        })
+    }
+
+    function resetTextSetValues() {
+        if (!currentVariable.textSets) return
+
+        currentVariable.textSets = currentVariable.textSets.map(() => ({}))
+
+        variables.update((a) => {
+            a[variableId] = currentVariable
+            return a
+        })
+    }
+
+    function nameKeydown(e: any) {
+        if (currentVariable.type === "text" && e.key === "Enter" && e.target?.value) {
+            activePopup.set(null)
+        }
+    }
+
+    let showMoreRN = false
 </script>
 
 {#if !existing && !chosenType}
-    <div class="buttons">
-        {#each types as type}
-            <Button
-                on:click={() => {
-                    chosenType = type.id
-                    updateValue(type.id, "type")
-                }}
-                style={type.id === "counter" ? "border: 2px solid var(--focus);" : ""}
-            >
-                <Icon id={type.icon} size={5} white />
-                <p><T id={type.name} /></p>
-            </Button>
-        {/each}
-    </div>
+    <MaterialMultiChoice
+        options={types}
+        on:click={(e) => {
+            chosenType = e.detail
+            updateValue(chosenType, "type")
+        }}
+    />
 {:else}
     {#if !existing}
-        <Button class="popup-back" title={$dictionary.actions?.back} on:click={() => (chosenType = "")}>
-            <Icon id="back" size={2} white />
-        </Button>
+        <MaterialButton class="popup-back" icon="back" iconSize={1.3} title="actions.back" on:click={() => (chosenType = "")} />
     {/if}
 
-    <CombinedInput textWidth={30}>
-        <p><T id="inputs.name" /></p>
-        <TextInput disabled={!!(existing && currentVariable.name)} value={currentVariable.name} on:change={(e) => updateValue(e, "name")} autofocus={!currentVariable.name} />
-    </CombinedInput>
+    <MaterialTextInput label="inputs.name" style="margin-bottom: 10px;" disabled={!created && !!currentVariable.name} value={currentVariable.name} on:change={(e) => updateValue(e.detail, "name")} autofocus={!currentVariable.name} on:keydown={nameKeydown} />
 
     {#if currentVariable.type === "number"}
-        <CombinedInput textWidth={30}>
-            <p><T id="variables.default_value" /></p>
-            <NumberInput value={currentVariable.default || 0} step={1} decimals={1} {min} {max} fixed={Number(currentVariable.default).toString().includes(".") ? 1 : 0} on:change={(e) => updateValue(e.detail, "default")} buttons={false} />
-        </CombinedInput>
-
-        <CombinedInput textWidth={30}>
-            <p><T id="variables.minimum" /></p>
-            <NumberInput
-                value={currentVariable.minValue ?? minDefault}
-                step={1}
-                decimals={1}
-                min={minAbsolute}
-                max={maxAbsolute}
-                fixed={Number(currentVariable.default).toString().includes(".") ? 1 : 0}
-                on:change={(e) => updateValue(e.detail, "minValue")}
-                buttons={false}
-            />
-        </CombinedInput>
-        <CombinedInput textWidth={30}>
-            <p><T id="variables.maximum" /></p>
-            <NumberInput
-                value={currentVariable.maxValue ?? maxDefault}
-                step={1}
-                decimals={1}
-                min={minAbsolute}
-                max={maxAbsolute}
-                fixed={Number(currentVariable.default).toString().includes(".") ? 1 : 0}
-                on:change={(e) => updateValue(e.detail, "maxValue")}
-                buttons={false}
-            />
-        </CombinedInput>
+        <MaterialNumberInput label="variables.default_value" value={currentVariable.default || 0} step={1} {min} {max} on:change={(e) => updateValue(e.detail, "default")} />
+        <InputRow>
+            <MaterialNumberInput label="variables.minimum" value={currentVariable.minValue ?? minDefault} step={1} min={minAbsolute} max={maxAbsolute} on:change={(e) => updateValue(e.detail, "minValue")} />
+            <MaterialNumberInput label="variables.maximum" value={currentVariable.maxValue ?? maxDefault} step={1} min={minAbsolute} max={maxAbsolute} on:change={(e) => updateValue(e.detail, "maxValue")} />
+        </InputRow>
 
         <!-- WIP custom step sizes "1,8:2,10:2" ?? -->
     {:else if currentVariable.type === "random_number"}
-        <CombinedInput>
-            <p style="flex: 1;"><T id="popup.animate" /></p>
-            <span class="alignRight" style="flex: 0;padding: 0 10px;">
-                <Checkbox checked={currentVariable.animate} on:change={(e) => updateValue(e, "animate", true)} />
-            </span>
-        </CombinedInput>
+        <MaterialButton class="popup-options {showMoreRN ? 'active' : ''}" icon="options" iconSize={1.3} title={showMoreRN ? "actions.close" : "create_show.more_options"} on:click={() => (showMoreRN = !showMoreRN)} white />
 
-        <CombinedInput>
-            <p style="flex: 1;"><T id="edit.each_number_once" /></p>
-            <span class="alignRight" style="flex: 0;padding: 0 10px;">
-                <Checkbox checked={currentVariable.eachNumberOnce} on:change={(e) => updateValue(e, "eachNumberOnce", true)} />
-            </span>
-        </CombinedInput>
+        {#if showMoreRN}
+            <MaterialToggleSwitch label="popup.animate" checked={currentVariable.animate} defaultValue={false} on:change={(e) => updateValue(e.detail, "animate")} />
+            <MaterialToggleSwitch label="edit.each_number_once" checked={currentVariable.eachNumberOnce} defaultValue={false} on:change={(e) => updateValue(e.detail, "eachNumberOnce")} />
 
-        <HRule />
+            <HRule />
+        {/if}
 
         {#each currentVariable.sets || [DEFAULT_SET] as set, i}
-            <CombinedInput>
+            <InputRow style="border-radius: 4px;overflow: hidden;">
                 {#if (currentVariable.sets?.length || 0) > 1}
-                    <span style="font-weight: bold;display: flex;align-items: center;margin: 0 8px;"><span style="color: var(--secondary);display: flex;align-items: center;">#</span>{i + 1}</span>
-                    <TextInput style="flex: 1;" placeholder={$dictionary.inputs?.name} value={set.name} on:change={(e) => updateSet(i, e, "name")} autofocus={!!currentVariable.name && !set.name} />
+                    <span style="background-color: var(--primary-darker);font-weight: bold;font-size: 0.8em;display: flex;align-items: center;padding: 0 10px;"><span style="color: var(--secondary);display: flex;align-items: center;">#</span>{i + 1}</span>
+                    <MaterialTextInput label="inputs.name" style="flex: 2;" value={set.name} on:change={(e) => updateSet(i, e.detail, "name")} autofocus={!!currentVariable.name && !set.name} />
                 {/if}
 
                 <!-- WIP no negative numbers at the moment -->
-                <NumberInput style="flex: 1;" title={$dictionary.variables?.minimum} value={set.minValue ?? DEFAULT_SET.minValue} step={1} max={maxAbsolute} on:change={(e) => updateSet(i, e.detail, "minValue")} buttons={false} />
-                <NumberInput style="flex: 1;" title={$dictionary.variables?.maximum} value={set.maxValue ?? DEFAULT_SET.maxValue} step={1} max={maxAbsolute} on:change={(e) => updateSet(i, e.detail, "maxValue")} buttons={false} />
-                {#if i > 0 && i === (currentVariable.sets?.length || 0) - 1}
-                    <Button on:click={() => removeSet(i)} title={$dictionary.actions?.delete}>
-                        <Icon id="delete" />
-                    </Button>
+                <MaterialNumberInput label="variables.minimum" style="flex: 1;" value={set.minValue ?? DEFAULT_SET.minValue} step={1} max={maxAbsolute} on:change={(e) => updateSet(i, e.detail, "minValue")} />
+                <MaterialNumberInput label="variables.maximum" style="flex: 1;" value={set.maxValue ?? DEFAULT_SET.maxValue} step={1} max={maxAbsolute} on:change={(e) => updateSet(i, e.detail, "maxValue")} />
+                <!-- {#if i > 0 && i === (currentVariable.sets?.length || 0) - 1} -->
+                {#if (currentVariable.sets?.length || 1) > 1}
+                    <MaterialButton icon="delete" title="actions.delete" on:click={() => removeSet(i)} />
                 {/if}
-            </CombinedInput>
+            </InputRow>
         {/each}
 
         <!-- {#if (currentVariable.sets?.length || 0) < 2 || currentVariable.sets?.[currentVariable.sets?.length - 1]?.name} -->
-        <CombinedInput>
-            <Button
-                on:click={() => {
-                    if (!currentVariable.sets) updateSet(0, DEFAULT_SET.minValue, "minValue")
-                    updateSet(currentVariable.sets?.length || 0, DEFAULT_SET.minValue, "minValue")
-                }}
-                style="width: 100%;"
-                center
-            >
-                <Icon id="add" right />
-                <T id="settings.add" />
-            </Button>
-        </CombinedInput>
+        <MaterialButton
+            variant="outlined"
+            icon="add"
+            on:click={() => {
+                if (!currentVariable.sets) updateSet(0, DEFAULT_SET.minValue, "minValue")
+                updateSet(currentVariable.sets?.length || 0, DEFAULT_SET.minValue, "minValue")
+            }}
+        >
+            <T id="variables.add_set" />
+        </MaterialButton>
         <!-- {/if} -->
 
         {#if currentVariable.setLog?.length}
@@ -225,35 +301,93 @@
 
             <div class="log" style="overflow: auto;max-height: 250px;">
                 {#each currentVariable.setLog as log}
-                    <CombinedInput>
-                        {#if (currentVariable.sets?.length || 0) > 1}<p style="width: 30%;min-width: initial;">{log.name}</p>{/if}
-                        <p>{log.number}</p>
-                    </CombinedInput>
+                    <InputRow style="border-radius: 4px;overflow: hidden;background-color: var(--primary-darker);border-bottom: 1px solid var(--primary-lighter);">
+                        {#if (currentVariable.sets?.length || 0) > 1}<p style="width: 30%;min-width: initial;padding: 6px 10px;">{log.name}</p>{/if}
+                        <p style="border-left: 1px solid var(--primary-lighter);padding: 6px 10px;">{log.number}</p>
+                    </InputRow>
                 {/each}
             </div>
         {/if}
+    {:else if currentVariable.type === "text_set"}
+        <MaterialButton class="popup-options" icon="reset" iconSize={1.1} title="actions.reset" on:click={resetTextSetValues} white />
+
+        {#each currentVariable.textSets?.length ? currentVariable.textSets : [{}] as textSet, i}
+            <div class="text_set" style={i === 0 ? "" : "margin-top: 10px;"} class:active={(currentVariable.textSets?.length ?? 1) > 1 && (currentVariable.activeTextSet ?? 0) === i}>
+                <p style="border-bottom: 1px solid var(--primary-lighter);" class="part"><span style="color: var(--secondary);">#</span>{i + 1}</p>
+
+                {#each currentVariable.textSetKeys ?? [""] as key, keyIndex}
+                    <InputRow>
+                        {#if i === 0}
+                            <MaterialTextInput label="inputs.name" disabled={!!(key && textSet?.[key]) || i > 0} value={key} on:input={(e) => updateTextSetVariableName(keyIndex, e)} on:keydown={textSetKeydown} />
+                        {:else}
+                            <p style="width: 50%;display: flex;align-items: center;padding: 0 10px;border-bottom: 1px solid var(--primary-lighter);">{key}</p>
+                        {/if}
+
+                        <MaterialTextInput label="variables.value" disabled={!key} value={textSet[key] || ""} on:change={(e) => updateTextSetValue(i, key, e)} />
+
+                        {#if (currentVariable.textSetKeys?.length ?? 1) > 1 && i === 0}
+                            {#if keyIndex > 0}
+                                <MaterialButton icon="up" on:click={() => moveKeyUp(keyIndex)} />
+                            {/if}
+                            <MaterialButton icon="delete" title="actions.delete" on:click={() => removeTextSetVariable(keyIndex)} />
+                        {/if}
+                    </InputRow>
+                {/each}
+
+                {#if i === 0}
+                    <MaterialButton style="width: 100%;" icon="add" disabled={!currentVariable.textSetKeys?.length || currentVariable.textSetKeys.find((a) => !a) === ""} on:click={addTextSetVariable}>
+                        <T id="new.variable" />
+                    </MaterialButton>
+                {/if}
+                <!-- removed to clear up confusion in regards to the main variables being editable here -->
+                <!-- || (currentVariable.textSets?.length || 1) > 1 -->
+                {#if i > 0}
+                    <div class="delete">
+                        <MaterialButton style="padding: 8px;" icon="up" on:click={() => moveTextSetUp(i)} />
+                        <MaterialButton style="padding: 8px;" icon="delete" title="actions.delete" on:click={() => removeTextSet(i)} />
+                    </div>
+                {/if}
+            </div>
+        {/each}
+
+        <MaterialButton variant="outlined" style="margin-top: 10px;width: 100%;" icon="add" disabled={!currentVariable.textSets?.length} on:click={addTextSet}>
+            <T id="variables.add_set" />
+        </MaterialButton>
     {/if}
 {/if}
 
 <style>
-    .buttons p {
-        display: flex;
-        align-items: center;
+    /* text set */
+
+    .text_set {
+        flex: 1;
+        min-height: unset;
+
+        position: relative;
+
+        background-color: var(--primary-darker);
+        border: 1px solid var(--primary-lighter);
+
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    .text_set.active {
+        border: 2px solid var(--secondary) !important;
     }
 
-    div.buttons {
-        display: flex;
-        gap: 10px;
-        align-self: center;
+    .part {
+        width: 100%;
+        padding: 5px 10px;
+        /* justify-content: center; */
+        font-size: 0.8em;
+        font-weight: bold;
     }
 
-    div.buttons :global(button) {
-        width: 200px;
-        height: 200px;
+    .delete {
+        position: absolute;
+        top: 0;
+        right: 0;
 
         display: flex;
-        gap: 10px;
-        flex-direction: column;
-        justify-content: center;
     }
 </style>

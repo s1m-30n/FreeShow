@@ -1,18 +1,16 @@
 <script>
     import { createEventDispatcher, onDestroy } from "svelte"
     import { OUTPUT } from "../../../../types/Channels"
-    import { currentWindow, playerVideos, special, volume } from "../../../stores"
+    import { currentWindow, focusMode, special, volume } from "../../../stores"
     import { send } from "../../../utils/request"
     import YouTubePlayer from "./YouTubePlayer.svelte"
 
     export let videoData = { paused: false, muted: true, loop: false, duration: 0 }
     export let videoTime = 0
-    export let playerId
     export let id
     export let outputId
     export let preview
 
-    export let title
     export let startAt = 0
 
     // <= 0.5.4
@@ -27,6 +25,7 @@
             fs: 0,
             rel: 0,
             controls: $special.hideCursor ? 0 : 1
+            // enablejsapi: 1
             // cc_load_policy: true
         }
     }
@@ -51,27 +50,9 @@
         // WIP captions ?
         // player.setOption("captions", "fontSize", -1)
 
-        // set name
-        if (!$currentWindow) {
-            // WIP this only works in preview now
-            setTimeout(() => {
-                let data = player.getVideoData()
-                if (!data) return
-                // console.log(player.playerInfo.videoData) // title | author
-                title = data.title
-                let noName = !$playerVideos[playerId].name || $playerVideos[playerId].name.includes($playerVideos[playerId].id)
-                if (title && noName) {
-                    playerVideos.update((a) => {
-                        a[playerId].name = title
-                        return a
-                    })
-                }
-            }, 2000)
-        }
-
         loaded = true
 
-        videoData.paused = false
+        videoData.paused = $focusMode
         // if live, it should not start from the beginning
         if (videoTime > 0) seekTo(videoTime)
         else
@@ -170,7 +151,13 @@
 
 <div class="main" class:hide={!id}>
     {#if id}
+        <!-- {#if $currentWindow === "output"} -->
         <YouTubePlayer class="yt" videoId={id} {options} on:ready={onReady} on:end={ended} on:stateChange={change} />
+        <!-- {:else}
+            <div style="width: 100%;height: 100%;display: flex;align-items: center;justify-content: center;">
+                <Icon id="youtube" size={6} white />
+            </div>
+        {/if} -->
     {/if}
 </div>
 

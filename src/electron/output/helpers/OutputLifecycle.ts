@@ -8,6 +8,9 @@ import { setDataNDI } from "../../ndi/talk"
 import { wait } from "../../utils/helpers"
 import { outputOptions } from "../../utils/windowOptions"
 import { OutputHelper } from "../OutputHelper"
+import { OutputVisibility } from "./OutputVisibility"
+import { initializeSender } from "../../blackmagic/bmdTalk"
+import { BlackmagicSender } from "../../blackmagic/BlackmagicSender"
 
 export class OutputLifecycle {
     static async createOutput(output: Output) {
@@ -32,14 +35,17 @@ export class OutputLifecycle {
 
         setTimeout(() => {
             if (!CaptureHelper.Lifecycle) return // window closed before timeout finished
-            CaptureHelper.Lifecycle.startCapture(id, { ndi: output.ndi || false })
+            CaptureHelper.Lifecycle.startCapture(id, { ndi: output.ndi || false, blackmagic: !!output.blackmagic })
         }, 1200)
 
         // NDI
         if (output.ndi) {
-            await NdiSender.createSenderNDI(id, output.name)
+            await NdiSender.createSenderNDI(id, NdiSender.initNameNDI(output.ndiData?.name, output.name), output.ndiData?.groups)
             if (output.ndiData) setDataNDI({ id, ...output.ndiData })
         }
+
+        // Blackmagic
+        if (output.blackmagic) initializeSender(output, outputWindow, id)
     }
 
     /*
@@ -101,6 +107,7 @@ export class OutputLifecycle {
     static async removeOutput(id: string, reopen: Output | null = null) {
         CaptureHelper.Lifecycle.stopCapture(id)
         NdiSender.stopSenderNDI(id)
+        BlackmagicSender.stop(id)
 
         const output = OutputHelper.getOutput(id)
         if (!output) return
@@ -132,7 +139,12 @@ export class OutputLifecycle {
 
     static setWindowListeners(window: BrowserWindow, { id, name }: { [key: string]: string }) {
         window.on("ready-to-show", () => {
-            getMainWindow()?.focus()
+            // focus back on main window if output window is not on top
+            const mainWindow = getMainWindow()
+            if (mainWindow) {
+                const windowNotCoveringMain = OutputVisibility.amountCovered(window.getBounds(), mainWindow.getBounds()) < 0.5
+                if (windowNotCoveringMain || isMac) mainWindow.focus()
+            }
 
             window.setMenu(null)
             window.setTitle(name || "Output")

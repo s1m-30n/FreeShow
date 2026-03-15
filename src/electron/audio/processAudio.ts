@@ -1,5 +1,6 @@
 import type { OpusEncoder as TOpusEncoder } from "@discordjs/opus"
 import { NdiSender } from "../ndi/NdiSender"
+import { BlackmagicSender } from "../blackmagic/BlackmagicSender"
 import { getServerData, toServer } from "../servers"
 
 // const isStopping = false
@@ -15,7 +16,7 @@ try {
 }
 
 // , { audioDelay }
-export function processAudio(buffer: Buffer) {
+export async function processAudio(buffer: Buffer) {
     if (!opusEncoder) return
 
     // const offset = audioDelay
@@ -30,7 +31,8 @@ export function processAudio(buffer: Buffer) {
         return
     }
 
-    NdiSender.sendAudioBufferNDI(buffer, { sampleRate: sampleRate2, channelCount: channelCount2 })
+    await NdiSender.sendAudioBufferNDI(buffer, { sampleRate: sampleRate2, channelCount: channelCount2 })
+    BlackmagicSender.sendAudioBuffer(buffer, { sampleRate: sampleRate2, channelCount: channelCount2 })
     sendAudioToOutputServer(buffer, { sampleRate: sampleRate2, channelCount: channelCount2 })
 }
 

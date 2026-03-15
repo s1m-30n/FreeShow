@@ -1,26 +1,36 @@
 import { get } from "svelte/store"
 import type { Item, Show, ShowList, Shows, Slide, TrimmedShow, TrimmedShows } from "../../../types/Show"
-import { activeShow, cachedShowsData, customMetadata, dictionary, groupNumbers, groups, shows, showsCache, sorted, sortedShowsList, stageShows } from "../../stores"
+import { activeEdit, activeFocus, activePage, activeProject, activeShow, cachedShowsData, customMetadata, dictionary, focusMode, groupNumbers, groups, projects, refreshEditSlide, shows, showsCache, sorted, sortedShowsList } from "../../stores"
+import { translateText } from "../../utils/language"
 import { clone, keysToID, removeValues, sortByName, sortByNameAndNumber } from "./array"
 import { GetLayout } from "./get"
 import { history } from "./history"
+import { loadShows } from "./setShow"
+import { swichProjectItem } from "./showActions"
 import { _show } from "./shows"
 
 // check if name exists and add number
 export function checkName(name = "", showId = "") {
-    if (!name || typeof name !== "string") name = get(dictionary).main?.unnamed || "Unnamed"
+    if (!name || typeof name !== "string") name = translateText("main.unnamed")
     name = formatToFileName(name)
 
+    // if ID exists, check the name if different
+    if (showId && get(shows)[showId]) {
+        if (get(shows)[showId]?.name !== name) return checkName(name)
+        return name
+    }
+
     let number = 1
-    while (Object.entries(get(shows)).find(([id, a]) => (!showId || showId !== id) && a.name?.toLowerCase() === (number > 1 ? name.toLowerCase() + " " + number : name.toLowerCase()))) number++
+    while (Object.values(get(shows)).find((a) => a.name?.toLowerCase() === (number > 1 ? name.toLowerCase() + " " + number : name.toLowerCase()))) number++
 
     // add number if existing name, and trim away spaces from the start/end
     return (number > 1 ? name + " " + number : name).trim()
 }
 
 export function formatToFileName(name = "") {
+    name = name.replaceAll(":", ",")
     // remove illegal file name characters
-    name = name.trim().replace(/[/\\?%*:|"<>╠]/g, "")
+    name = name.trim().replace(/[/\\?%*:|│"<>╠┤╡╝╖┐¬]/g, "")
     // max 255 length
     if (name.length > 255) name = name.slice(0, 255)
 
@@ -46,6 +56,45 @@ export function getLabelId(label: string, replaceNumbers = true) {
     // .replace(/[0-9-]/g, "")
 }
 
+export function openShow(showId: string) {
+    if (!showId || !get(shows)[showId]) return
+
+    // set active show in project
+    let pos: number | null = null
+    if (get(activeProject) !== null) {
+        let i = get(projects)[get(activeProject) || ""]?.shows?.findIndex((p) => p.id === showId) ?? -1
+        if (i > -1) pos = i
+    }
+
+    let newShow: any = { id: showId, type: "show" }
+
+    if (get(focusMode)) {
+        let inProject = get(projects)[get(activeProject) || ""]?.shows?.find((p) => p.id === showId)
+        if (inProject) {
+            activeFocus.set({ id: showId, index: pos ?? undefined })
+            return
+        } else {
+            focusMode.set(false)
+        }
+    }
+
+    if (pos !== null) {
+        newShow.index = pos
+
+        // async waiting for show to load
+        setTimeout(async () => {
+            // preload show (so the layout can be changed)
+            await loadShows([showId])
+            if (get(showsCache)[showId]) swichProjectItem(pos, showId)
+        })
+    }
+
+    activeShow.set(newShow)
+
+    if (get(activeEdit).id) activeEdit.set({ type: "show", slide: 0, items: [], showId })
+    if (get(activePage) === "edit") refreshEditSlide.set(true)
+}
+
 // check if label exists as a global label
 export function getGlobalGroup(group: string, returnInputIfNull = false): string {
     const groupId = getLabelId(group)
@@ -66,7 +115,10 @@ export function getGlobalGroup(group: string, returnInputIfNull = false): string
 }
 
 // get group number (dynamic counter)
-export function getGroupName({ show, showId }: { show: Show; showId: string }, slideID: string, groupName: string | null, layoutIndex: number, addHTML = false, layoutNumber = true) {
+export function getGroupName({ show, showId }: { show: Show | null; showId: string }, slideID: string, groupName: string | null, layoutIndex: number, addHTML = false, layoutNumber = true) {
+    if (!show) return groupName || ""
+    if (groupName === ".") return "." // . as name will be hidden
+
     let name = groupName
     if (name === null) return name // child slide
 
@@ -76,7 +128,10 @@ export function getGroupName({ show, showId }: { show: Show; showId: string }, s
     // sort by order when just one layout
     let slides = keysToID(clone(show.slides || {}))
     if (Object.keys(show.layouts || {}).length < 2) {
-        const layoutSlides = Object.values(show.layouts || {})[0]?.slides?.map(({ id }) => id) || []
+        const layoutSlides =
+            Object.values(show.layouts || {})[0]
+                ?.slides?.filter(Boolean)
+                ?.map(({ id }) => id) || []
         slides = slides.sort((a, b) => layoutSlides.indexOf(a.id) - layoutSlides.indexOf(b.id))
     }
 
@@ -96,18 +151,6 @@ export function getGroupName({ show, showId }: { show: Show; showId: string }, s
     if (layoutNumber) name += addHTML ? currentLayoutNumberHTML : currentLayoutNumber
 
     return name
-}
-
-// mirror & events
-export function getListOfShows(removeCurrent = false) {
-    let list = Object.entries(get(shows)).map(([id, show]) => ({ id, name: show.name }))
-    if (removeCurrent) list = list.filter((a) => a.id !== get(activeShow)?.id)
-    list = sortByName(list)
-    return list
-}
-
-export function getStageList() {
-    return Object.entries(clone(get(stageShows))).map(([id, stage]) => ({ id, name: stage.name }))
 }
 
 // meta
@@ -132,11 +175,11 @@ export function getCustomMetadata() {
 }
 
 export const metadataDisplayValues = [
-    { id: "never", name: "$:show_at.never:$" },
-    { id: "first", name: "$:show_at.first:$" },
-    { id: "last", name: "$:show_at.last:$" },
-    { id: "first_last", name: "$:show_at.first_last:$" },
-    { id: "always", name: "$:show_at.always:$" },
+    { id: "never", name: "show_at.never" },
+    { id: "first", name: "show_at.first" },
+    { id: "last", name: "show_at.last" },
+    { id: "first_last", name: "show_at.first_last" },
+    { id: "always", name: "show_at.always" }
 ]
 
 // create new slides
@@ -147,7 +190,7 @@ export function newSlide(data: { items?: Item[]; group?: string; globalGroup?: s
         settings: {},
         notes: "",
         items: [],
-        ...data,
+        ...data
     }
 }
 
@@ -159,19 +202,32 @@ export function updateShowsList(allShows: TrimmedShows) {
     const sortType = get(sorted).shows?.type || "name"
     // sort by name regardless if many shows have the same date
     let sortedShows: (TrimmedShow & { id: string })[] = []
-    if (sortType === "created") {
-        sortedShows = showsList.sort((a, b) => b.timestamps?.created - a.timestamps?.created)
-    } else if (sortType === "modified") {
-        sortedShows = showsList.sort((a, b) => (b.timestamps?.modified || b.timestamps?.created) - (a.timestamps?.modified || a.timestamps?.created))
-    } else if (sortType === "used") {
-        sortedShows = showsList.sort((a, b) => (b.timestamps?.used || b.timestamps?.created) - (a.timestamps?.used || a.timestamps?.created))
-    } else {
-        // sort by name
-        sortedShows = sortByNameAndNumber(showsList)
-        if (sortType === "name_des") sortedShows = sortedShows.reverse()
+
+    const getTimestampValue = (entry: TrimmedShow & { id: string }, key: "created" | "modified" | "used") => {
+        return entry.timestamps?.[key] || entry.timestamps?.created || 0
     }
 
-    const filteredShows: ShowList[] = removeValues(sortedShows, "private", true)
+    let inverted = sortType.endsWith("_old")
+    if (sortType.startsWith("created")) {
+        sortedShows = showsList.sort((a, b) => getTimestampValue(b, "created") - getTimestampValue(a, "created"))
+    } else if (sortType.startsWith("modified")) {
+        sortedShows = showsList.sort((a, b) => getTimestampValue(b, "modified") - getTimestampValue(a, "modified"))
+    } else if (sortType.startsWith("used")) {
+        sortedShows = showsList.sort((a, b) => getTimestampValue(b, "used") - getTimestampValue(a, "used"))
+    } else if (sortType === "number" || sortType === "number_des") {
+        const direction = sortType === "number_des" ? "desc" : "asc"
+        sortedShows = sortByNameAndNumber(showsList, direction)
+    } else {
+        // sort by name
+        sortedShows = sortByName(showsList)
+        if (sortType === "name_des") inverted = true
+    }
+    if (inverted) sortedShows = sortedShows.reverse()
+
+    // const profile = getAccess("shows")
+    // const hiddenCategories = Object.entries(profile).filter(([_, type]) => type === "none").map(([id]) => id)
+
+    const filteredShows: ShowList[] = removeValues(sortedShows, "private", true) // .filter((a) => !a.category || !hiddenCategories.includes(a.category))
     sortedShowsList.set(filteredShows)
 }
 
@@ -225,13 +281,16 @@ export function updateCachedShow(showId: string, show: Show, layoutId = "") {
     const customId = getShowCacheId(showId, show)
     const template = {
         id: show.settings?.template,
-        slidesUpdated: cachedShowsData[customId]?.template?.slidesUpdated || false,
+        slidesUpdated: cachedShowsData[customId]?.template?.slidesUpdated || false
     }
 
     // sort by order when just one layout
     let showSlides = keysToID(clone(show.slides || {}))
     if (Object.keys(show.layouts || {}).length < 2) {
-        const layoutSlides = Object.values(show.layouts || {})[0]?.slides?.map(({ id }) => id) || []
+        const layoutSlides =
+            Object.values(show.layouts || {})[0]
+                ?.slides?.filter(Boolean)
+                ?.map(({ id }) => id) || []
         showSlides = showSlides.sort((a, b) => layoutSlides.indexOf(a.id) - layoutSlides.indexOf(b.id))
     }
 
@@ -284,7 +343,7 @@ export function updateCachedShow(showId: string, show: Show, layoutId = "") {
     return { layout, endIndex, template, groups: sortedGroups }
 }
 
-export function removeTemplatesFromShow(showId: string, enableHistory = false) {
+export function removeTemplatesFromShow(showId: string, slideId?: string, enableHistory = false) {
     if (!get(showsCache)[showId]) return
 
     // remove show template
@@ -295,14 +354,26 @@ export function removeTemplatesFromShow(showId: string, enableHistory = false) {
         _show(showId).set({ key: "settings.template", value: null })
     }
 
-    // remove any slide templates
-    showsCache.update((a) => {
-        const show = a[showId]
-        Object.values(show.slides || {}).forEach((slide) => {
-            if (slide.settings.template) delete slide.settings.template
+    if (slideId) {
+        // remove slide template
+        showsCache.update((a) => {
+            const show = a[showId]
+            if (!show?.slides?.[slideId]?.settings?.template) return a
+
+            delete show.slides[slideId].settings.template
+
+            return a
         })
-        return a
-    })
+    } else if (enableHistory) {
+        // remove any slide templates
+        showsCache.update((a) => {
+            const show = a[showId]
+            Object.values(show.slides || {}).forEach((slide) => {
+                if (slide.settings?.template) delete slide.settings.template
+            })
+            return a
+        })
+    }
 }
 
 export function getLayoutRef(showId = "active", _updater?: Shows | Show) {

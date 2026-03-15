@@ -1,25 +1,25 @@
 <script lang="ts">
     import { onMount } from "svelte"
-    import { activePopup, dictionary, outputs, popupData, styles, templates } from "../../../stores"
-    import { translate } from "../../../utils/language"
+    import { activePopup, activeStyle, drawerTabsData, outputs, popupData, scriptures, styles, templates } from "../../../stores"
+    import { translateText } from "../../../utils/language"
     import { formatSearch } from "../../../utils/search"
     import Card from "../../drawer/Card.svelte"
     import TemplateSlide from "../../drawer/pages/TemplateSlide.svelte"
     import { clone, keysToID, sortByName } from "../../helpers/array"
     import { getResolution } from "../../helpers/output"
     import T from "../../helpers/T.svelte"
-    import CombinedInput from "../../inputs/CombinedInput.svelte"
-    import Dropdown from "../../inputs/Dropdown.svelte"
-    import TextInput from "../../inputs/TextInput.svelte"
+    import MaterialButton from "../../inputs/MaterialButton.svelte"
+    import MaterialDropdown from "../../inputs/MaterialDropdown.svelte"
+    import MaterialTextInput from "../../inputs/MaterialTextInput.svelte"
     import Center from "../../system/Center.svelte"
     import Loader from "../Loader.svelte"
-    import Button from "../../inputs/Button.svelte"
     import Icon from "../../helpers/Icon.svelte"
 
     let revert = $popupData.revert
+    let allowEmpty = !!$popupData.allowEmpty
 
     $: hideIds = $popupData.hideIds || []
-    $: sortedTemplates = sortByName(keysToID($templates).filter((a) => !hideIds.includes(a.id)))
+    $: sortedTemplates = sortByName(keysToID($templates).filter((a) => !hideIds.includes(a.id) && a?.settings?.mode !== "text"))
 
     $: defaultTemplates = clone(sortedTemplates)
     $: if (defaultTemplates) search()
@@ -27,23 +27,38 @@
     $: active = $popupData.active || ""
 
     // multiple types (scripture)
-    let types: any[] = []
-    $: types = $popupData.types || []
-    $: values = $popupData.values || []
+    const id = $popupData.id || ""
+    let types: { value: string; label: string }[] = []
+    let values: { value: string; label: string }[] = []
+    if (id === "scripture") {
+        const scriptureTemplateTypes = Object.values($scriptures).find((a) => a.collection)
+            ? [
+                  { value: "", label: translateText("example.default (1)") },
+                  { value: "_2", label: "2" },
+                  { value: "_3", label: "3" },
+                  { value: "_4", label: "4" }
+              ]
+            : []
 
-    let selectedType = types[0]?.id || ""
+        const currentStyle = $styles[$activeStyle]
+
+        types = scriptureTemplateTypes
+        values = scriptureTemplateTypes.map((a) => currentStyle?.["templateScripture" + a.value] || "")
+    }
+
+    let selectedType = types[0]?.value || ""
 
     $: customTypes = types.length > 1
-    $: value = customTypes ? values[types.findIndex((a) => a.id === selectedType)] || "" : active
+    $: value = customTypes ? values[types.findIndex((a) => a.value === selectedType)] || "" : active
 
     let searchedTemplates = clone(defaultTemplates)
     let searchValue = ""
     // let previousSearchValue = ""
-    function search(e: any = null) {
+    function search(value: string | null = null) {
         // preloader = true
         // setTimeout(() => (preloader = false), 20)
 
-        searchValue = formatSearch(e?.target?.value || "")
+        searchValue = formatSearch(value || "")
 
         if (searchValue.length < 2) {
             searchedTemplates = clone(defaultTemplates)
@@ -60,7 +75,7 @@
     }
 
     function selectTemplate(template: any, keyboard = false) {
-        if ($popupData.action !== "select_template") return
+        // if ($popupData.action !== "select_template") return
 
         let previousValue = value
         // update before closing
@@ -68,7 +83,8 @@
 
         setTimeout(() => {
             if ($popupData.trigger) {
-                $popupData.trigger(value, selectedType)
+                if (selectedType) $popupData.trigger({ value, type: selectedType })
+                else $popupData.trigger(value)
                 // } else {
                 //     popupData.set({ ...$popupData, templateId: value })
             }
@@ -90,41 +106,64 @@
     // open drawer tab instantly before content has loaded
     let preloader = true
     onMount(() => setTimeout(() => (preloader = false), 20))
+
+    $: normalTemplates = searchedTemplates.filter((a) => a.category !== "scripture")
+    $: scriptureTemplates = searchedTemplates.filter((a) => a.category === "scripture")
+    $: templatesList = id.includes("scripture") ? [...trimScriptureTemplates(scriptureTemplates, selectedType), ...normalTemplates] : [...normalTemplates, ...scriptureTemplates]
+
+    function trimScriptureTemplates(templates: any[], _updater: any) {
+        let countId = ""
+
+        if (id === "scripture") {
+            countId = selectedType
+        } else if (id === "scripture_drawer") {
+            let count = 1
+            const activeScripture = $drawerTabsData.scripture?.activeSubTab || ""
+            const currentScripture = $scriptures[activeScripture]
+            if (!currentScripture) return templates
+
+            if (currentScripture.collection?.versions?.length) count = currentScripture.collection.versions.length
+            countId = count > 1 ? "_" + count : ""
+        }
+
+        // only show relevant default templates (with the correct count)
+        const keepId = "scripture" + countId
+        const keepIdLT = "scriptureLT" + countId
+        const toRemove = ["scripture", "scripture_2", "scripture_3", "scripture_4", "scriptureLT", "scriptureLT_2"].filter((a) => a !== keepId && a !== keepIdLT)
+        templates = templates.filter((a) => !toRemove.includes(a.id))
+
+        return templates
+    }
 </script>
 
 <svelte:window on:keydown={chooseTemplate} />
 
 {#if revert}
-    <Button class="popup-back" title={$dictionary.actions?.back} on:click={() => activePopup.set(revert)}>
-        <Icon id="back" size={2} white />
-    </Button>
+    <MaterialButton class="popup-back" icon="back" iconSize={1.3} title="actions.back" on:click={() => activePopup.set(revert)} />
 {/if}
 
-<CombinedInput style="border-bottom: 2px solid var(--secondary);">
-    <TextInput placeholder={$dictionary.main?.search} value="" on:input={search} autofocus />
-</CombinedInput>
+<MaterialTextInput label="main.search" value="" on:input={(e) => search(e.detail)} autofocus />
 
 {#if customTypes}
-    <CombinedInput>
-        <p><T id="songbeamer_import.translations" /></p>
-        <Dropdown options={types} value={types.find((a) => a.id === selectedType)?.name || ""} on:click={(e) => (selectedType = e.detail.id)} />
-    </CombinedInput>
+    <MaterialDropdown label="songbeamer_import.translations" options={types} value={selectedType} on:change={(e) => (selectedType = e.detail)} />
 {/if}
 
-<div style="position: relative;height: 100%;width: calc(100vw - (var(--navigation-width) + 20px) * 2);overflow-y: auto;">
+<div style="position: relative;height: 100%;width: calc(100vw - (var(--navigation-width) + 20px) * 2);margin-top: 10px;overflow-y: auto;">
     {#if preloader && sortedTemplates.length > 10}
         <Center style="height: 100px;padding-top: 20px;">
             <Loader />
         </Center>
-    {:else if searchedTemplates.length}
+    {:else if templatesList.length}
         <div class="grid">
-            {#if customTypes && selectedType !== types[0]?.id}
-                <Card active={!value} label={translate("example.default")} icon="star" {resolution} on:click={() => selectTemplate("")}>
-                    <!--  -->
+            {#if allowEmpty || (customTypes && selectedType !== types[0]?.value)}
+                <Card active={!value} label={translateText(allowEmpty ? "main.none" : "example.default")} icon="templates" {resolution} on:click={() => selectTemplate("")}>
+                    <Center faded>
+                        <Icon id="close" size={2} white />
+                    </Center>
                 </Card>
             {/if}
 
-            {#each searchedTemplates as template, i}
+            {#each templatesList as template, i}
                 <Card preview={!!(searchValue.length && i === 0)} active={value === template.id} label={template.name} color={template.color} {resolution} on:click={() => selectTemplate(template)}>
                     <TemplateSlide templateId={template.id} {template} preview />
                 </Card>
