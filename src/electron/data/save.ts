@@ -1,60 +1,65 @@
+import type { Bible } from "json-bible/lib/Bible"
 import path from "path"
 import type { Main } from "../../types/IPC/Main"
-import type { Bible } from "json-bible/lib/Bible"
 import { ToMain } from "../../types/IPC/ToMain"
 import type { SaveData } from "../../types/Save"
 import { currentlyDeletedShows } from "../cloud/drive"
 import { startBackup } from "../data/backup"
 import { defaultSettings, defaultSyncedSettings } from "../data/defaults"
-import { stores } from "../data/store"
+import { _store, getStore, safeStoreSet } from "../data/store"
 import { sendMain, sendToMain } from "../IPC/main"
-import { checkShowsFolder, dataFolderNames, deleteFile, doesPathExist, getDataFolder, parseShow, readFile, writeFile } from "../utils/files"
+import { deleteFile, doesPathExist, getDataFolderPath, parseShow, readFile, writeFile } from "../utils/files"
+import { checkIfMatching, clone, wait } from "../utils/helpers"
 import { renameShows } from "../utils/shows"
-import { wait } from "../utils/helpers"
 
+let isSaving = false
 export async function save(data: SaveData) {
-    const reset = !!data.customTriggers?.changeUserData?.reset
+    if (isSaving) return
+    isSaving = true
+
+    const reset = !!data.customTriggers?.reset
     if (reset) {
-        data.SETTINGS = JSON.parse(JSON.stringify(defaultSettings))
-        data.SYNCED_SETTINGS = JSON.parse(JSON.stringify(defaultSyncedSettings))
+        data.SETTINGS = clone(defaultSettings)
+        data.SYNCED_SETTINGS = clone(defaultSyncedSettings)
     }
 
     // save to files
-    Object.entries(stores).forEach(storeData as any)
-    function storeData([key, store]: [keyof typeof stores, any]) {
-        if (!(data as any)[key] || checkIfMatching(store.store, (data as any)[key])) return
+    for (const entry of Object.entries(_store)) {
+        await storeData(entry as any)
+    }
+    async function storeData([key, store]: [keyof typeof _store, any]) {
+        const newData = (data as any)[key]
+        if (!newData || !isValidJSON(newData)) return
 
-        store.clear()
-        store.set((data as any)[key])
+        const currentData = getStore(key as keyof typeof _store)
+        if (checkIfMatching(currentData, newData)) return
 
-        if (reset) sendMain(key as Main, (data as any)[key])
+        await safeStoreSet(store, newData, key)
+
+        if (reset) sendMain(key as Main, newData)
     }
 
     // scriptures
-    const scripturePath = getDataFolder(data.dataPath, dataFolderNames.scriptures)
+    const scriptureFolderPath = getDataFolderPath("scriptures")
     if (data.scripturesCache) Object.entries(data.scripturesCache).forEach(saveScripture)
     function saveScripture([id, value]: [string, Bible]) {
-        if (!value) return
-        const filePath: string = path.join(scripturePath, value.name + ".fsb")
+        if (!value || !isValidJSON(value)) return
+        const filePath: string = path.join(scriptureFolderPath, value.name + ".fsb")
         writeFile(filePath, JSON.stringify([id, value]), id)
     }
 
-    data.path = checkShowsFolder(data.path)
+    const showsPath = getDataFolderPath("shows")
     // rename shows
     if (data.renamedShows) {
         const renamedShows = data.renamedShows.filter(({ id }: { id: string }) => !data.deletedShows?.find((a) => a.id === id))
-        renameShows(renamedShows, data.path)
-
-        // rename should be sync, but sometimes it might not be finished right away
-        // so add some extra wait time just in case
-        await wait(200)
+        await renameShows(renamedShows, showsPath)
     }
 
     // shows
     if (data.showsCache) Object.entries(data.showsCache).forEach(saveShow)
     function saveShow([id, value]: [string, any]) {
-        if (!value) return
-        const filePath: string = path.join(data.path, String(value.name || id) + ".show")
+        if (!value || !isValidJSON(value)) return
+        const filePath: string = path.join(showsPath, String(value.name || id) + ".show")
         writeFile(filePath, JSON.stringify([id, value]), id)
     }
 
@@ -63,7 +68,7 @@ export async function save(data: SaveData) {
     function deleteShow({ name, id }: { name: string; id: string }) {
         if (!id || data.showsCache?.[id]) return
 
-        const filePath: string = path.join(data.path, (name || id) + ".show")
+        const filePath: string = path.join(showsPath, (name || id) + ".show")
         if (!doesPathExist(filePath)) return
 
         // load file to double check the ID (as a new show with the same name might have been created)
@@ -79,13 +84,19 @@ export async function save(data: SaveData) {
 
     // SAVED
 
-    if (data.customTriggers?.backup || data.customTriggers?.changeUserData) startBackup({ showsPath: data.path, dataPath: data.dataPath, customTriggers: data.customTriggers })
+    if (data.customTriggers?.backup) startBackup({ customTriggers: data.customTriggers })
 
     if (data.closeWhenFinished) await wait(300) // make sure files are written before closing
     if (!reset) sendToMain(ToMain.SAVE2, { closeWhenFinished: data.closeWhenFinished, customTriggers: data.customTriggers })
+
+    isSaving = false
 }
 
-// a few keys might not be placed in the same order in JS object vs store file
-function checkIfMatching(a: object, b: object): boolean {
-    return JSON.stringify(Object.entries(a).sort()) === JSON.stringify(Object.entries(b).sort())
+function isValidJSON(object: any) {
+    try {
+        JSON.stringify(object)
+        return true
+    } catch {
+        return false
+    }
 }

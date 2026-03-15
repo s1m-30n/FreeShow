@@ -3,10 +3,11 @@ import fs from "fs"
 import path from "path"
 import { ToMain } from "../../types/IPC/ToMain"
 import type { LessonFile, LessonsData } from "../../types/Main"
+import { ContentProviderFactory } from "../contentProviders/base/ContentProvider"
 import { sendToMain } from "../IPC/main"
-import { createFolder, dataFolderNames, doesPathExist, getDataFolder, getValidFileName, makeDir } from "../utils/files"
+import { doesPathExist, getDataFolderPath, getMimeType, getValidFileName, makeDir } from "../utils/files"
 import { waitUntilValueIsDefined } from "../utils/helpers"
-import { decryptFile, encryptFile, getProtectedPath, getProviderKey, isProtectedProvider } from "./protected"
+import { encryptFile, getProtectedPath, registerProtectedMediaFile } from "./protected"
 import { filePathHashCode } from "./thumbnails"
 
 export function downloadLessonsMedia(lessons: LessonsData[]) {
@@ -22,8 +23,8 @@ function checkLesson(lesson: LessonsData) {
     failedDownloads = 0
     sendToMain(ToMain.LESSONS_DONE, { showId: lesson.showId, status: { finished: 0, failed: 0 } })
 
-    const lessonsFolder = getDataFolder(lesson.path, dataFolderNames[type])
-    const lessonFolder = path.join(lessonsFolder, getValidFileName(lesson.name))
+    const folderName = getValidFileName(lesson.name)
+    const lessonFolder = getDataFolderPath("lessons", folderName)
     makeDir(lessonFolder)
 
     return lesson.files
@@ -130,7 +131,11 @@ function startDownload(data: DownloadFile) {
     const file = data.file
     const url = file.url
 
-    if (!url) return next()
+    if (!url) {
+        currentlyDownloading--
+        initDownload()
+        return
+    }
 
     makeDir(path.dirname(data.path))
     const fileStream = fs.createWriteStream(data.path)
@@ -214,20 +219,32 @@ function startDownload(data: DownloadFile) {
 
 /// //
 
-const downloading: string[] = []
-export function downloadMedia({ url, dataPath }: { url: string; dataPath: string }) {
-    if (!url?.includes("http") || url?.includes("blob:")) return
+const downloading = new Set<string>()
+export function downloadMedia({ url, contentFile }: { url: string; contentFile?: any }) {
+    if (!url?.startsWith("http") || url?.startsWith("blob:")) return
 
-    if (downloading.includes(url)) return
-    downloading.push(url)
+    if (downloading.has(url)) return
+    downloading.add(url)
+
+    const removeFromDownloading = () => downloading.delete(url)
 
     console.info("Downloading online media: " + url)
 
-    const outputPath = getMediaThumbnailPath(url, dataPath)
+    const outputPath = getMediaThumbnailPath(url, contentFile)
 
-    if (isProtectedProvider(url)) {
-        encryptFile(url, outputPath, getProviderKey(url))
-        return
+    // Check if provider-based encryption is needed
+    if (contentFile?.providerId) {
+        const provider = ContentProviderFactory.getProvider(contentFile.providerId)
+        if (provider?.shouldEncrypt?.(url, contentFile.pingbackUrl)) {
+            const encryptionKey = provider.getEncryptionKey?.()
+            if (!encryptionKey) {
+                console.error(`Provider ${contentFile.providerId} requires encryption but did not provide an encryption key`)
+                removeFromDownloading()
+                return
+            }
+            encryptFile(url, outputPath, encryptionKey).finally(removeFromDownloading)
+            return
+        }
     }
 
     const fileStream = fs.createWriteStream(outputPath)
@@ -235,47 +252,50 @@ export function downloadMedia({ url, dataPath }: { url: string; dataPath: string
         .get(url, (res) => {
             if (res.statusCode !== 200) {
                 fileStream.close()
-                fs.unlink(outputPath, (err) => console.error(err))
-
+                fs.unlink(outputPath, (err) => err && console.error(err))
                 console.error(`Failed to download file, status code: ${String(res.statusCode)}`)
+                error()
                 return
             }
+
+            // track download progress
+            const totalSize = parseInt(res.headers["content-length"] || "0", 10)
+            let downloadedSize = 0
+            res.on("data", (chunk) => {
+                downloadedSize += chunk.length
+                if (totalSize > 0) sendToMain(ToMain.MEDIA_DOWNLOAD_PROGRESS, { url, progress: downloadedSize, total: totalSize, status: "downloading" })
+            })
 
             res.pipe(fileStream)
 
             res.on("error", (err) => {
                 fileStream.close()
                 console.error(`Response error: ${err.message}`)
-
-                retry()
+                error()
             })
 
             fileStream.on("error", (err1) => {
-                fs.unlink(outputPath, (err2) => console.error(err2))
+                fs.unlink(outputPath, (err2) => err2 && console.error(err2))
                 console.error(`File error: ${err1.message}`)
-
-                retry()
+                error()
             })
 
-            fileStream.on("finish", () => {
+            fileStream.on("finish", async () => {
                 fileStream.close()
-                downloadCount++
-                console.error(`Finished downloading file: ${url}`)
+                removeFromDownloading()
+                console.info(`Finished downloading file: ${url}`)
+                sendToMain(ToMain.MEDIA_DOWNLOAD_PROGRESS, { url, progress: totalSize, total: totalSize, status: "complete" })
             })
         })
         .on("error", (err) => {
             fileStream.close()
             console.error(`Request error: ${err.message}`)
-
-            retry()
+            error()
         })
 
-    let errorCount2 = 0
-    function retry() {
-        if (errorCount2 > 5) {
-            return
-        }
-        errorCount2++
+    function error() {
+        sendToMain(ToMain.MEDIA_DOWNLOAD_PROGRESS, { url, progress: 0, total: 0, status: "error" })
+        removeFromDownloading()
     }
 
     // const timeout = setTimeout(
@@ -287,36 +307,60 @@ export function downloadMedia({ url, dataPath }: { url: string; dataPath: string
     // ) // 8 minutes timeout
 }
 
-export async function checkIfMediaDownloaded({ url, dataPath }: { url: string; dataPath: string }) {
-    if (!url?.includes("http")) return null
+export async function checkIfMediaDownloaded({ url, contentFile }: { url: string; contentFile?: any }) {
+    if (!url?.startsWith("http")) return null
 
-    const outputPath = getMediaThumbnailPath(url, dataPath)
+    // still being downloaded
+    if (downloading.has(url)) return { path: url, buffer: null, isDownloading: true }
+
+    const outputPath = getMediaThumbnailPath(url, contentFile)
     if (!doesPathExist(outputPath)) return null
 
-    if (isProtectedProvider(url)) {
-        try {
-            const decryptedData = await decryptFile(outputPath, getProviderKey(url))
-            return { path: outputPath, buffer: decryptedData }
-        } catch (err) {
-            console.error(`Failed to decrypt file: ${url}`, err)
-            // this response will request a re-download, and replace the file
-            // important in case the key has changed or file is corrupted
-            return null
+    // Check if provider-based encryption is needed
+    if (contentFile?.providerId) {
+        const provider = ContentProviderFactory.getProvider(contentFile.providerId)
+        if (provider?.shouldEncrypt?.(url, contentFile.pingbackUrl)) {
+            try {
+                const protectedUrl = registerProtectedMediaFile({
+                    filePath: outputPath,
+                    providerId: contentFile.providerId,
+                    mimeType: getMimeTypeFromContentFile(contentFile, outputPath)
+                })
+                if (!protectedUrl) {
+                    console.error(`Failed to register protected media for ${url}`)
+                    return null
+                }
+                return { path: outputPath, buffer: null, protectedUrl }
+            } catch (err) {
+                console.error(`Failed to prepare protected media: ${url}`, err)
+                return null
+            }
         }
     }
 
     return { path: outputPath, buffer: null }
 }
 
-function getMediaThumbnailPath(url: string, dataPath: string) {
-    const isProtected = isProtectedProvider(url)
-    if (isProtected) return getProtectedPath(url)
+function getMediaThumbnailPath(url: string, contentFile?: any) {
+    // Check if provider-based encryption is needed
+    if (contentFile?.providerId) {
+        const provider = ContentProviderFactory.getProvider(contentFile.providerId)
+        if (provider?.shouldEncrypt?.(url, contentFile.pingbackUrl)) {
+            return getProtectedPath(url)
+        }
+    }
 
-    const urlWithoutQuery = url.split('?')[0]
+    const urlWithoutQuery = url.split("?")[0]
     const extension = path.extname(urlWithoutQuery)
     const fileName = `${filePathHashCode(url)}${extension}`
-    const outputFolder = getDataFolder(dataPath, dataFolderNames.onlineMedia)
-    createFolder(outputFolder)
+    const outputFolder = getDataFolderPath("onlineMedia")
 
     return path.join(outputFolder, fileName)
+}
+
+function getMimeTypeFromContentFile(contentFile: any, fallbackPath: string) {
+    if (typeof contentFile?.mimeType === "string") return contentFile.mimeType
+    if (contentFile?.type === "image") return "image/jpeg"
+    if (contentFile?.type === "video") return "video/mp4"
+    return getMimeType(fallbackPath) || "application/octet-stream"
 }

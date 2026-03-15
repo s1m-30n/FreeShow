@@ -1,27 +1,6 @@
 import { get } from "svelte/store"
 import type { Media } from "../../../types/Show"
-import {
-    actions,
-    actionTags,
-    activeActionTagFilter,
-    activeEdit,
-    activeMediaTagFilter,
-    activeTagFilter,
-    activeVariableTagFilter,
-    contextData,
-    drawerTabsData,
-    globalTags,
-    groups,
-    media,
-    mediaTags,
-    outputs,
-    overlays,
-    selected,
-    shows,
-    sorted,
-    variables,
-    variableTags
-} from "../../stores"
+import { actions, actionTags, activeActionTagFilter, activeEdit, activeMediaTagFilter, activeTagFilter, activeVariableTagFilter, contextData, drawerTabsData, globalTags, groups, media, mediaTags, outputs, overlays, selected, shows, sorted, variables, variableTags } from "../../stores"
 import { translateText } from "../../utils/language"
 import { drawerTabs } from "../../values/tabs"
 import { actionData } from "../actions/actionData"
@@ -108,8 +87,9 @@ const loadActions = {
     sort_media: (items: ContextMenuItem[]) => sortItems(items, "media"),
     slide_groups: (items: ContextMenuItem[]) => {
         const selectedIndex = get(selected).data[0]?.index
-        const slideRef = getLayoutRef()?.[selectedIndex] || {}
-        const currentSlide = _show().get("slides")[slideRef.id]
+        const ref = getLayoutRef()
+        const slideRef = ref[selectedIndex] || {}
+        const currentSlide = _show().get("slides")?.[slideRef.id]
         if (!currentSlide) return []
 
         const currentGroup: string = currentSlide.globalGroup || ""
@@ -124,8 +104,56 @@ const loadActions = {
         })
 
         if (!isParent && !items.length) return [{ label: "empty.general", disabled: true }]
-        // , icon: "remove"
-        return [...(isParent ? [{ id: "none", label: "main.none", enabled: noGroup, style: "opacity: 0.8;" }] : []), ...sortItemsByLabel(items)]
+
+        const textContent = getSlideText(currentSlide).trim()
+        const hasText = textContent.length > 0
+
+        // SUGGESTIONS
+        let suggested: ContextMenuItem[] = []
+        // Verse always (if it exists)
+        let verseIndex = items.findIndex((a) => a.id === "verse")
+        // if (verseIndex !== -1) suggested.push(items.splice(verseIndex, 1)[0]) // remove from main list
+        if (verseIndex !== -1) suggested.push(items[verseIndex])
+        if (hasText) {
+            // Chorus if text
+            let chorusIndex = items.findIndex((a) => a.id === "chorus")
+            if (chorusIndex !== -1) suggested.push(items[chorusIndex])
+        }
+        if (selectedIndex === 0) {
+            // Intro if first slide
+            let introIndex = items.findIndex((a) => a.id === "intro")
+            if (introIndex !== -1) suggested.push(items[introIndex])
+        } else if (selectedIndex === ref.length - 1) {
+            // Outro if last slide
+            let outroIndex = items.findIndex((a) => a.id === "outro")
+            if (outroIndex !== -1) suggested.push(items[outroIndex])
+        } else if (!hasText) {
+            // Break if no text (and not first/last)
+            let breakIndex = items.findIndex((a) => a.id === "break")
+            if (breakIndex !== -1) suggested.push(items[breakIndex])
+        } else if (textContent.length < 20) {
+            // Tag if short text (and not first/last)
+            let tagIndex = items.findIndex((a) => a.id === "tag")
+            if (tagIndex !== -1) suggested.push(items[tagIndex])
+        } else if (selectedIndex > 4) {
+            // Bridge if after slide 4 (and none of the above)
+            let bridgeIndex = items.findIndex((a) => a.id === "bridge")
+            if (bridgeIndex !== -1) suggested.push(items[bridgeIndex])
+        }
+
+        const parentGroup = _show().get("slides")?.[slideRef?.parent?.id || ""]?.globalGroup || ""
+        if (!isParent && parentGroup) {
+            // use parent group if it's global
+            let groupIndex = items.findIndex((a) => a.id === parentGroup)
+            if (groupIndex !== -1) {
+                // move itself to start of suggested list if it exists
+                let suggestedIndex = suggested.findIndex((a) => a.id === parentGroup)
+                if (suggestedIndex !== -1) suggested.splice(suggestedIndex, 1)[0]
+                suggested.unshift(items[groupIndex])
+            }
+        }
+
+        return [...(suggested.length ? [...suggested.map((a) => ({ ...a, icon: "autofill" })), "SEPARATOR"] : []), ...sortItemsByLabel(items), ...(isParent ? ["SEPARATOR", { id: "none", label: "main.none", enabled: noGroup, style: "opacity: 0.8;" }] : [])]
     },
     actions: () => {
         const slideRef = getLayoutRef()?.[get(selected).data[0]?.index]
@@ -158,11 +186,14 @@ const loadActions = {
         if (get(activeEdit).type !== "overlay") {
             itemActions.push({ id: "clickReveal", label: "actions.click_reveal", icon: "click_action", iconColor: "#d4a3f6", enabled: !!currentItem?.clickReveal })
             if (currentItem?.type === "text" || currentItem?.lines) itemActions.push({ id: "lineReveal", label: "actions.line_reveal", icon: "line_reveal", iconColor: "#d4a3f6", enabled: !!currentItem?.lineReveal })
+            itemActions.push("SEPARATOR")
         }
 
         itemActions.push(
             ...[
                 // { id: "transition", label: "popup.transition", icon: "transition", enabled: !!currentItemActions.transition },
+                { id: "display_duration", label: "popup.display_duration", icon: "clock", iconColor: "#d497ff", enabled: Number(currentItemActions.displayDuration || 0) || false },
+                "SEPARATOR",
                 { id: "showTimer", label: "actions.show_timer", icon: "time_in", iconColor: "#cd86ff", enabled: Number(currentItemActions.showTimer || 0) || false },
                 { id: "hideTimer", label: "actions.hide_timer", icon: "time_out", iconColor: "#cd86ff", enabled: Number(currentItemActions.hideTimer || 0) || false }
             ]
@@ -171,6 +202,8 @@ const loadActions = {
         return itemActions
     },
     remove_layers: () => {
+        if (!Array.isArray(get(selected).data) || !get(selected).data.length) return []
+
         const layoutSlides = getLayoutRef()
         const layoutSlide = layoutSlides[get(selected).data[0]?.index] || {}
 

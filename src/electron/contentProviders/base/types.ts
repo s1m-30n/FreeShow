@@ -1,4 +1,4 @@
-export type ContentProviderId = "planningcenter" | "churchApps" | "amazinglife"
+export type ContentProviderId = "planningcenter" | "churchApps" | "amazinglife" | "canva"
 
 /**
  * Common types and interfaces for content providers
@@ -106,4 +106,7 @@ export interface ContentFile {
     type: "image" | "video"
     name?: string
     decryptionKey?: string
+    mediaId?: string // Provider-specific media ID for tracking
+    pingbackUrl?: string // URL to ping after 30+ seconds of playback
+    providerId?: ContentProviderId // ID of the content provider this file came from
 }

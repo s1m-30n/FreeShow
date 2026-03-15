@@ -1,5 +1,4 @@
 <script lang="ts">
-    import Button from "../../common/components/Button.svelte"
     import { getValue, isChecked } from "../../common/util/helpers"
     import { translate } from "../util/helpers"
     import { send } from "../util/socket"
@@ -12,203 +11,259 @@
     }
 </script>
 
-<div class="center">
-	<div class="card">
-		<div class="brand">
-			<h1 class="title">RemoteShow</h1>
-		</div>
+<div class="auth-page">
+    <div class="panel">
+        <div class="brand">
+            <img class="logo" src="./import-logos/freeshow.webp" alt="FreeShow logo" draggable="false" />
+            <h1>RemoteShow</h1>
+        </div>
 
-		<form on:submit|preventDefault={submit} class="auth-form">
-			<!-- Hidden username field for better password manager compatibility -->
-			<label class="sr-only" for="username-input">Username</label>
-			<input
-				id="username-input"
-				class="sr-only"
-				type="text"
-				name="username"
-				autocomplete="username"
-				inputmode="text"
-				autocapitalize="none"
-				autocorrect="off"
-				spellcheck="false"
-				tabindex="-1"
-				aria-hidden="true"
-			/>
+        <form on:submit|preventDefault={submit} class="auth-form">
+            <div class="field-group">
+                <label class="field-label" for="password-input">{translate("remote.password", $dictionary)}</label>
+                <div class="field">
+                    <span class="icon" aria-hidden="true">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M7 10V8a5 5 0 0 1 10 0v2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                            <rect x="4.75" y="10" width="14.5" height="9.5" rx="2.5" stroke="currentColor" stroke-width="1.5" />
+                            <circle cx="12" cy="14.75" r="1.25" fill="currentColor" />
+                        </svg>
+                    </span>
+                    <input id="password-input" class="input" type="password" name="password" autocomplete="current-password" placeholder={translate("remote.password", $dictionary)} on:input={(e) => _update("password", "stored", getValue(e))} on:change={(e) => _update("password", "stored", getValue(e))} value={$password.stored} />
+                </div>
+            </div>
 
-			<label class="sr-only" for="password-input">{translate("remote.password", $dictionary)}</label>
-			<div class="field">
-				<span class="icon" aria-hidden="true">
-					<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-						<path d="M7 10V8a5 5 0 0 1 10 0v2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-						<rect x="4.75" y="10" width="14.5" height="9.5" rx="2.5" stroke="currentColor" stroke-width="1.5"/>
-						<circle cx="12" cy="14.75" r="1.25" fill="currentColor"/>
-					</svg>
-				</span>
-				<input
-					id="password-input"
-					class="input"
-					type="password"
-					name="password"
-					autocomplete="current-password"
-					placeholder={translate("remote.password", $dictionary)}
-					on:input={(e) => _update("password", "stored", getValue(e))}
-					on:change={(e) => _update("password", "stored", getValue(e))}
-					value={$password.stored}
-				/>
-			</div>
+            <div class="actions">
+                <label class="remember">
+                    <input class="remember-checkbox" type="checkbox" checked={$password.remember} on:change={(e) => _update("password", "remember", isChecked(e))} />
+                    <span class="toggle" aria-hidden="true"></span>
+                    <span class="remember-label">{translate("remote.remember", $dictionary)}</span>
+                </label>
 
-			<div class="actions">
-				<label class="remember-row">
-					<input class="remember-checkbox" type="checkbox" checked={$password.remember} on:change={(e) => _update("password", "remember", isChecked(e))} />
-					<span class="remember-label">{translate("remote.remember", $dictionary)}</span>
-				</label>
-
-				<div class="submit-wrap">
-					<Button type="submit" bold dark center style="width: 100%; border-radius: 12px;">{translate("remote.submit", $dictionary)}</Button>
-				</div>
-			</div>
-		</form>
-	</div>
+                <button type="submit" class="submit-button">{translate("remote.submit", $dictionary)}</button>
+            </div>
+        </form>
+    </div>
 </div>
 
 <style>
-	.center {
-		height: 100%;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: 16px;
-	}
+    .auth-page {
+        position: relative;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        background: var(--primary-darkest);
+    }
 
-	.card {
-		display: flex;
-		flex-direction: column;
-		gap: 18px;
-		padding: 28px;
-		width: min(560px, 92vw);
-		background-color: var(--primary-darker);
-		border: 1px solid var(--primary-lighter);
-		border-radius: 16px;
-		box-shadow: 0 8px 28px rgb(0 0 0 / 0.35);
-		position: relative;
-		overflow: hidden;
-	}
+    .panel {
+        position: relative;
+        z-index: 1;
+        width: min(560px, 94vw);
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+        padding: 28px;
+        border-radius: 18px;
+        background: linear-gradient(160deg, rgb(255 255 255 / 0.06), rgb(255 255 255 / 0.03));
+        border: 1px solid color-mix(in oklab, var(--primary-lighter) 80%, transparent);
+        backdrop-filter: blur(12px);
+    }
 
-	.brand {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 10px;
-	}
-	.title {
-		margin: 0;
-		text-align: center;
-		color: var(--secondary);
-		letter-spacing: 0.2px;
-	}
+    .brand {
+        display: inline-flex;
+        gap: 12px;
+        align-items: center;
+        justify-content: center;
+        align-self: center;
+    }
+    .logo {
+        width: 50px;
+        height: 50px;
+        object-fit: contain;
+        flex-shrink: 0;
+        display: block;
+    }
+    h1 {
+        margin: 0;
+        font-size: 1.9em;
+        color: var(--text);
+        letter-spacing: 0.4px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        padding-top: 20px;
+    }
 
-	.auth-form {
-		display: flex;
-		flex-direction: column;
-		gap: 16px;
-	}
+    .auth-form {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+    }
 
-	.sr-only {
-		position: absolute;
-		width: 1px;
-		height: 1px;
-		padding: 0;
-		margin: -1px;
-		overflow: hidden;
-		clip: rect(0, 0, 1, 1);
-		white-space: nowrap;
-		border: 0;
-	}
+    .field-group {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .field-label {
+        font-size: 0.95em;
+        color: color-mix(in oklab, var(--text) 75%, transparent);
+        padding-left: 4px;
+    }
+    .field {
+        position: relative;
+        display: flex;
+        align-items: center;
+    }
+    .icon {
+        position: absolute;
+        left: 14px;
+        top: 50%;
+        transform: translateY(-40%);
+        color: color-mix(in oklab, var(--text) 65%, transparent);
+        pointer-events: none;
+        z-index: 1;
+    }
+    .input {
+        width: 100%;
+        background: rgb(255 255 255 / 0.06);
+        color: var(--text);
+        padding: 14px 16px 14px 44px;
+        border: 1.5px solid color-mix(in oklab, var(--primary-lighter) 75%, transparent);
+        border-radius: 12px;
+        font-size: 1em;
+        transition: all 140ms ease;
+        box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    }
+    .input:hover {
+        border-color: color-mix(in oklab, var(--primary-lighter) 65%, var(--secondary) 35%);
+        background: rgb(255 255 255 / 0.08);
+    }
+    .input:focus-visible {
+        outline: none;
+        border-color: var(--secondary);
+        box-shadow:
+            0 0 0 3px var(--secondary-opacity),
+            inset 0 1px 0 rgb(255 255 255 / 0.08);
+        background: rgb(255 255 255 / 0.1);
+        transform: translateY(-1px);
+    }
+    .input::placeholder {
+        color: color-mix(in oklab, var(--text) 70%, transparent);
+    }
 
-	.field {
-		position: relative;
-		display: flex;
-		align-items: center;
-	}
-	.icon {
-		position: absolute;
-		left: 12px;
-		color: color-mix(in oklab, var(--text) 70%, transparent);
-		pointer-events: none;
-	}
-	.input {
-		width: 100%;
-		background-color: rgb(255 255 255 / 0.06);
-		color: var(--text);
-		padding: 12px 16px 12px 40px;
-		border: 1px solid var(--primary-lighter);
-		border-radius: 12px;
-		font-size: inherit;
-		transition: outline-color 120ms ease, background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
-	}
-	.input:hover {
-		border-color: color-mix(in oklab, var(--primary-lighter) 60%, var(--secondary));
-	}
-	.input:active,
-	.input:focus {
-		outline: 2px solid var(--secondary);
-		outline-offset: 0;
-		background-color: rgb(255 255 255 / 0.08);
-		box-shadow: 0 0 0 4px var(--secondary-opacity);
-	}
-	.input::placeholder {
-		color: inherit;
-		opacity: 0.55;
-	}
+    .actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 4px;
+    }
+    .remember {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        user-select: none;
+        cursor: pointer;
+        color: color-mix(in oklab, var(--text) 75%, transparent);
+    }
+    .remember-checkbox {
+        appearance: none;
+        width: 46px;
+        height: 26px;
+        border-radius: 999px;
+        border: 1.5px solid color-mix(in oklab, var(--primary-lighter) 80%, transparent);
+        background: rgb(255 255 255 / 0.08);
+        position: relative;
+        outline: none;
+        cursor: pointer;
+        transition: all 140ms ease;
+        box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05);
+        flex-shrink: 0;
+    }
+    .remember-checkbox::after {
+        content: "";
+        position: absolute;
+        left: 3px;
+        top: 3px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: color-mix(in oklab, var(--text) 92%, transparent);
+        box-shadow: 0 4px 12px rgb(0 0 0 / 0.2);
+        transition: all 140ms ease;
+    }
+    .remember-checkbox:hover {
+        border-color: color-mix(in oklab, var(--primary-lighter) 60%, var(--secondary) 40%);
+        background: rgb(255 255 255 / 0.12);
+    }
+    .remember-checkbox:focus-visible {
+        box-shadow:
+            0 0 0 4px var(--secondary-opacity),
+            inset 0 1px 0 rgb(255 255 255 / 0.06);
+    }
+    .remember-checkbox:checked {
+        background: linear-gradient(130deg, var(--secondary), color-mix(in oklab, var(--secondary) 70%, white));
+        border-color: var(--secondary);
+    }
+    .remember-checkbox:checked::after {
+        transform: translateX(18px);
+        background: var(--secondary-text);
+        box-shadow: 0 4px 12px rgb(240 0 140 / 0.3);
+    }
+    .remember-label {
+        font-size: 0.98em;
+        transform: translateY(-2px);
+    }
 
-	.actions {
-		display: grid;
-		grid-template-columns: 1fr auto;
-		gap: 12px;
-		align-items: center;
-	}
-	.submit-wrap { width: 100%; }
+    .submit-button {
+        padding: 14px 18px;
+        min-width: 160px;
+        background: var(--secondary);
+        color: var(--secondary-text);
+        border: none;
+        border-radius: 12px;
+        font-family: inherit;
+        font-size: 1em;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        cursor: pointer;
+        transition: all 140ms ease;
+    }
+    .submit-button:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.08);
+    }
+    .submit-button:active {
+        transform: translateY(0);
+        filter: brightness(0.95);
+    }
+    .submit-button:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 3px var(--secondary-opacity);
+    }
 
-	.remember-row {
-		display: inline-flex;
-		align-items: center;
-		gap: 10px;
-		user-select: none;
-	}
-	.remember-checkbox {
-		appearance: none;
-		width: 18px;
-		height: 18px;
-		border-radius: 6px;
-		border: 1px solid var(--primary-lighter);
-		background-color: rgb(255 255 255 / 0.06);
-		display: inline-block;
-		position: relative;
-		outline: none;
-		cursor: pointer;
-		transition: box-shadow 120ms ease, border-color 120ms ease, background-color 120ms ease;
-	}
-	.remember-checkbox:hover { border-color: color-mix(in oklab, var(--primary-lighter) 60%, var(--secondary)); }
-	.remember-checkbox:focus { box-shadow: 0 0 0 3px var(--secondary-opacity); }
-	.remember-checkbox:checked { background-color: var(--secondary); border-color: var(--secondary); }
-	.remember-checkbox:checked::after {
-		content: "";
-		position: absolute;
-		left: 5px;
-		top: 2px;
-		width: 4px;
-		height: 8px;
-		border: solid var(--secondary-text);
-		border-width: 0 2px 2px 0;
-		transform: rotate(45deg);
-	}
-	.remember-label { opacity: 0.8; font-size: 0.95em; }
-
-	@media only screen and (max-width: 560px) {
-		.card { padding: 22px; }
-		.title { font-size: 1.4em; }
-		.input { padding: 10px 14px 10px 38px; }
-		.actions { grid-template-columns: 1fr; }
-		.submit-wrap { margin-top: 12px; }
-	}
+    @media only screen and (max-width: 620px) {
+        .panel {
+            padding: 22px;
+            gap: 20px;
+        }
+        h1 {
+            font-size: 1.6em;
+        }
+        .actions {
+            flex-direction: column;
+            align-items: stretch;
+        }
+        .submit-button {
+            width: 100%;
+            text-align: center;
+        }
+        .remember {
+            justify-content: flex-start;
+        }
+    }
 </style>

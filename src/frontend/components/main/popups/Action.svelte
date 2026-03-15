@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onDestroy, onMount } from "svelte"
     import { uid } from "uid"
-    import { actions, activePopup, activeShow, drawerTabsData, groups, popupData, showsCache, templates, timers } from "../../../stores"
+    import { actions, activePopup, activeShow, drawerTabsData, groups, overlays, popupData, showsCache, templates, timers } from "../../../stores"
     import { translateText } from "../../../utils/language"
     import CreateAction from "../../actions/CreateAction.svelte"
     import MidiValues from "../../actions/MidiValues.svelte"
@@ -34,6 +34,9 @@
         if (!id) {
             id = uid()
             popupData.set({ ...$popupData, id })
+        } else if (mode === "overlay") {
+            if (id) action = $overlays[$popupData.overlayId]?.actions?.find((a) => a.id === id) || action
+            else id = uid()
         } else if (mode === "template") {
             if (id) action = $templates[$popupData.templateId]?.settings?.actions?.find((a) => a.id === id) || action
             else id = uid()
@@ -110,7 +113,6 @@
         // For actions that can't have multiple instances, find and replace existing
         if (!canAddMultiple) {
             let existingAction = slideActions.find((a) => a.triggers?.[0] === triggerId && (!id || a.id !== id))
-
             if (!existingAction) return
 
             // remove new action if already existing
@@ -223,11 +225,24 @@
     }
     function saveAction() {
         if (!loaded || stopUpdate) return
-        if (mode !== "slide" && mode !== "template" && !action.name) return
+        if (mode !== "slide" && mode !== "overlay" && mode !== "template" && !action.name) return
 
         if (action.midiEnabled && !action.midi) action.midi = actionMidi
 
-        if (mode === "template") {
+        if (mode === "overlay") {
+            let overlayId = $popupData.overlayId
+            let overlay = $overlays[overlayId]
+            if (!overlay) return activePopup.set(null)
+            if (!action.triggers?.length) return
+
+            let overlayActions = overlay?.actions || []
+            let existingIndex = overlayActions.findIndex((a) => a.id === id || a.triggers?.[0] === action.triggers?.[0])
+            if (existingIndex > -1) overlayActions[existingIndex] = action
+            else overlayActions.push(action)
+
+            let newData = { key: "actions", data: overlayActions }
+            history({ id: "UPDATE", newData, oldData: { id: overlayId }, location: { page: "drawer", id: "overlay_key", override: `actions_${overlayId}` } })
+        } else if (mode === "template") {
             let templateId = $popupData.templateId
             let template = $templates[templateId]
             if (!template) return activePopup.set(null)
@@ -287,6 +302,7 @@
 
             let currentSlideActionIndex = slideDataActions.slideActions.findIndex((a) => a.id === id)
             if (currentSlideActionIndex < 0) {
+                changed = true
                 newActions.push(slideDataActions)
                 return
             }
@@ -360,29 +376,13 @@
 
 <!-- min-height: 50vh; -->
 <div style="min-width: 45vw;">
-    {#if mode === "slide" || mode === "template"}
-        <CreateAction
-            mainId={id}
-            actionId={action.triggers?.[0] || ""}
-            existingActions={action.triggers || []}
-            actionValue={action.actionValues?.[action.triggers?.[0] || ""] || {}}
-            customData={action.customData?.[action.triggers?.[0] || ""] || {}}
-            {mode}
-            on:change={changeAction}
-            list
-        />
+    {#if mode === "slide" || mode === "template" || mode === "overlay"}
+        <CreateAction mainId={id} actionId={action.triggers?.[0] || ""} existingActions={action.triggers || []} actionValue={action.actionValues?.[action.triggers?.[0] || ""] || {}} customData={action.customData?.[action.triggers?.[0] || ""] || {}} {mode} on:change={changeAction} list />
     {:else}
         {#if actionActivationSelector}
             <MaterialButton class="popup-back" icon="back" iconSize={1.3} title="actions.back" on:click={() => (actionActivationSelector = false)} />
 
-            <MaterialButton
-                class="popup-options {showCommonActivate ? 'active' : ''}"
-                icon={showCommonActivate ? "eye" : "hide"}
-                iconSize={1.3}
-                title={showCommonActivate ? "actions.close" : "create_show.more_options"}
-                on:click={() => (showCommonActivate = !showCommonActivate)}
-                white
-            />
+            <MaterialButton class="popup-options {showCommonActivate ? 'active' : ''}" icon={showCommonActivate ? "eye" : "hide"} iconSize={1.3} title={showCommonActivate ? "actions.close" : "create_show.more_options"} on:click={() => (showCommonActivate = !showCommonActivate)} white />
 
             <div class="buttons">
                 {#each customActionActivations as activation}
@@ -436,7 +436,7 @@
                 disabled={!action.name}
                 style="margin-top: 10px;"
                 {id}
-                name={(action.keypressActivate || "").toUpperCase()}
+                name={typeof action.keypressActivate === "string" ? action.keypressActivate.toUpperCase() : ""}
                 value={action.keypressActivate}
                 icon="shortcut"
                 popupId="assign_shortcut"
@@ -473,12 +473,7 @@
 
                 <div slot="menu">
                     {#if ["timer_end", "timer_start", "group_start"].includes(customActivation)}
-                        <MaterialDropdown
-                            label={specificActivations[customActivation]?.name}
-                            options={getSpecificActivation(customActivation)}
-                            value={specificActivation}
-                            on:change={(e) => updateValue("specificActivation", `${customActivation}__${e.detail}`)}
-                        />
+                        <MaterialDropdown label={specificActivations[customActivation]?.name} options={getSpecificActivation(customActivation)} value={specificActivation} on:change={(e) => updateValue("specificActivation", `${customActivation}__${e.detail}`)} />
                     {:else if customActivation === "midi_signal_received"}
                         <MidiValues value={clone(action.midi || actionMidi)} firstActionId={action.triggers?.[0]} on:change={(e) => updateValue("midi", e)} simple />
                     {/if}
@@ -502,17 +497,7 @@
             <div class="actions">
                 {#each action.triggers as actionId, i}
                     {#key actionId}
-                        <CreateAction
-                            mainId={id}
-                            {actionId}
-                            existingActions={action.triggers}
-                            actionValue={action.actionValues?.[actionId]}
-                            actionNameIndex={i + 1}
-                            on:change={(e) => changeAction(e, i)}
-                            on:choose={() => (actionSelector = { id: actionId, index: i })}
-                            {mode}
-                            choosePopup
-                        />
+                        <CreateAction mainId={id} {actionId} existingActions={action.triggers} actionValue={action.actionValues?.[actionId]} actionNameIndex={i + 1} on:change={(e) => changeAction(e, i)} on:choose={() => (actionSelector = { id: actionId, index: i })} {mode} choosePopup />
                     {/key}
                 {/each}
                 {#if !action.triggers?.length || addTrigger}

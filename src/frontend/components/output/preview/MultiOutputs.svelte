@@ -1,9 +1,11 @@
 <script lang="ts">
-    import { outputs, toggleOutputEnabled } from "../../../stores"
+    import { activePage, activeStyle, audioChannelsData, outputs, settingsTab, styles, toggleOutputEnabled } from "../../../stores"
+    import { translateText } from "../../../utils/language"
+    import { openDrawer } from "../../edit/scripts/edit"
     import Icon from "../../helpers/Icon.svelte"
     import T from "../../helpers/T.svelte"
-    import { keysToID, sortByName, sortObject } from "../../helpers/array"
-    import { getOutputResolution } from "../../helpers/output"
+    import { clone, keysToID, sortByName, sortObject } from "../../helpers/array"
+    import { defaultLayers, getOutputResolution } from "../../helpers/output"
     import MaterialButton from "../../inputs/MaterialButton.svelte"
     import PreviewOutput from "./PreviewOutput.svelte"
 
@@ -17,6 +19,21 @@
     let fullscreen = false
     let fullscreenId = ""
     function toggleFullscreen(e: any) {
+        // open output style settings
+        if (e.target.closest(".icons")) {
+            if (e.target.closest(".muted")) {
+                openDrawer("audio")
+                return
+            }
+
+            const outputId = e.target.closest(".outputPreview")?.id
+            const output = $outputs[outputId]
+            activeStyle.set(output.style || "")
+            settingsTab.set("styles")
+            activePage.set("settings")
+            return
+        }
+
         if (!e.target.closest(".multipleOutputs") || e.target.closest("button")) return
 
         if (fullscreen) {
@@ -24,8 +41,11 @@
             return
         }
 
+        const clickedOutput = e.target.closest(".previewOutput")?.id
+        if (!clickedOutput) return
+
         fullscreen = true
-        fullscreenId = e.target.closest(".previewOutput")?.id
+        fullscreenId = clickedOutput
 
         currentResolution()
     }
@@ -95,12 +115,41 @@ aria-label={fullscreen ? "Exit fullscreen preview" : "Toggle fullscreen preview"
     {/if}
 
     {#each outs as output}
-        <div
-            id={output.id}
-            class="outputPreview output_button context #output_preview"
-            style={fullscreen ? (fullscreenId === output.id ? "display: contents;" : "opacity: 0;position: absolute;") : outs.length > 1 ? `border: 2px solid ${output?.color};width: 50%;` : "display: contents;"}
-        >
+        {@const style = $styles[output.style || ""] || {}}
+        {@const layers = Array.isArray(style.layers) ? style.layers : clone(defaultLayers)}
+        {@const isMuted = $audioChannelsData[output.id]?.isMuted}
+
+        <div id={output.id} class="outputPreview output_button context #output_preview" style={fullscreen ? (fullscreenId === output.id ? "display: contents;" : "opacity: 0;position: absolute;") : outs.length > 1 ? `border: 2px solid ${output?.color};width: 50%;` : "display: contents;"}>
             <PreviewOutput outputId={output.id} {disableTransitions} disabled={outs.length > 1 && !fullscreen && !output?.active} {fullscreen} />
+
+            <!-- icons -->
+            {#if !fullscreen && (layers.length < 3 || isMuted)}
+                <div class="icons">
+                    <!-- active layers -->
+                    {#if !layers.includes("background")}
+                        <div class="icon" data-title={translateText("<b>output.disabled_layers:</b> preview.background")}>
+                            <Icon id="media_off" size={0.8} white />
+                        </div>
+                    {/if}
+                    {#if !layers.includes("slide")}
+                        <div class="icon" data-title={translateText("<b>output.disabled_layers:</b> preview.slide")}>
+                            <Icon id="shows_off" size={0.8} white />
+                        </div>
+                    {/if}
+                    {#if !layers.includes("overlays")}
+                        <div class="icon" data-title={translateText("<b>output.disabled_layers:</b> preview.overlays")}>
+                            <Icon id="overlays_off" size={0.8} white />
+                        </div>
+                    {/if}
+
+                    <!-- muted -->
+                    {#if isMuted}
+                        <div class="icon muted" data-title={translateText("output.mute")}>
+                            <Icon id="muted" size={0.8} white />
+                        </div>
+                    {/if}
+                </div>
+            {/if}
         </div>
     {/each}
 </div>
@@ -163,5 +212,36 @@ aria-label={fullscreen ? "Exit fullscreen preview" : "Toggle fullscreen preview"
         display: flex;
         gap: 5px;
         justify-content: space-between;
+    }
+
+    .outputPreview {
+        position: relative;
+    }
+
+    /* icons */
+
+    .icons {
+        position: absolute;
+        bottom: 3px;
+        left: 3px;
+
+        border-radius: 3px;
+        background-color: rgb(0 0 0 / 0.7);
+        border: 1px solid var(--primary-lighter);
+
+        display: flex;
+        padding: 1px;
+        gap: 2px;
+
+        opacity: 0.7;
+        cursor: pointer;
+    }
+
+    .icons .icon {
+        position: relative;
+
+        display: flex;
+        align-items: center;
+        justify-content: center;
     }
 </style>

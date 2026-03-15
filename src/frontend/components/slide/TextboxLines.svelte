@@ -1,13 +1,14 @@
 <script lang="ts">
-    import { createEventDispatcher, onDestroy } from "svelte"
+    import { createEventDispatcher, onDestroy, onMount } from "svelte"
     import type { Styles } from "../../../types/Settings"
     import type { Item, TemplateStyleOverride } from "../../../types/Show"
+    import { createVirtualBreaks } from "../../show/slides"
     import { outputs, slidesOptions, styles, variables } from "../../stores"
+    import { getItemText } from "../edit/scripts/textStyle"
     import { clone } from "../helpers/array"
-    import { getActiveOutputs, getOutputResolution, percentageStylePos } from "../helpers/output"
+    import { getFirstActiveOutput, getOutputResolution, percentageStylePos } from "../helpers/output"
     import { replaceDynamicValues } from "../helpers/showActions"
     import { getStyles } from "../helpers/style"
-    import { createVirtualBreaks } from "../../show/slides"
     import { applyStyleOverrides } from "./wordOverride"
 
     export let item: Item
@@ -30,6 +31,7 @@
     export let style = true
     export let customStyle = ""
     export let stageItem: any = {}
+    export let useOriginalTextColor = false
     export let chords = false
     export let linesStart: null | number = null
     export let linesEnd: null | number = null
@@ -40,6 +42,8 @@
     export let centerPreview = false
     export let revealed = -1
     export let styleOverrides: TemplateStyleOverride[] = []
+    export let hideContent = false
+    export let normalWrap = false
 
     $: lines = createVirtualBreaks(clone(item?.lines || []), outputStyle?.skipVirtualBreaks)
     $: if (linesStart !== null && linesEnd !== null && lines.length) {
@@ -58,10 +62,6 @@
     let renderedLines: any[] = []
     $: renderedLines = styleOverrides?.length ? applyStyleOverrides(lines, styleOverrides) : lines
 
-    onDestroy(() => {
-        clearInterval(dynamicInterval)
-    })
-
     function getCustomStyle(style: string, outputId = "", _updater: any = null) {
         if (!style) return ""
 
@@ -72,12 +72,14 @@
 
         // text gradient
 
-        if (style.includes("-gradient")) {
+        const gradientCount = (style.match(/-gradient/g) || []).length
+        if (style.includes("-gradient") && (gradientCount > 1 || !style.includes("-webkit-mask-image: linear-gradient"))) {
             let styles = getStyles(style)
             const gradient = styles.color
             style += `background-image: ${gradient};color: transparent;background-clip: text;`
             // shadow will show over the gradient (this can be a cool effect, but has to be explicitly set)
             if (!style.includes("text-shadow") || style.includes("2px 2px 10px #000000;")) style += "text-shadow: none;"
+            if (style.includes("-webkit-mask-image")) style += styles["-webkit-mask-image"]
         }
 
         // alpha key output (not in use anymore)
@@ -92,6 +94,13 @@
         alphaStyles += "color: rgb(255 255 255 / " + textAlpha + ");"
 
         return style + alphaStyles
+    }
+
+    function getColor(style: string | undefined) {
+        if (!isStage || !useOriginalTextColor || !style) return ""
+
+        const lineStyle = getStyles(style)
+        return lineStyle.color ? `color: ${lineStyle.color};` : ""
     }
 
     function getAlphaValues(colorValue: string) {
@@ -132,9 +141,8 @@
 
         // get first output style
         if (!outputStyle) {
-            const outputId = getActiveOutputs()[0]
-            const currentOutput = $outputs[outputId] || {}
-            outputStyle = $styles[currentOutput.style || ""] || null
+            const currentOutput = getFirstActiveOutput()
+            outputStyle = $styles[currentOutput?.style || ""] || null
         }
         if (!outputStyle) return ""
 
@@ -209,18 +217,48 @@
     }
 
     // UPDATE DYNAMIC VALUES e.g. {time_} EVERY SECOND
+    // & update instantly when variables or item change
+    $: slideText = getItemText(item)
+    $: hasDynamicValues = slideText.includes("{")
+
+    // only update if text contains dynamic values
+    $: if (hasDynamicValues) startInterval()
+    else stopInterval()
+    let dynamicInterval: NodeJS.Timeout | null = null
+    function startInterval() {
+        stopInterval()
+        dynamicInterval = setInterval(update, 1000)
+    }
+    function stopInterval() {
+        if (dynamicInterval) clearInterval(dynamicInterval)
+        dynamicInterval = null
+    }
+
     let updateDynamic = 0
-    $: if ($variables) updateDynamic++
-    const dynamicInterval = setInterval(() => {
+    $: if ($variables) setTimeout(update)
+    $: if ($outputs) setTimeout(update, isStage ? 250 : 0) // time with auto size
+    function update() {
+        if (!hasDynamicValues || !hasMounted) return
         updateDynamic++
-    }, 1000)
+    }
+
+    let hasMounted = false
+    onMount(() => {
+        setTimeout(() => (hasMounted = true))
+    })
+    onDestroy(() => {
+        stopInterval()
+    })
 
     $: chordFontSize = chordLines.length ? stageItem?.chords?.size || stageItem?.chordsData?.size || item?.chords?.size || 50 : 0
     $: chordsStyle = `--chord-size: ${chordLines.length ? (fontSize || cssFontSize) * (chordFontSize / 100) : "undefined"}px;--chord-color: ${stageItem?.chords?.color || stageItem?.chordsData?.color || item?.chords?.color || "#FF851B"};`
+
+    // $: isScripture = ref?.id === "scripture" || ref?.showId === "temp" || $showsCache[ref.showId || ""]?.reference?.type === "scripture"
 </script>
 
 <div
     class="align"
+    class:hidden={hideContent}
     class:isStage
     class:scrolling={!isStage && item?.scrolling?.type}
     class:topBottomScrolling={!isStage && item?.scrolling?.type === "top_bottom"}
@@ -241,25 +279,23 @@
                 <!-- class:height={!line.text[0]?.value.length} -->
                 <div
                     class="break"
+                    class:normalWrap={normalWrap || (isStage ? typeof stageItem?.style === "string" && (stageItem?.style.includes("justify") || stageItem?.style.includes("nowrap")) : line.align?.includes("justify") || line.align?.includes("left") || JSON.stringify(line).includes("nowrap"))}
                     class:reveal={(centerPreview || isStage) && item?.lineReveal && revealed < i}
                     class:smallFontSize={smallFontSize || customFontSize || textAnimation.includes("font-size")}
-                    style="{style ? lineStyle : ''}{style ? line.align : ''}{item?.list?.enabled && line.text?.reduce((value, t) => (value += t.value || ''), '')?.length ? listStyle : ''}{item?.list?.enabled
-                        ? `color: ${getStyles(line.text[0].style).color || ''};`
-                        : ''}"
+                    style="{style ? lineStyle : ''}{style ? line.align : ''}{item?.list?.enabled && line.text?.reduce((value, t) => (value += t.value || ''), '')?.length ? listStyle : ''}{item?.list?.enabled ? `color: ${getStyles(line.text[0]?.style).color || ''};` : ''}"
                 >
-                    {#each line.text || [] as text, ti}
-                        {@const value = text.value?.replaceAll("\n", "<br>") || "<br>"}
-                        <span
-                            class="textContainer"
-                            style="{style ? getCustomStyle(text.style) : ''}{customStyle}{text.customType?.includes('disableTemplate') ? text.style : ''}{fontSize
-                                ? `;font-size: ${fontSize * (text.customType?.includes('disableTemplate') && !text.customType?.includes('jw') ? customTypeRatio : 1)}px;`
-                                : style
-                                  ? getCustomFontSize(text.style, outputStyle)
-                                  : ''}"
-                        >
-                            {@html getTextValue(value, i, ti, updateDynamic)}
-                        </span>
-                    {/each}
+                    {#if line.text?.length === 0}
+                        <span class="textContainer"><br /></span>
+                    {:else}
+                        {#each line.text || [] as text, ti}
+                            {@const value = text.value?.replaceAll("\n", "<br>") || "<br>"}
+                            {@const fontRatio = text.customType?.includes("disableTemplate") && !text.customType?.includes("jw") ? customTypeRatio : 1}
+
+                            <span class="textContainer" style="{style ? getCustomStyle(text.style) : ''}{getColor(text.style)}{customStyle}{text.customType?.includes('disableTemplate') ? text.style : ''}{fontSize ? `;font-size: ${fontSize * fontRatio}px;` : style ? getCustomFontSize(text.style, outputStyle) : ''}">
+                                {@html getTextValue(value, i, ti, updateDynamic)}
+                            </span>
+                        {/each}
+                    {/if}
                 </div>
             {/if}
         {/each}
@@ -276,6 +312,11 @@
         display: flex;
         text-align: center;
         align-items: center;
+    }
+
+    .align.hidden {
+        visibility: hidden !important;
+        opacity: 0 !important;
     }
 
     /* should match .edit in Editbox.svelte */
@@ -302,6 +343,14 @@
         overflow-wrap: break-word;
         /* line-break: after-white-space;
     -webkit-line-break: after-white-space; */
+
+        /* balanced breaking, looks much cleaner */
+        text-wrap: balance;
+    }
+
+    /* normal wrap if "Text on one line (nowrap)" or Justify aligned */
+    .break.normalWrap {
+        text-wrap: unset;
     }
 
     .lines .break.reveal {

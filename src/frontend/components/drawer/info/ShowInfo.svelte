@@ -41,23 +41,14 @@
         words = 0
         allLines.forEach((lines) => {
             lines.forEach((line) => {
-                line?.text?.forEach((text) => (words += text.value.split(" ").length))
+                line?.text?.forEach((text) => (words += text.value?.split(" ").length))
             })
         })
     }
 
     $: template = fullShow?.settings?.template ? ($templates[fullShow.settings.template]?.name ?? "error.not_found") || "main.unnamed" : "main.none"
 
-    $: info = [
-        { label: "info.created", value: created, type: "date" },
-        { label: "info.modified", value: modified, type: "date" },
-        { label: "info.used", value: used, type: "date" },
-        { label: "info.category", value: category },
-        ...(Object.keys($globalTags).length ? [{ label: "meta.tags", value: tags.join(", ") }] : []),
-        { label: "info.slides", value: Object.keys(fullShow?.slides || {}).length },
-        { label: "info.words", value: words },
-        { label: "info.template", value: template }
-    ]
+    $: info = [{ label: "info.created", value: created, type: "date" }, { label: "info.modified", value: modified, type: "date" }, { label: "info.used", value: used, type: "date" }, { label: "info.category", value: category }, ...(Object.keys($globalTags).length ? [{ label: "meta.tags", value: tags.join(", ") }] : []), { label: "info.slides", value: Object.keys(fullShow?.slides || {}).length }, { label: "info.words", value: words }, { label: "info.template", value: template }]
 </script>
 
 <div class="scroll">

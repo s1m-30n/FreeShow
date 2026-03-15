@@ -13,6 +13,7 @@
 
     export let providerId: ContentProviderId
     export let columns: number = 5
+    export let searchValue: string = ""
 
     let library: ContentLibraryCategory[] = []
     let currentPath: ContentLibraryCategory[] = []
@@ -20,6 +21,7 @@
     let content: ContentFile[] = []
     let loading = false
     let error: string | null = null
+    let viewingContent = false
 
     onMount(() => {
         loadLibrary()
@@ -32,6 +34,7 @@
             requestMain(Main.GET_CONTENT_LIBRARY, { providerId }, (data) => {
                 library = data
                 loading = false
+                viewingContent = false
             })
         } catch (e) {
             error = `Failed to load library: ${e}`
@@ -42,11 +45,17 @@
     function navigateToCategory(category: ContentLibraryCategory) {
         if (category.key) {
             // This is a leaf node with content
+            currentPath = [...currentPath, currentCategory!].filter(Boolean)
+            currentCategory = category
+            content = [] // Clear content while loading
+            viewingContent = true // Mark that we're viewing content
             loadContent(category.key)
         } else if (category.children) {
             // Navigate into this category
             currentPath = [...currentPath, currentCategory!].filter(Boolean)
             currentCategory = category
+            content = [] // Clear content
+            viewingContent = false // Show categories instead
         }
     }
 
@@ -54,11 +63,13 @@
         if (currentPath.length === 0) {
             currentCategory = null
             content = []
+            viewingContent = false
         } else {
             currentCategory = currentPath[currentPath.length - 1]
             currentPath = currentPath.slice(0, -1)
+            content = []
+            viewingContent = currentCategory?.key ? true : false
         }
-        content = []
     }
 
     async function loadContent(key: string) {
@@ -81,8 +92,12 @@
     //     content = []
     // }
 
-    $: categories = currentCategory?.children || library
+    $: categories = viewingContent ? [] : currentCategory?.children || library
     $: showBackButton = currentPath.length > 0 || currentCategory !== null
+
+    const filter = (s: string) => s.toLowerCase().replace(/[.,\/#!?$%\^&\*;:{}=\-_`~() ]/g, "")
+    $: filteredCategories = searchValue.length > 1 ? categories.filter((cat) => filter(cat.name).includes(filter(searchValue))) : categories
+    $: filteredContent = searchValue.length > 1 ? content.filter((item) => filter(item.name || "").includes(filter(searchValue))) : content
 </script>
 
 <div class="content-library">
@@ -112,14 +127,14 @@
     {:else if content.length > 0}
         <div class="grid" class:list={$mediaOptions.mode === "list"}>
             <div class="context #media" style="display: contents;">
-                <MediaGrid items={content} {columns} let:item>
-                    <Media credits={{}} name={item.name || ""} path={item.url} thumbnailPath={item.thumbnail || ""} type={item.type} shiftRange={[]} allFiles={[]} activeFile={null} active="online" contentProvider />
+                <MediaGrid items={filteredContent} {columns} let:item>
+                    <Media credits={{}} name={item.name || ""} path={item.url} thumbnailPath={item.thumbnail || ""} type={item.type} shiftRange={[]} active="online" contentProvider={providerId} contentFileData={item} />
                 </MediaGrid>
             </div>
         </div>
     {:else if categories.length > 0}
         <div class="categories">
-            {#each categories as category}
+            {#each filteredCategories as category}
                 <button class="category-card" style="width: calc({100 / columns}% - 4px);" on:click={() => navigateToCategory(category)}>
                     {#if category.thumbnail}
                         <img src={category.thumbnail} alt={category.name} />
@@ -211,7 +226,6 @@
         flex-wrap: wrap;
         flex: 1;
         place-content: flex-start;
-        padding: 5px;
         overflow-y: auto;
     }
 

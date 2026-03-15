@@ -1,7 +1,9 @@
 <script lang="ts">
     import { onMount } from "svelte"
     import type { Overlay } from "../../../../types/Show"
-    import { activeEdit, activePage, activeShow, focusMode, labelsDisabled, mediaOptions, outLocked, outputs, overlayCategories, overlays, styles } from "../../../stores"
+    import { addProjectItem } from "../../../converters/project"
+    import { activeEdit, activePage, activeShow, labelsDisabled, mediaOptions, outLocked, outputs, overlayCategories, overlays, styles, timelineRecordingAction } from "../../../stores"
+    import { translateText } from "../../../utils/language"
     import { getAccess } from "../../../utils/profile"
     import { clone, keysToID, sortByName } from "../../helpers/array"
     import { history } from "../../helpers/history"
@@ -18,6 +20,7 @@
     import Card from "../Card.svelte"
     import Effects from "../effects/Effects.svelte"
     import OverlayActions from "./OverlayActions.svelte"
+    import { runAction } from "../../actions/actions"
 
     export let active: string | null
     export let searchValue = ""
@@ -28,9 +31,7 @@
     $: resolution = getResolution(null, { $outputs, $styles })
 
     let filteredOverlays: (Overlay & { id: string })[] = []
-    $: filteredOverlays = sortByName(
-        keysToID($overlays).filter((s) => (active === "all" && !$overlayCategories[s?.category || ""]?.isArchive) || active === s.category || (active === "unlabeled" && (s.category === null || !$overlayCategories[s.category])))
-    )
+    $: filteredOverlays = sortByName(keysToID($overlays).filter((s) => (active === "all" && !$overlayCategories[s?.category || ""]?.isArchive) || active === s.category || (active === "unlabeled" && (s.category === null || !$overlayCategories[s.category]))))
 
     // search
     $: if (filteredOverlays || searchValue !== undefined) filterSearch()
@@ -58,9 +59,39 @@
     // open drawer tab instantly before content has loaded
     let preloader = true
     onMount(() => setTimeout(() => (preloader = false), 20))
+
+    $: overlayWithNonExistentCategory = active === "unlabeled" && filteredOverlays.some((s) => s.category)
+    function createNonExistentCategories() {
+        const nonexistentCategories = [...new Set(filteredOverlays.map((s) => s.category))].filter((c) => c && !$overlayCategories[c]) as string[]
+
+        overlayCategories.update((a) => {
+            nonexistentCategories.forEach((id) => {
+                if (a[id]) return
+                a[id] = { name: translateText("main.unnamed") }
+            })
+            return a
+        })
+    }
+
+    function overlayClick(e: any, id: string) {
+        if ($outLocked || e.ctrlKey || e.metaKey) return
+        if (e.target?.closest(".edit") || e.target?.closest(".icons")) return
+
+        const isActive = findMatchingOut(id, $outputs) !== null
+
+        if (!isActive) {
+            // run actions - before starting overlay
+            $overlays[id]?.actions?.forEach((a) => runAction(a))
+        }
+
+        setOutput("overlays", id, true)
+
+        if (isActive) timelineRecordingAction.set({ id: "clear_overlay", data: { id } })
+        else timelineRecordingAction.set({ id: "id_select_overlay", data: { id } })
+    }
 </script>
 
-<div style="position: relative;height: 100%;overflow-y: auto;" on:wheel={wheel}>
+<div style="position: relative;height: 100%;overflow-y: auto;" class="context #drawer_overlays" on:wheel={wheel}>
     {#if active === "effects"}
         <Effects {searchValue} />
     {:else}
@@ -73,32 +104,26 @@
                 <div class="grid" style="--width: {100 / $mediaOptions.columns}%;">
                     {#each fullFilteredOverlays as overlay}
                         {@const isReadOnly = readOnly || profile[overlay.category || ""] === "read"}
+                        {@const isActive = findMatchingOut(overlay.id, $outputs) !== null}
 
                         <SelectElem id="overlay" data={overlay.id} class="context #overlay_card{overlay.isDefault && !isReadOnly ? '_default' : ''}{isReadOnly ? '_readonly' : ''}" draggable fill>
                             <Card
                                 width={100}
                                 preview={$activePage === "edit" ? $activeEdit.type === "overlay" && $activeEdit.id === overlay.id : $activeShow?.type === "overlay" && $activeShow?.id === overlay.id}
                                 outlineColor={findMatchingOut(overlay.id, $outputs)}
-                                active={findMatchingOut(overlay.id, $outputs) !== null}
+                                active={isActive}
                                 label={overlay.name}
                                 renameId="overlay_{overlay.id}"
                                 icon={overlay.isDefault ? "protected" : null}
                                 color={overlay.color}
                                 {resolution}
                                 showPlayOnHover
-                                on:click={(e) => {
-                                    if ($outLocked || e.ctrlKey || e.metaKey) return
-                                    if (e.target?.closest(".edit") || e.target?.closest(".icons")) return
-
-                                    setOutput("overlays", overlay.id, true)
-                                }}
+                                on:click={(e) => overlayClick(e, overlay.id)}
                                 on:dblclick={(e) => {
                                     if (e.ctrlKey || e.metaKey) return
                                     if (e.target?.closest(".edit") || e.target?.closest(".icons")) return
 
-                                    activeShow.set({ id: overlay.id, type: "overlay" })
-                                    activePage.set("show")
-                                    if ($focusMode) focusMode.set(false)
+                                    addProjectItem({ id: overlay.id, name: overlay.name || "", type: "overlay" })
                                 }}
                             >
                                 <!-- icons -->
@@ -125,6 +150,14 @@
         </DropArea>
     {/if}
 </div>
+
+{#if overlayWithNonExistentCategory}
+    <FloatingInputs side="left" onlyOne>
+        <MaterialButton icon="autofill" on:click={createNonExistentCategories}>
+            <T id="category.create_nonexistent" />
+        </MaterialButton>
+    </FloatingInputs>
+{/if}
 
 {#if active === "effects"}
     <FloatingInputs onlyOne>

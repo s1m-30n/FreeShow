@@ -8,7 +8,7 @@ import path from "path"
 import { ToMain } from "../../../types/IPC/ToMain"
 import type { TrimmedShows } from "../../../types/Show"
 import { sendToMain } from "../../IPC/main"
-import { parseShow, readFile } from "../../utils/files"
+import { getDataFolderPath, parseShow, readFile } from "../../utils/files"
 import { ChurchAppsConnect } from "./ChurchAppsConnect"
 import type { ChurchAppsSongData } from "./types"
 
@@ -18,7 +18,6 @@ import type { ChurchAppsSongData } from "./types"
 export interface ChurchAppsStartupLoadData {
     shows: TrimmedShows
     categories: string[]
-    showsPath: string
 }
 
 /**
@@ -78,8 +77,8 @@ export class ChurchAppsExport {
 
         freeShowIds.forEach((key: string) => {
             const show = shows[key]
-            const showData = this.loadShowData(show.name, data.showsPath)
-            if (!showData) return
+            const showData = this.loadShowData(show.name)
+            if (!showData?.[1]?.slides) return
 
             const songData: ChurchAppsSongData = {
                 freeShowId: key,
@@ -92,7 +91,7 @@ export class ChurchAppsExport {
             // Add lyrics with group names
             let currentGroup = ""
             Object.keys(showData[1].slides).forEach((slideKey: string) => {
-                const slide = showData[1].slides?.[slideKey]
+                const slide = showData[1].slides[slideKey]
                 // Add group name if it's different from the current group
                 if (slide.group && slide.group !== currentGroup) {
                     songData.lyrics += `[${slide.group}]\n`
@@ -113,7 +112,8 @@ export class ChurchAppsExport {
         return songList
     }
 
-    private static loadShowData(showName: string, showsPath: string) {
+    private static loadShowData(showName: string) {
+        const showsPath = getDataFolderPath("shows")
         const showPath = path.join(showsPath, `${showName}.show`)
         const jsonData = readFile(showPath) || "{}"
         return parseShow(jsonData)

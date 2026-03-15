@@ -6,15 +6,16 @@ import { addSlideAction } from "../../actions/actions"
 import { createNewTimer, getCurrentTimerValue } from "../../drawer/timers/timers"
 import { clone, keysToID, sortByName } from "../../helpers/array"
 import { history } from "../../helpers/history"
-import { getActiveOutputs, getStageOutputId } from "../../helpers/output"
+import { getFirstActiveOutput, getStageOutputId } from "../../helpers/output"
 import { getLayoutRef } from "../../helpers/show"
 import { dynamicValueText, getVariableValue, replaceDynamicValues } from "../../helpers/showActions"
 import { _show } from "../../helpers/shows"
 import { getStyles, removeText } from "../../helpers/style"
 import { itemBoxes } from "../values/boxes"
-import { getItemText } from "./textStyle"
+import { getLikelyPosition } from "./autoPosition"
+import { getItemText, setCaret } from "./textStyle"
 
-export const DEFAULT_ITEM_STYLE = "top:120px;left:50px;height:840px;width:1820px;"
+export const DEFAULT_ITEM_STYLE = "top:88px;left:50px;height:904px;width:1820px;"
 
 function getDefaultStyles(type: ItemType, templateItems: Item[] | null = null) {
     // Get position styles from template or use default from boxes.ts
@@ -35,7 +36,7 @@ function getDefaultStyles(type: ItemType, templateItems: Item[] | null = null) {
     return styleString
 }
 
-export function addItem(type: ItemType, id: string | null = null, options: any = {}, textValue = "") {
+export function addItem(type: ItemType, id: string | null = null, options: any = {}, textValue = "", customStyles: { [key: string]: string } | null = null) {
     const activeTemplate: string | null = get(activeShow)?.id ? get(showsCache)[get(activeShow)!.id]?.settings?.template : null
     const template = activeTemplate ? get(templates)[activeTemplate]?.items : null
 
@@ -45,8 +46,22 @@ export function addItem(type: ItemType, id: string | null = null, options: any =
     }
     if (id) newData.id = id
 
-    // selected item is always on top, deselect to make new item on top
-    activeEdit.set({ ...get(activeEdit), items: [] })
+    const currentItems = getEditItems()
+    const itemsCount = currentItems.length
+    if (itemsCount && itemsCount >= (template?.length || 0)) newData.style = getLikelyPosition(currentItems, newData.style)
+
+    // set custom style values (like position)
+    if (customStyles) {
+        const styles = getStyles(newData.style)
+        Object.entries(customStyles).forEach(([key, value]) => {
+            styles[key] = value
+        })
+        newData.style = ""
+        Object.entries(styles).forEach((obj) => (newData.style += obj[0] + ":" + obj[1] + ";"))
+    }
+
+    // deselect previous selection & select new item
+    activeEdit.set({ ...get(activeEdit), items: [itemsCount] })
 
     if (type === "text") newData.lines = [{ align: template?.[0]?.lines?.[0]?.align || "", text: [{ value: textValue, style: template?.[0]?.lines?.[0]?.text?.[0]?.style || "" }] }]
     if (type === "list") newData.list = { items: [] }
@@ -109,6 +124,19 @@ export function addItem(type: ItemType, id: string | null = null, options: any =
     } else {
         // overlay, template
         history({ id: "UPDATE", newData: { data: newData, key: "items", index: -1 }, oldData: { id: get(activeEdit).id }, location: { page: "edit", id: get(activeEdit).type } })
+    }
+
+    // set caret ready for typing
+    if (type === "text" && textValue === "") {
+        // wait for elem to be created
+        setTimeout(() => {
+            // get last item elem
+            const elem = Array.from(document.querySelectorAll(".editItem") || [])
+                .at(-1)
+                ?.querySelector(".edit")
+            if (elem) (elem as HTMLElement).focus()
+            setCaret(elem, { line: 0, pos: 0 })
+        })
     }
 }
 
@@ -192,6 +220,7 @@ export function rearrangeStageItems(type: string, itemId: string = get(activeSta
 
     stageShows.update((a) => {
         a[get(activeStage).id!].itemOrder = items.map((item) => item.id)
+        a[get(activeStage).id!].modified = Date.now()
         return a
     })
 
@@ -213,6 +242,7 @@ export function getSortedStageItems(stageId = get(activeStage).id, _updater: any
     if (!stageShow.itemOrder) {
         stageShows.update((a) => {
             a[stageId].itemOrder = itemOrder
+            a[stageId].modified = Date.now()
             return a
         })
     }
@@ -231,6 +261,8 @@ export function updateSortedStageItems() {
     const stageId = get(activeStage).id || ""
     stageShows.update((a) => {
         const stageLayout = a[stageId]
+        if (!stageLayout) return a
+
         const currentItemIds = Object.keys(stageLayout.items)
         let itemOrder = stageLayout.itemOrder || currentItemIds
 
@@ -240,6 +272,7 @@ export function updateSortedStageItems() {
         const newItems = currentItemIds.filter((id) => !itemOrder.includes(id))
 
         a[stageId].itemOrder = [...itemOrder, ...newItems]
+        a[stageId].modified = Date.now()
         return a
     })
 }
@@ -251,7 +284,7 @@ export function shouldItemBeShown(item: Item, allItems: Item[] = [], { outputId,
     if (type === "stage") allItems = getTempItems(item, allItems)
 
     if (!allItems.length) allItems = [item]
-    const slideItems = allItems.filter((a) => !a.bindings?.length || a.bindings.includes(outputId))
+    const slideItems = allItems.filter((a) => !a?.bindings?.length || a.bindings.includes(outputId))
     const itemsText = slideItems.reduce((value, currentItem) => (value += getItemText(currentItem)), "")
     // set dynamic values
     // const ref = { showId: get(activeShow)?.id, layoutId: _show().get("settings.activeLayout"), slideIndex: get(activeEdit).slide, type: get(activePage) === "stage" ? "stage" : get(activeEdit).type || "show", id: get(activeEdit).id }
@@ -293,11 +326,15 @@ export function isConditionMet(condition: Condition | undefined, itemsText: stri
         condition = (condition as any)?.values?.length ? [[[(condition as any).values]]] : []
     }
 
+    // remove unused scripture dynamic values ({scripture_X} / {scriptureNUM_X})
+    const regex = /\{scripture(?:\d+)?_[^}]+\}/g
+    if (regex.test(itemsText)) itemsText = itemsText.replace(regex, "").trim()
+
     // outerOr
-    const conditionMet = !!condition.find(outerAnd => {
-        return outerAnd.every(innerOr => {
-            return !!innerOr.find(innerAnd => {
-                return innerAnd.every(content => {
+    const conditionMet = !!condition.find((outerAnd) => {
+        return outerAnd.every((innerOr) => {
+            return !!innerOr.find((innerAnd) => {
+                return innerAnd.every((content) => {
                     return checkConditionValue(content, itemsText, type)
                 })
             })
@@ -318,12 +355,17 @@ export function checkConditionValue(cVal: ConditionValue, itemsText: string, typ
     const data = cVal.data || "value"
     let dataValue: string | number = cVal.value ?? ""
     if (data === "seconds" || (element === "timer" && operator !== "isRunning")) dataValue = (cVal.seconds || 0).toString()
+    // dynamic value text
+    if (dataValue.toString().includes("{")) dataValue = getDynamicValue(dataValue.toString(), type)
 
     let value = ""
     if (element === "text") value = itemsText
     else if (element === "timer") value = getTimerValue(elementId)
-    else if (element === "variable") value = _getVariableValue(elementId)
-    else if (element === "dynamicValue") value = getDynamicValue(elementId, type)
+    else if (element === "variable") {
+        const val = _getVariableValue(elementId)
+        if (Array.isArray(val)) value = val[Number(cVal.index ?? 0)]
+        else value = val
+    } else if (element === "dynamicValue") value = getDynamicValue(elementId, type)
 
     if (operator === "is") {
         return value === dataValue
@@ -384,8 +426,7 @@ export function _getVariableValue(dynamicId: string) {
 }
 
 export function getDynamicValue(id: string, type: "default" | "stage" = "default") {
-    const outputId = getActiveOutputs()[0]
-    const outSlide = get(outputs)[outputId]?.out?.slide
+    const outSlide = getFirstActiveOutput()?.out?.slide
 
     const ref = {
         showId: outSlide?.id || get(activeShow)?.id,

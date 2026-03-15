@@ -6,7 +6,7 @@
     import type { Styles } from "../../../../types/Settings"
     import type { OutBackground, Transition } from "../../../../types/Show"
     import { AudioAnalyser } from "../../../audio/audioAnalyser"
-    import { audioChannelsData, currentWindow, media, playerVideos, playingVideos, special, videosData, videosTime, volume } from "../../../stores"
+    import { audioChannelsData, currentWindow, media, outputs, playerVideos, playingVideos, special, videosData, videosTime, volume } from "../../../stores"
     import { destroy, receive, send } from "../../../utils/request"
     import BmdStream from "../../drawer/live/BMDStream.svelte"
     import NdiStream from "../../drawer/live/NDIStream.svelte"
@@ -120,7 +120,8 @@
     onMount(() => (mounted = true))
     $: if (id && !fadingOut && mounted) startReceiver()
     function startReceiver() {
-        if (mirror || receiving) return
+        const isStage = !!Object.values($outputs)[0]?.stageOutput
+        if ((mirror && !isStage) || receiving) return
         receiving = true
 
         destroy(OUTPUT, listenerId)
@@ -177,8 +178,8 @@
         }, time)
     }
     function setVolume(volume: number) {
-        if (!video) return
-        video.volume = volume
+        if (!video || !isFinite(volume) || isNaN(volume)) return
+        video.volume = Math.max(0, Math.min(1, volume))
     }
 
     // AUDIO
@@ -233,7 +234,7 @@
     {:else if type === "player"}
         <!-- prevent showing controls in output -->
         {#if $special.hideCursor || $playerVideos[id]?.type !== "youtube"}<div class="overlay" />{/if}
-        <Player {outputId} {id} bind:videoData bind:videoTime title={data.title} startAt={data.startAt} on:loaded on:ended={videoEnded} />
+        <Player {outputId} {id} bind:videoData bind:videoTime startAt={data.startAt} on:loaded on:ended={videoEnded} />
     {/if}
 </OutputTransition>
 

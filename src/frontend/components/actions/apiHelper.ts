@@ -6,38 +6,7 @@ import type { DropData, Selected, Variable } from "../../../types/Main"
 import { clearAudio } from "../../audio/audioFading"
 import { AudioPlayer } from "../../audio/audioPlayer"
 import { AudioPlaylist } from "../../audio/audioPlaylist"
-import {
-    activeDrawerTab,
-    activeEdit,
-    activePage,
-    activeProject,
-    activeTimers,
-    audioPlaylists,
-    draw,
-    drawSettings,
-    drawTool,
-    folders,
-    gain,
-    groupNumbers,
-    groups,
-    media,
-    openScripture,
-    outLocked,
-    outputs,
-    overlays,
-    playingAudio,
-    playingMetronome,
-    projects,
-    refreshEditSlide,
-    selected,
-    showsCache,
-    sortedShowsList,
-    special,
-    styles,
-    timers,
-    variables,
-    volume
-} from "../../stores"
+import { activeDrawerTab, activeEdit, activePage, activeProject, activeShow, activeTimers, audioPlaylists, draw, drawSettings, drawTool, folders, groupNumbers, groups, media, openScripture, outLocked, outputs, overlays, playingAudio, playingMetronome, projects, refreshEditSlide, selected, showsCache, sortedShowsList, special, styles, timers, variables, volume } from "../../stores"
 import { newToast } from "../../utils/common"
 import { send } from "../../utils/request"
 import { getDynamicValue } from "../edit/scripts/itemHelpers"
@@ -47,7 +16,7 @@ import { dropActions } from "../helpers/dropActions"
 import { history } from "../helpers/history"
 import { setDrawerTabData } from "../helpers/historyHelpers"
 import { getExtension, getFileName, getMediaStyle, getMediaType, removeExtension } from "../helpers/media"
-import { getActiveOutputs, getCurrentStyle, isOutCleared, setOutput } from "../helpers/output"
+import { getAllActiveOutputs, getAllEnabledOutputs, getCurrentStyle, getFirstActiveOutput, isOutCleared, setOutput } from "../helpers/output"
 import { setRandomValue } from "../helpers/randomValue"
 import { loadShows, setShow } from "../helpers/setShow"
 import { getLabelId, getLayoutRef } from "../helpers/show"
@@ -56,11 +25,12 @@ import { _show } from "../helpers/shows"
 import { clearBackground } from "../output/clear"
 import { getPlainEditorText } from "../show/getTextEditor"
 import { getSlideGroups } from "../show/tools/groups"
-import { activeShow } from "./../../stores"
 import type { API_add_to_project, API_create_project, API_draw_zoom, API_edit_timer, API_group, API_id_index, API_id_value, API_layout, API_media, API_output_lock, API_rearrange, API_scripture, API_seek, API_slide_index, API_toggle_specific, API_variable } from "./api"
 
 // WIP combine with click() in ShowButton.svelte
 export function selectShowByName(name: string) {
+    if (typeof name !== "string") return
+
     const shows = get(sortedShowsList)
     if (name.includes("{")) name = getDynamicValue(name)
     const sortedShows = sortByClosestMatch(shows, name)
@@ -76,9 +46,8 @@ export function selectShowByName(name: string) {
 export function gotoGroup(dataGroupId: string) {
     if (get(outLocked)) return
 
-    const outputId = getActiveOutputs(get(outputs))[0]
-    const currentOutput = get(outputs)[outputId] || null
-    const outSlide = currentOutput.out?.slide
+    const currentOutput = getFirstActiveOutput()
+    const outSlide = currentOutput?.out?.slide
     const currentShowId = outSlide?.id || (get(activeShow) !== null ? (get(activeShow)!.type === undefined || get(activeShow)!.type === "show" ? get(activeShow)!.id : null) : null)
     if (!currentShowId) return
 
@@ -143,6 +112,8 @@ export async function selectSlideByIndex(data: API_slide_index) {
     outputSlide(showRef, data)
 }
 export function selectSlideByName(name: string) {
+    if (typeof name !== "string") return
+
     let slides = _show().slides().get()
     // group numbers
     const groupNums: { [key: string]: number } = {}
@@ -222,10 +193,10 @@ export function toggleLock(data: API_output_lock) {
         return
     }
 
-    const outputIds = data.outputId === "all" ? getActiveOutputs(get(outputs), false, true, true) : [data.outputId]
+    const outputIds = data.outputId === "all" ? getAllEnabledOutputs().map((a) => a.id) : [data.outputId]
 
     const isLocked = get(outputs)[outputIds[0]]?.active === false
-    outputIds.forEach(outputId => {
+    outputIds.forEach((outputId) => {
         toggleOutputLock(outputId, typeof data.value === "boolean" ? !data.value : isLocked)
     })
 }
@@ -324,9 +295,24 @@ export function changeVariable(data: API_variable) {
         else if (!data.variableAction) value = Number(data.value || variable.default || 0)
         key = "number"
     } else if (variable.type === "text_set") {
-        // if (key === "value") {
-        key = "activeTextSet" as any
-        value = Number(data.value ?? 1)
+        if (key === "text_set") {
+            let index = (data.text_set_number ?? 1) - 1
+            if (index === -1) index = variable.activeTextSet || 0
+            const setId = data.text_set
+            if (!setId) return
+
+            const allSets = variable.textSets || []
+            const currentSet = allSets[index] || {}
+            const newValue = (data.value || "") as string
+            allSets[index] = { ...currentSet, [setId]: newValue }
+
+            key = "textSets" as any
+            value = allSets
+        } else {
+            // key = "value"
+            key = "activeTextSet" as any
+            value = Number(data.value ?? 1) - 1
+        }
     } else if (data.value !== undefined) {
         value = data.value
         if (key === "value" && typeof value !== "boolean") key = variable.type
@@ -475,6 +461,37 @@ export async function addGroup(data: API_group) {
     selected.set({ id: null, data: [] })
 }
 
+export function setNextSlideTimer(time: number) {
+    const value = time || 0
+
+    const layoutRef = getLayoutRef()
+    const indexes = layoutRef.map((_, i) => i)
+
+    history({ id: "SHOW_LAYOUT", newData: { key: "nextTimer", data: value, indexes }, location: { page: "show", override: "change_slide_action_timer" } })
+
+    const allActiveSlides = layoutRef.filter((a) => !a.data.disabled)
+
+    // GO TO START
+
+    // remove existing go to start if just one applied to any slide
+    let goToStartRefs = allActiveSlides.reduce((value, ref) => (ref.data?.end ? [...value, ref] : value), [] as any[])
+    if (goToStartRefs.length === 1) {
+        const showId = get(activeShow)?.id || ""
+        const layoutId = _show().get("settings.activeLayout")
+
+        showsCache.update((a) => {
+            let ref = goToStartRefs[0]
+            if (!ref) return a
+
+            if (ref.type === "parent") delete a[showId].layouts[layoutId]?.slides?.[ref.index]?.end
+            else delete a[showId].layouts[layoutId]?.slides?.[ref.parent?.index ?? -1]?.children?.[ref.id]?.end
+            return a
+        })
+    }
+
+    history({ id: "SHOW_LAYOUT", newData: { key: "end", data: !!value, indexes: [indexes[indexes.length - 1]] }, location: { page: "show", override: "change_slide_action_loop" } })
+}
+
 export function setTemplate(templateId: string) {
     const showId = get(activeShow)?.id
     if (!showId) {
@@ -505,10 +522,22 @@ export function getClearedState() {
     return { all, background, slide, overlays: overlaysCleared, audio, slideTimers }
 }
 
-// "1.1.1" = "Gen 1:1"
+// "1.1.1,2,3" = "Gen 1:1-3"
+// WIP allow "John 1:35-36" or "43:1:35" as well
 export function startScripture(data: API_scripture) {
     const split = data.reference.split(".")
-    const ref = { book: Number(split[0]), chapter: Number(split[1]), verses: [[split[2]]] }
+
+    const book = Number(split[0])
+    const chapter = Number(split[1])
+    const rawVerses = String(split[2] ?? "").trim()
+
+    // Support multiple verses encoded as comma-separated values, e.g. "43.3.16,17,18".
+    const verseItems = rawVerses
+        .split(",")
+        .map((v) => v.trim())
+        .filter(Boolean)
+
+    const ref = { book, chapter, verses: [verseItems.length ? verseItems : [rawVerses]] }
 
     if (get(activePage) !== "edit") activePage.set("show")
     if (data.id) setDrawerTabData("scripture", data.id) // use active if no ID
@@ -522,6 +551,7 @@ export function startScripture(data: API_scripture) {
 export function playMedia(data: API_media) {
     if (get(outLocked)) return
 
+    const mediaType = data.data?.type
     const extension = getMediaType(getExtension(data.path))
 
     if (extension === "pdf") {
@@ -531,25 +561,68 @@ export function playMedia(data: API_media) {
         return
     }
 
-    const outputId = getActiveOutputs(get(outputs))[0]
-    const currentOutput = get(outputs)[outputId] || {}
-    const currentStyle = getCurrentStyle(get(styles), currentOutput.style)
+    const currentOutput = getFirstActiveOutput()
+    const currentStyle = getCurrentStyle(get(styles), currentOutput?.style)
 
     const mediaStyle = getMediaStyle(get(media)[data.path], currentStyle)
 
-    setOutput("background", { path: data.path, ...mediaStyle })
+    // Get loop and muted settings from data, default to true
+    const loop = data.data?.loop !== undefined ? data.data.loop : true
+    const muted = data.data?.muted !== undefined ? data.data.muted : true
+
+    // Handle player (online media like YouTube/Vimeo)
+    if (mediaType === "player") {
+        setOutput("background", { type: "player", id: data.path, loop, muted, ...mediaStyle })
+    } else {
+        const type = mediaType || extension || "video"
+        setOutput("background", { type, path: data.path, loop, muted, ...mediaStyle })
+    }
 }
 
 export function videoSeekTo(data: API_seek) {
     if (get(outLocked)) return
 
-    const activeOutputIds = getActiveOutputs(get(outputs), true, true, true)
+    const activeOutputIds = getAllActiveOutputs().map((a) => a.id)
     const timeValues: any = {}
     activeOutputIds.forEach((id) => {
         timeValues[id] = data.seconds
     })
 
     send(OUTPUT, ["TIME"], timeValues)
+}
+
+export function toggleMediaLoop() {
+    if (get(outLocked)) return
+
+    const activeOutput = getFirstActiveOutput()
+    if (!activeOutput) return
+
+    const currentBg = get(outputs)[activeOutput.id]?.out?.background
+    if (!currentBg) return
+
+    const isLooping = currentBg.loop !== false
+    setOutput("background", { ...currentBg, loop: !isLooping })
+}
+
+export function getMediaLoopState(): boolean {
+    const activeOutput = getFirstActiveOutput()
+    if (!activeOutput) return true
+
+    const currentBg = get(outputs)[activeOutput.id]?.out?.background
+    return currentBg?.loop !== false
+}
+
+export function toggleMediaMute() {
+    if (get(outLocked)) return
+
+    const activeOutput = getFirstActiveOutput()
+    if (!activeOutput) return
+
+    const currentBg = get(outputs)[activeOutput.id]?.out?.background
+    if (!currentBg) return
+
+    const isMuted = currentBg.muted !== false
+    setOutput("background", { ...currentBg, muted: !isMuted })
 }
 
 // AUDIO
@@ -573,15 +646,16 @@ export function audioSeekTo(data: API_seek) {
 }
 
 let unmutedValue = 1
-export function updateVolumeValues(value: number | undefined | "local", changeGain = false) {
+export function updateVolumeValues(value: number | undefined | "local") {
     // api mute(unmute)
     if (value === undefined) {
         value = get(volume) ? 0 : unmutedValue
         if (!value) unmutedValue = get(volume)
     }
 
-    if (changeGain) gain.set(Number(Number(value).toFixed(2)))
-    else volume.set(Number(Number(value).toFixed(2)))
+    volume.set(Number(Number(value).toFixed(2)))
+
+    AudioPlayer.updateVolume()
 }
 
 // TIMERS
@@ -609,7 +683,9 @@ export function timerSeekTo(data: API_seek) {
 // OTHER
 
 export function toggleLogSongUsage(data: API_toggle_specific) {
-    const newValue = data.value !== undefined ? data.value : !get(special).logSongUsage
+    if ((data.value as any) === "false") data.value = false // from Companion
+
+    const newValue = data.value !== undefined ? !!data.value : !get(special).logSongUsage
     special.update((a) => {
         a.logSongUsage = newValue
         return a
@@ -770,6 +846,7 @@ export async function getPDFThumbnails({ path }: API_media) {
 export function changeDrawZoom(data: API_draw_zoom) {
     const size = data.size || 100
     drawSettings.update((a) => {
+        if (!a.zoom) a.zoom = {}
         a.zoom.size = size
         return a
     })
@@ -794,6 +871,7 @@ export function addToProject(data: API_add_to_project) {
     projects.update((a) => {
         if (!a[data.projectId]?.shows || a[data.projectId].shows.find((item) => item.id === data.id)) return a
         a[data.projectId].shows.push({ ...(data.data || {}), id: data.id })
+        a[data.projectId].modified = Date.now()
         return a
     })
 

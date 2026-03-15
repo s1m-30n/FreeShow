@@ -65,10 +65,7 @@ export function moveBox(e: any, mouse: TMouse, ratio: number, active: (number | 
     function checkMatch(allLines: number[], items: number[], id: string, margin: number, isCenter = false) {
         const side = id.includes("x") ? "left" : "top"
 
-        const mousePos =
-            side === "left"
-                ? (e.clientX - itemElem.closest(".slide")?.offsetLeft - (itemElem.closest(".editArea") || itemElem.closest(".stageArea"))?.closest(".center")?.offsetLeft) / ratio
-                : (e.clientY - itemElem.closest(".slide")?.offsetTop - (itemElem.closest(".editArea") || itemElem.closest(".stageArea"))?.closest(".center")?.offsetTop) / ratio
+        const mousePos = side === "left" ? (e.clientX - itemElem.closest(".slide")?.offsetLeft - (itemElem.closest(".editArea") || itemElem.closest(".stageArea"))?.closest(".center")?.offsetLeft) / ratio : (e.clientY - itemElem.closest(".slide")?.offsetTop - (itemElem.closest(".editArea") || itemElem.closest(".stageArea"))?.closest(".center")?.offsetTop) / ratio
 
         const getNumber = (pos: any) => Number(pos?.toString().replace(/[^-0-9\.]+/g, ""))
         const boxPos = getNumber(styles[side])
@@ -109,7 +106,7 @@ export function moveBox(e: any, mouse: TMouse, ratio: number, active: (number | 
         })
     }
 
-    // WIP remove duplicate lines (both x and same coords (or less than very simular))
+    // WIP remove duplicate lines (both x and same coords (or less than very similar))
 
     return { styles, lines }
 }

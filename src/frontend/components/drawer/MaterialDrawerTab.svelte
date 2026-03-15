@@ -4,20 +4,23 @@
     import { actions, activeActionTagFilter, activeDrawerTab, activePlaylist, activeVariableTagFilter, audioPlaylists, drawerTabsData, outputs, templates } from "../../stores"
     import { translateText } from "../../utils/language"
     import { getActionIcon } from "../actions/actions"
+    import { clone } from "../helpers/array"
     import Icon from "../helpers/Icon.svelte"
+    import { getFirstActiveOutput } from "../helpers/output"
     import HiddenInput from "../inputs/HiddenInput.svelte"
     import MaterialButton from "../inputs/MaterialButton.svelte"
     import SelectElem from "../system/SelectElem.svelte"
-    import { clone } from "../helpers/array"
-    import { getActiveOutputs } from "../helpers/output"
+    import { metadataDisplayValues } from "../helpers/show"
 
     export let category: any
 
     $: id = category.id
     $: label = category.label
     $: icon = category.icon
+    $: option = category.option
     $: action = category.action || ""
     $: template = category.template || ""
+    $: metadata = category.metadata || ""
     $: count = category.count || 0
     $: readOnly = category.readOnly || false
 
@@ -30,8 +33,7 @@
     $: submenuActive = isSubmenu ? (active === "actions" ? $activeActionTagFilter.includes(id) : active === "variables" ? $activeVariableTagFilter.includes(id) : false) : false
     $: isActive = submenuActive || active === id
 
-    $: outputIds = getActiveOutputs($outputs, true, true, true)
-    $: output = $outputs[outputIds[0] || ""]
+    $: output = getFirstActiveOutput($outputs)
     $: showOutline = drawerId === "scripture" ? (output?.out?.slide as any)?.categoryId === id : drawerId === "audio" ? $activePlaylist?.id === id : false
 
     $: drawerId = $activeDrawerTab
@@ -110,20 +112,32 @@
             {/if}
         </div>
 
-        {#if template && $templates[template]}
-            <span style="padding: 0 5px;" data-title={translateText(`info.template: <b>${$templates[template].name}</b>`)}>
-                <Icon id="templates" size={0.8} white />
-            </span>
-        {/if}
-        {#if action && $actions[action]}
-            <span style="padding: 0 5px;" data-title={translateText(`popup.action: <b>${$actions[action].name}</b>`)}>
-                <Icon id={getActionIcon(action)} size={0.8} white />
-            </span>
-        {/if}
+        <div class="icons">
+            {#if option}
+                <span style="padding: 0 2px;{option.style}" data-title={translateText(option.title)}>
+                    <Icon id={option.icon} size={0.8} white />
+                </span>
+            {/if}
+            {#if metadata}
+                <span style="padding: 0 2px;" data-title={translateText(`tools.metadata: <b>${metadataDisplayValues.find((a) => a.id === metadata)?.name}</b>`)}>
+                    <Icon id="info" size={0.8} white />
+                </span>
+            {/if}
+            {#if template && $templates[template]}
+                <span style="padding: 0 2px;" data-title={translateText(`info.template: <b>${$templates[template].name}</b>`)}>
+                    <Icon id="templates" size={0.8} white />
+                </span>
+            {/if}
+            {#if action && $actions[action]}
+                <span style="padding: 0 2px;" data-title={translateText(`popup.action: <b>${$actions[action].name}</b>`)}>
+                    <Icon id={getActionIcon(action)} size={0.8} white />
+                </span>
+            {/if}
 
-        {#if count}
-            <span class="count">{count}</span>
-        {/if}
+            {#if count}
+                <span class="count" style={translateText(label).length > 25 ? "min-width: 10px;" : ""}>{count}</span>
+            {/if}
+        </div>
 
         <!-- SUB MENU -->
         {#if !isSubmenu && submenu?.options?.length}
@@ -164,6 +178,15 @@
         font-size: 0.8em;
         min-width: 28px;
         text-align: end;
+    }
+
+    .icons {
+        display: flex;
+        align-items: center;
+        gap: 0;
+        width: auto;
+
+        opacity: 0.8;
     }
 
     .submenus {

@@ -1,8 +1,19 @@
 name: freeshow
 version: 1.4.9
 title: FreeShow
-summary: FreeShow
-description: Show song lyrics and more for free!
+summary: Show song lyrics and more for free!
+description: A dynamic, user-friendly, and open-source presenter built for all of your presentations.
+contact:
+    - dev@freeshow.app
+license: GPL-3.0-or-later
+donation:
+    - https://churchapps.org/partner
+issues:
+    - https://github.com/churchapps/freeshow/issues
+source-code:
+    - https://github.com/churchapps/freeshow
+website:
+    - https://freeshow.app
 platforms:
     amd64:
         build-on: amd64
@@ -41,6 +52,7 @@ parts:
             - libasound2t64
             - libnode109
             - libglu1-mesa
+            - libltc11
 apps:
     freeshow:
         command: command.sh
@@ -48,6 +60,7 @@ apps:
         plugs:
             - alsa
             - audio-playback
+            - avahi-control
             - browser-support
             - camera
             - desktop

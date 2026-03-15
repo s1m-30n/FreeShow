@@ -163,7 +163,7 @@ function convertJSONToSlides(song: any) {
     let slidesList: string[] = []
     const slidesRef: any = {}
 
-    song.verses.forEach(([text, label]) => {
+    song.verses?.forEach(([text, label]) => {
         if (!text) return
 
         const id: string = uid()
@@ -307,6 +307,8 @@ function getSlideItems(slide: any) {
     if (!itemStrings) itemStrings = [elements.RVTextElement["@RTFData"]]
     else if (itemStrings["#text"]) itemStrings = [itemStrings]
 
+    itemStrings = itemStrings.filter(Boolean)
+
     const rtf = itemStrings.find((a) => a["@rvXMLIvarName"] === "RTFData")
     const plain = itemStrings.find((a) => a["@rvXMLIvarName"] === "PlainText")
     // rtf includes line breaks
@@ -376,6 +378,7 @@ const latin1 = {
     "93": "‘", // “
     "94": "’", // ”
     "96": "–",
+    "97": "—",
     e6: "æ",
     f8: "ø",
     e5: "å",

@@ -8,16 +8,18 @@
     import { getBlending } from "./components/helpers/output"
     import { checkTimers, startEventTimer, startTimer } from "./components/helpers/timerTick"
     import Loader from "./components/main/Loader.svelte"
+    import MediaDownloadProgress from "./components/main/MediaDownloadProgress.svelte"
     import MenuBar from "./components/main/MenuBar.svelte"
     import Popup from "./components/main/Popup.svelte"
     import ProfileSelector from "./components/main/ProfileSelector.svelte"
     import Recorder from "./components/main/Recorder.svelte"
+    import StatusIndicator from "./components/main/StatusIndicator.svelte"
     import Toast from "./components/main/Toast.svelte"
     import TooltipManager from "./components/main/TooltipManager.svelte"
     import QuickSearch from "./components/quicksearch/QuickSearch.svelte"
     import Center from "./components/system/Center.svelte"
-    import { activeProfile, activeTimers, autosave, closeAd, currentWindow, disabledServers, events, language, loaded, localeDirection, os, outputDisplay, outputs, profiles, theme, themes, timers } from "./stores"
-    import { focusArea, logerror, mainClick, startAutosave, toggleRemoteStream } from "./utils/common"
+    import { activeProfile, activeTimers, closeAd, currentWindow, disabledServers, events, language, loaded, localeDirection, os, outputDisplay, outputs, profiles, theme, themes, timers } from "./stores"
+    import { focusArea, logerror, mainClick, toggleRemoteStream } from "./utils/common"
     import { keydown } from "./utils/shortcuts"
     import { startup } from "./utils/startup"
 
@@ -33,9 +35,6 @@
 
     // check for show event
     $: if (Object.keys($events).length) startEventTimer()
-
-    // autosave
-    $: if ($autosave || "15min") startAutosave()
 
     // stream to OutputShow
     $: if (($loaded && $disabledServers.output_stream !== "") || !$outputDisplay) setTimeout(toggleRemoteStream, 1000)
@@ -54,6 +53,15 @@
     $: contrastColor = getContrast($themes[$theme]?.colors?.secondary || "")
     $: secondaryContrast = `--secondary-text: ${contrastColor === "#000000" ? "#131313" : "#f0f0ff"};`
     $: globalStyle = `${isWindows ? "height: calc(100% - 25px);" : ""}${secondaryContrast}${blending}`
+
+    let ready = false
+    $: if ($loaded) hasLoaded()
+    function hasLoaded() {
+        setTimeout(() => {
+            // prevent brief flash
+            ready = true
+        }, 51)
+    }
 </script>
 
 <svelte:window on:keydown={keydown} on:mousedown={focusArea} on:click={mainClick} on:error={logerror} on:unhandledrejection={logerror} />
@@ -72,17 +80,20 @@
 
         {#if $currentWindow === "output"}
             <MainOutput />
-        {:else if $loaded && Object.keys($profiles).length && $activeProfile === null}
-            <Popup />
-            <ProfileSelector />
         {:else if $loaded}
             <Popup />
             <QuickSearch />
             <Toast />
+            <StatusIndicator />
             <Recorder />
             <Guide />
+            <MediaDownloadProgress />
 
             <MainLayout />
+
+            {#if ready && Object.keys($profiles).filter((a) => a !== "admin").length && $activeProfile === null}
+                <ProfileSelector />
+            {/if}
         {:else}
             <Center>
                 <Loader size={2} />

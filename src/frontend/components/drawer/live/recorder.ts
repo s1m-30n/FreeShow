@@ -1,6 +1,6 @@
-import { get } from "svelte/store"
-import { RECORDER } from "../../../../types/Channels"
-import { activeRecording, currentRecordingStream, dataPath } from "../../../stores"
+import { Main } from "../../../../types/IPC/Main"
+import { sendMain } from "../../../IPC/main"
+import { activeRecording, currentRecordingStream } from "../../../stores"
 import { newToast } from "../../../utils/common"
 
 let mediaRecorder
@@ -44,7 +44,7 @@ async function handleStop() {
     const arraybuffer = await blob.arrayBuffer()
 
     const name = `FreeShow_${formatTime()}.webm`
-    window.api.send(RECORDER, { blob: arraybuffer, path: get(dataPath), name })
+    sendMain(Main.RECORDER, { blob: arraybuffer, name })
 
     currentRecordingStream.set(null)
     activeRecording.set(null)

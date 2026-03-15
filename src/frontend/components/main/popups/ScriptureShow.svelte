@@ -8,6 +8,7 @@
     import MaterialToggleSwitch from "../../inputs/MaterialToggleSwitch.svelte"
 
     let showVersion = !!$popupData.showVersion
+    let create = !!$popupData.create
 
     onMount(() => popupData.set({}))
 
@@ -19,7 +20,7 @@
     }
 
     function createShow() {
-        createScriptureShow(true)
+        createScriptureShow()
         activePopup.set(null)
     }
 </script>
@@ -27,13 +28,7 @@
 <MaterialNumberInput label="scripture.max_verses" value={$scriptureSettings.versesPerSlide} defaultValue={3} min={1} max={100} on:change={(e) => update("versesPerSlide", e.detail)} hideWhenZero />
 
 {#if $scriptureSettings.showVerse}
-    <MaterialToggleSwitch
-        label="scripture.split_reference"
-        disabled={$scriptureSettings.firstSlideReference}
-        checked={$scriptureSettings.firstSlideReference ? false : $scriptureSettings.splitReference !== false}
-        defaultValue={true}
-        on:change={(e) => update("splitReference", e.detail)}
-    />
+    <MaterialToggleSwitch label="scripture.split_reference" disabled={$scriptureSettings.firstSlideReference} checked={$scriptureSettings.firstSlideReference ? false : $scriptureSettings.splitReference !== false} defaultValue={true} on:change={(e) => update("splitReference", e.detail)} />
 {/if}
 {#if showVersion || $scriptureSettings.showVerse}
     <!-- {#if $scriptureSettings.firstSlideReference || !$scriptureSettings.combineWithText} -->
@@ -41,6 +36,8 @@
     <!-- {/if} -->
 {/if}
 
-<MaterialButton variant="contained" style="margin-top: 20px;" icon="add" on:click={createShow}>
-    <T id="new.show_convert" />
-</MaterialButton>
+{#if create}
+    <MaterialButton variant="contained" style="margin-top: 20px;" icon="add" on:click={createShow}>
+        <T id="new.show_convert" />
+    </MaterialButton>
+{/if}

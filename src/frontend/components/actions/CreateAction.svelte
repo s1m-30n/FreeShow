@@ -52,7 +52,6 @@
         "start_metronome",
         "start_slide_timers",
         "stop_timers",
-        "start_slide_recording",
         "change_output_style",
         "change_stage_output_layout",
         "start_trigger",
@@ -129,7 +128,8 @@
 
         if (!input) {
             // close popup if no custom inputs
-            activePopup.set(null)
+            // let action update first
+            setTimeout(() => activePopup.set(null), 50)
             return
         }
     }
@@ -157,6 +157,11 @@
     let searchValue = ""
     // let previousSearchValue = ""
     function search(value: string | null = null) {
+        if (value?.length && commonOnly) {
+            commonOnly = false
+            actionRevealUsed.set(true)
+        }
+
         searchValue = formatSearch(value || "")
 
         let actionsList = clone(ACTIONS) //.filter((a) => (commonOnly ? a.common : true))
@@ -208,6 +213,7 @@
         if (id.includes("name")) return actionValue.value || ""
         if (id === "change_stage_output_layout") return `${actionValue.outputId ? ($outputs[actionValue.outputId]?.name || "—") + ": " : ""}${$stageShows[actionValue.stageLayoutId]?.name || ""}`
         if (id === "change_output_style") return `${actionValue.outputId ? ($outputs[actionValue.outputId]?.name || "—") + ": " : ""}${actionValue.styleId ? $styles[actionValue.styleId]?.name || "" : translateText("main.none")}`
+        if (id === "set_next_slide_timer") return Number(actionValue.value) + "s"
 
         return ""
     }
@@ -254,12 +260,7 @@
 
                     <!-- disabled={$popupData.existing.includes(action.id)} -->
                     <!-- bold={action.common} -->
-                    <MaterialButton
-                        style="width: 100%;font-weight: normal;justify-content: start;padding: 5px 20px;gap: 12px;{searchValue.length && i === 0 ? 'background-color: var(--primary-lighter);' : ''}"
-                        showOutline={getActionTriggerId(actionId) === action.id}
-                        isActive={(existingActionsFiltered || $popupData.existing || []).map(getActionTriggerId).includes(action.id)}
-                        on:click={() => changeAction({ ...action, index: full ? undefined : 0 })}
-                    >
+                    <MaterialButton style="width: 100%;font-weight: normal;justify-content: start;padding: 5px 20px;gap: 12px;{searchValue.length && i === 0 ? 'background-color: var(--primary-lighter);' : ''}" showOutline={getActionTriggerId(actionId) === action.id} isActive={(existingActionsFiltered || $popupData.existing || []).map(getActionTriggerId).includes(action.id)} on:click={() => changeAction({ ...action, index: full ? undefined : 0 })}>
                         <Icon id={action.icon} />
                         <p>{action.name}</p>
                     </MaterialButton>
@@ -320,16 +321,13 @@
 {/if}
 
 {#if dataInputs && (dataOpened || dataMenuOpened)}
-    <CustomInput {mainId} inputId={input} actionIndex={actionNameIndex} value={actionValue} actionId={getActionTriggerId(actionId)} on:change={(e) => changeAction({ id: actionId, actionValue: e.detail })} list />
+    <div class="menu-indent">
+        <CustomInput {mainId} inputId={input} actionIndex={actionNameIndex} value={actionValue} actionId={getActionTriggerId(actionId)} on:change={(e) => changeAction({ id: actionId, actionValue: e.detail })} list />
+    </div>
 {/if}
 
 {#if mode === "slide" && getActionTriggerId(actionId) === "run_action" && $categories[_show().get().category]?.action}
-    <MaterialToggleSwitch
-        label="actions.override_category_action"
-        checked={customData.overrideCategoryAction}
-        defaultValue={false}
-        on:change={(e) => changeAction({ id: actionId, customDataKey: "overrideCategoryAction", customDataValue: e.detail })}
-    />
+    <MaterialToggleSwitch label="actions.override_category_action" checked={customData.overrideCategoryAction} defaultValue={false} on:change={(e) => changeAction({ id: actionId, customDataKey: "overrideCategoryAction", customDataValue: e.detail })} />
 {/if}
 
 <style>
@@ -368,5 +366,12 @@
     }
     .buttons :global(button:not(.active):nth-child(odd)) {
         background-color: rgb(0 0 20 / 0.08) !important;
+    }
+
+    .menu-indent {
+        display: flex;
+        flex-direction: column;
+
+        border-left: 4px solid var(--primary-lighter);
     }
 </style>

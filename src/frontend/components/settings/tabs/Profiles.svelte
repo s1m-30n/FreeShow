@@ -1,8 +1,11 @@
 <script lang="ts">
     import type { AccessType, Profile } from "../../../../types/Main"
     import { SettingsTabs } from "../../../../types/Tabs"
-    import { activeProfile, categories, folders, overlayCategories, profiles, selectedProfile, stageShows, templateCategories } from "../../../stores"
+    import { actionTags, activeProfile, categories, folders, overlayCategories, profiles, selectedProfile, special, stageShows, templateCategories, variableTags } from "../../../stores"
+    import { newToast } from "../../../utils/common"
     import { translateText } from "../../../utils/language"
+    import { promptCustom } from "../../../utils/popup"
+    import { checkPassword, encodePassword } from "../../../utils/profile"
     import { clone, keysToID, sortByName } from "../../helpers/array"
     import { history } from "../../helpers/history"
     import Icon from "../../helpers/Icon.svelte"
@@ -10,6 +13,8 @@
     import InputRow from "../../input/InputRow.svelte"
     import MaterialButton from "../../inputs/MaterialButton.svelte"
     import MaterialMultiButtons from "../../inputs/MaterialMultiButtons.svelte"
+    import MaterialTextInput from "../../inputs/MaterialTextInput.svelte"
+    import MaterialToggleSwitch from "../../inputs/MaterialToggleSwitch.svelte"
     import Center from "../../system/Center.svelte"
 
     // set id after deletion
@@ -17,6 +22,8 @@
 
     $: profileId = $selectedProfile || ""
     $: currentProfile = $profiles[profileId] || clone(defaultProfile)
+
+    $: isAdmin = !$activeProfile
 
     const defaultProfile: Profile = {
         name: translateText("example.default"),
@@ -28,6 +35,8 @@
     // UPDATE
 
     function updateAccess(key: string, id: string, accessType: AccessType) {
+        if (!isAdmin) return
+
         let data = currentProfile.access
 
         let accessData = data[key] || {}
@@ -64,12 +73,19 @@
         if (globalAccess === "none" || globalAccess === "read") inputs[2].disabled = true
         if (globalAccess === "none") inputs[1].disabled = true
 
-        // remove "none"
-        if (id === "functions") inputs.splice(0, 1)
         // remove "read"
         if (id === "settings") inputs.splice(1, 1)
 
+        // only admin can change access
+        if (!isAdmin) inputs.forEach((input) => (input.disabled = true))
+
         return inputs
+    }
+
+    function getSectionOptions(options: { value: string; label: string; icon?: string; disabled?: boolean }[], _updater: any) {
+        // only admin can change access
+        if (!isAdmin) return options.map((option) => ({ ...option, disabled: true }))
+        return options
     }
 
     function getAccessLevel(a: { [key: string]: AccessType }, id: string) {
@@ -96,9 +112,15 @@
     $: templateCategoryList = sortByName(keysToID($templateCategories)).filter((a) => a.name)
     $: templateCategoryAccess = currentProfile.access.templates || {}
 
-    const functions: string[] = ["actions", "timers", "variables", "triggers"]
-    $: functionsList = functions.map((id) => ({ id, name: `tabs.${id}` }))
-    $: functionsAccess = currentProfile.access.functions || {}
+    $: actionsList = sortByName(keysToID($actionTags)).filter((a) => a.name)
+    $: actionsAccess = currentProfile.access.actions || {}
+
+    $: timersAccess = currentProfile.access.timers || {}
+
+    $: variablesList = sortByName(keysToID($variableTags)).filter((a) => a.name)
+    $: variablesAccess = currentProfile.access.variables || {}
+
+    $: triggersAccess = currentProfile.access.triggers || {}
 
     $: stageList = sortByName(keysToID($stageShows)).filter((a) => a.name)
     $: stageAccess = currentProfile.access.stage || {}
@@ -113,32 +135,78 @@
     $: ACCESS_LISTS = [
         { id: "projects", label: "remote.projects", icon: "project", access: projectsAccess, options: accessInputsRW, list: projectsList },
         { id: "shows", label: "tabs.shows", icon: "shows", access: showsCategoryAccess, options: accessInputsRW, list: showsCategoryList },
-        // WIP MEDIA (+subtabs)
-        // WIP AUDIO
+        // WIP AUDIO PLAYLISTS?
         { id: "overlays", label: "tabs.overlays", icon: "overlays", access: overlayCategoryAccess, options: accessInputsRW, list: overlayCategoryList },
         { id: "templates", label: "tabs.templates", icon: "templates", access: templateCategoryAccess, options: accessInputs, list: templateCategoryList },
         // WIP SCRIPTURE?
-        // WIP CALENDAR / ACTION / TIMERS
-        { id: "functions", label: "tabs.functions", icon: "functions", access: functionsAccess, options: [], list: functionsList },
+        // WIP CALENDAR?
+        { id: "actions", label: "tabs.actions", icon: "actions", access: actionsAccess, options: accessInputsRW, list: actionsList },
+        // WIP TIMERS (TAGS)
+        { id: "timers", label: "tabs.timers", icon: "timer", access: timersAccess, options: accessInputsRW, list: [] },
+        { id: "variables", label: "tabs.variables", icon: "variable", access: variablesAccess, options: accessInputsRW, list: variablesList },
+        { id: "triggers", label: "tabs.triggers", icon: "trigger", access: triggersAccess, options: accessInputsRW, list: [] },
         { id: "stage", label: "menu.stage", icon: "stage", access: stageAccess, options: accessInputsRW, list: stageList },
         { id: "settings", label: "menu.settings", icon: "settings", access: settingsAccess, options: [], list: settingsList }
     ]
+
+    $: hasAdminPass = !!$profiles.admin?.password
+    function setAdminPassword(e: any) {
+        const password = e.detail
+        updateAdmin("password", password ? encodePassword(password) : "")
+    }
+
+    function updateAdmin(key: string, value: any) {
+        profiles.update((a) => {
+            if (!a.admin) a.admin = { name: "", color: "", image: "", access: {} }
+            ;(a.admin as any)[key] = value
+            return a
+        })
+    }
+
+    $: profilesList = Object.keys($profiles).filter((a) => a !== "admin")
+
+    async function setCurrentAsActive() {
+        // require password if setting admin profile (and password exists)
+        if (profileId === "" && hasAdminPass) {
+            const pwd = await promptCustom(translateText("remote.password"), "password")
+            const adminPassword = $profiles.admin?.password || ""
+            if (!checkPassword(pwd, adminPassword)) {
+                newToast("remote.wrong_password")
+                return
+            }
+        }
+
+        activeProfile.set(profileId)
+
+        // store last used profile
+        special.update((a) => {
+            a.lastUsedProfile = profileId
+            return a
+        })
+    }
 </script>
 
-{#if $activeProfile !== profileId && Object.keys($profiles).length}
-    <MaterialButton variant="outlined" style="width: 100%;margin-bottom: 10px;" icon="check" on:click={() => activeProfile.set(profileId)}>
+{#if $activeProfile !== profileId && profilesList.length}
+    <MaterialButton variant="outlined" style="width: 100%;margin-bottom: 10px;" icon="check" on:click={setCurrentAsActive}>
         <T id="profile.set_active" />
     </MaterialButton>
 {/if}
 
-{#if !profileId || !Object.keys($profiles).length}
+{#if !profileId || !profilesList.length}
+    {#if profilesList.length && isAdmin}
+        <!-- Admin settings -->
+        <MaterialTextInput label="remote.password" disabled={hasAdminPass} value={hasAdminPass ? "*****" : ""} defaultValue="" on:change={setAdminPassword} />
+
+        <MaterialToggleSwitch label="profile.auto_open_last_used" checked={$profiles.admin?.autoOpenLastUsed || false} defaultValue={false} on:change={(e) => updateAdmin("autoOpenLastUsed", e.detail)} />
+    {/if}
+
     <Center style="height: 82%;opacity: 0.1;">
         <Icon id="admin" size={15} white />
     </Center>
 {:else}
     {#each ACCESS_LISTS as a}
         <InputRow arrow={!!a.list?.length}>
-            <MaterialMultiButtons label={a.label} icon={a.icon} value={a.access.global || "write"} options={a.options} on:click={(e) => updateAccess(a.id, "global", e.detail)} />
+            <MaterialMultiButtons label={a.label} icon={a.icon} value={a.access.global || "write"} options={getSectionOptions(a.options, isAdmin)} on:click={(e) => updateAccess(a.id, "global", e.detail)} />
 
             <div slot="menu">
                 {#each a.list as item}

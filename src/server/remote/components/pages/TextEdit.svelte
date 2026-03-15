@@ -29,7 +29,7 @@
 
 <div class="editor-container">
     <Textarea bind:value />
-    
+
     {#if showTransposeButtons}
         <div class="transpose-buttons">
             <Button on:click={transposeUp} title={translate("edit.transpose_up", $dictionary)} dark>
@@ -49,6 +49,11 @@
         height: 100%;
         flex: 1;
         position: relative;
+        z-index: 1;
+    }
+
+    .editor-container :global(textarea) {
+        border-radius: 8px 8px 0 0;
     }
 
     .transpose-buttons {
@@ -56,7 +61,6 @@
         bottom: 10px;
         right: 10px;
         display: flex;
-        flex-direction: column;
         gap: 4px;
         z-index: 10;
     }

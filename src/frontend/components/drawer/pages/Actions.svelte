@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { actions, actionTags, activeActionTagFilter, activePopup, labelsDisabled, popupData, runningActions } from "../../../stores"
+    import { actions, actionTags, activeActionTagFilter, activePopup, labelsDisabled, popupData, runningActions, timelineRecordingAction } from "../../../stores"
     import { translateText } from "../../../utils/language"
     import { getAccess } from "../../../utils/profile"
     import { getActionIcon, runAction } from "../../actions/actions"
@@ -16,8 +16,8 @@
 
     export let searchValue
 
-    const profile = getAccess("functions")
-    const readOnly = profile.actions === "read"
+    const profile = getAccess("actions")
+    const readOnly = profile.global === "read"
 
     function newAction() {
         popupData.set({})
@@ -25,7 +25,7 @@
     }
 
     $: sortedActions = sortByName(keysToID($actions), "name", true).map(convertOldMidiToNewAction)
-    $: filteredActionsTags = sortedActions.filter((a) => !$activeActionTagFilter.length || (a.tags?.length && !$activeActionTagFilter.find((tagId) => !a.tags?.includes(tagId))))
+    $: filteredActionsTags = sortedActions.filter((a) => !$activeActionTagFilter.length || (a.tags?.length && !$activeActionTagFilter.some((tagId) => !a.tags?.includes(tagId)))).filter((a) => !a.tags?.some((tagId) => profile[tagId] === "none"))
     $: filteredActionsSearch = searchValue.length > 1 ? filteredActionsTags.filter((a) => a.name.toLowerCase().includes(searchValue.toLowerCase())) : filteredActionsTags
 </script>
 
@@ -33,14 +33,22 @@
     {#if filteredActionsSearch.length}
         <div class="actions">
             {#each filteredActionsSearch as action}
-                <div class="action context #action{readOnly ? '_readonly' : ''}">
+                {@const isReadOnly = readOnly || action.tags?.some((tagId) => profile[tagId] === "read")}
+
+                <div class="action context #action{isReadOnly ? '_readonly' : ''}">
                     <SelectElem id="action" data={action} style="display: flex;flex: 1;" draggable>
                         <!-- WIP MIDI if slide action.action ... -->
                         <Button
                             title={translateText("media.play")}
                             on:click={(e) => {
                                 if (e.ctrlKey || e.metaKey) return
-                                action.shows?.length ? receivedMidi({ id: action.id, bypass: true }) : runAction(action)
+                                if (action.shows?.length) {
+                                    receivedMidi({ id: action.id, bypass: true })
+                                    return
+                                }
+
+                                runAction(action)
+                                timelineRecordingAction.set({ id: "run_action", data: { id: action.id } })
                             }}
                             outline={$runningActions.includes(action.id)}
                             bold={false}
@@ -103,11 +111,10 @@
                             {#if $activeActionTagFilter.length}
                                 <span class="tags">
                                     {#each action.tags as tagId}
-                                        {@const tag = $actionTags[tagId] || {}}
-
-                                        {#if !$activeActionTagFilter.includes(tagId)}
+                                        {@const tag = $actionTags[tagId]}
+                                        {#if tag && !$activeActionTagFilter.includes(tagId)}
                                             <span class="tag" style="--color: {tag.color || 'white'};">
-                                                <p>{tag.name}</p>
+                                                <p>{tag.name || "—"}</p>
                                             </span>
                                         {/if}
                                     {/each}

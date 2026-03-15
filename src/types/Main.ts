@@ -1,6 +1,16 @@
-import type fs from "fs"
+import type { Stats } from "fs"
 import type { dataFolderNames } from "../electron/utils/files"
 import type { Cropping } from "./Settings"
+
+export interface Config {
+    loaded: boolean
+    maximized: boolean
+    bounds: Electron.Rectangle
+    dataPath: string | null
+    disableHardwareAcceleration: boolean | null
+    autoErrorReporting?: boolean
+    mediaFolderPath?: string
+}
 
 export interface OS {
     platform: NodeJS.Platform
@@ -44,6 +54,8 @@ export interface ClickEvent {
 }
 
 export type SelectIds =
+    | "files"
+    | "urls"
     | "slide"
     | "slide_icon"
     | "group"
@@ -53,7 +65,6 @@ export type SelectIds =
     | "show_drawer"
     | "project"
     | "folder"
-    | "files"
     | "category_shows"
     | "category_media"
     | "category_overlays"
@@ -142,6 +153,8 @@ export interface ActiveEdit {
     data?: any // camera data
 }
 
+export type FileFolder = { isFolder: false; path: string; name: string; thumbnailPath?: string; stats: Stats } | { isFolder: true; path: string; name: string; files: string[] }
+
 export type MediaFit = "contain" | "cover" | "fill" | "blur"
 export interface Media {
     [key: string]: MediaStyle
@@ -167,7 +180,10 @@ export interface MediaStyle {
     tracks?: Subtitle[]
     subtitle?: string
     tags?: string[] // media tags
-    pingbackUrl?: string // URL to ping after 30+ seconds of playback
+    name?: string // display name for content provider media (encrypted videos)
+    contentFile?: any // ContentFile from content provider (imported type would create circular dependency)
+    licenseChecked?: boolean // whether license has been checked for this media
+    pingbackUrl?: string // URL for sending pingback after playback
     cropping?: Partial<Cropping>
 
     ignoreLayer?: boolean // foreground background type
@@ -200,15 +216,12 @@ export type LyricSearchResult = {
 
 export interface DriveData {
     mainFolderId: string | null
-    path: string | null
-    dataPath: string
     method: string | null
     closeWhenFinished: boolean
 }
 
 export interface LessonsData {
     type?: keyof typeof dataFolderNames
-    path: string
     showId: string
     name: string
     files: LessonFile[]
@@ -241,7 +254,7 @@ export interface Variable {
     eachNumberOnce?: boolean
     sets?: { name: string; minValue?: number; maxValue?: number }[]
     setName?: string // chosen random set
-    setLog?: { name: string; number: number }[]
+    setLog?: { name: string; number: string }[]
 
     // text
     text?: string
@@ -261,7 +274,7 @@ export interface Trigger {
 
 export interface FileData {
     path: string
-    stat: fs.Stats
+    stat: Stats
     extension: string
     folder: boolean
     name: string
@@ -274,6 +287,8 @@ export interface Profiles {
 export interface Profile {
     name: string
     color: string
+    password?: string // currently admin only
+    autoOpenLastUsed?: boolean // admin only
     image: string
     access: { [key: string]: { [key: string]: AccessType } }
 }
@@ -320,6 +335,7 @@ export type Popups =
     | "variable"
     | "trigger"
     | "audio_stream"
+    | "now_playing"
     | "aspect_ratio"
     | "max_lines"
     | "transition"
@@ -335,6 +351,7 @@ export type Popups =
     | "choose_output"
     | "choose_style"
     | "change_output_values"
+    | "output_selector"
     | "set_time"
     | "assign_shortcut"
     | "dynamic_values"
@@ -347,8 +364,10 @@ export type Popups =
     | "about"
     | "shortcuts"
     | "unsaved"
+    | "restore"
     | "reset_all"
     | "alert"
+    | "new_update"
     | "history"
     | "action_history"
     | "manage_emitters"
@@ -356,12 +375,14 @@ export type Popups =
     | "category_action"
     | "custom_action"
     | "slide_midi"
-    | "user_data_overwrite"
     | "connect"
+    | "cloud_sync"
     | "cloud_update"
     | "cloud_method"
     | "sync_categories"
     | "effect_items"
+    | "timeline"
+    | "timecode"
 
 export type DefaultProjectNames = "date" | "today" | "sunday" | "week" | "custom" | "blank"
 

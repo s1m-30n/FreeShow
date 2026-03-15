@@ -37,6 +37,14 @@
             --secondary: #f0008c;
             --secondary-opacity: rgba(240, 0, 140, 0.5);
             --secondary-text: #f0f0ff;
+            --transparent: #232530;
+
+            --accent: #90caf9;
+
+            --connected: #27a827;
+            --disconnected: #a82727;
+
+            --red: rgb(255 0 0 / 0.25);
 
             --hover: rgb(255 255 255 / 0.05);
             --focus: rgb(255 255 255 / 0.1);
@@ -44,6 +52,9 @@
 
             /* --navigation-width: 18vw; */
             --navigation-width: 300px;
+
+            --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+            --font-size: 1em;
         }
 
         * {
@@ -58,35 +69,45 @@
 
         html {
             height: 100%;
+            font-family: var(--font-family);
+            font-size: var(--font-size);
         }
 
         body {
             background-color: var(--primary);
             color: var(--text);
-            /* transition: background-color 0.5s; */
+            transition: background-color 0.5s;
 
-            font-family: sans-serif;
-            font-size: 1.5em;
+            font-family: inherit;
+            font-size: inherit;
 
             height: 100%;
-            /* width: 100vw;
-height: 100vh; */
+            display: flex;
+            flex-direction: column;
+            touch-action: manipulation;
         }
 
         /* Match FreeShow main app scrollbar */
-        :global(::-webkit-scrollbar) {
+        ::-webkit-scrollbar {
             width: 8px;
             height: 8px;
         }
-        :global(::-webkit-scrollbar-track),
-        :global(::-webkit-scrollbar-corner) {
+        ::-webkit-scrollbar-track,
+        ::-webkit-scrollbar-corner {
             background: rgb(255 255 255 / 0.05);
         }
-        :global(::-webkit-scrollbar-thumb) {
+        ::-webkit-scrollbar-thumb {
             background: rgb(255 255 255 / 0.3);
+            border-radius: 8px;
         }
-        :global(::-webkit-scrollbar-thumb:hover) {
+        ::-webkit-scrollbar-thumb:hover {
             background: rgb(255 255 255 / 0.5);
+        }
+
+        /* Firefox scrollbar */
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: rgb(255 255 255 / 0.3) rgb(255 255 255 / 0.05);
         }
 
         h1 {
@@ -99,11 +120,12 @@ height: 100vh; */
             color: var(--secondary);
             text-align: center;
             font-size: 1.3em;
-            padding: 0.2em 0.8em;
+            padding: 0;
             width: 100%;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+            margin: 0;
         }
 
         .header {
@@ -115,9 +137,9 @@ height: 100vh; */
             color: var(--text);
             width: 100%;
 
-            padding: 0.2em 0.8em;
+            height: 56px; /* Match show item height */
             font-weight: 600;
-            font-size: 0.9em;
+            font-size: 1.05em;
         }
 
         /* CHECKERED */

@@ -1,38 +1,7 @@
 <script lang="ts">
     import { cameraManager } from "../../media/cameraManager"
-    import {
-        actions,
-        activeEdit,
-        activeProject,
-        activeRecording,
-        activeShow,
-        categories,
-        colorbars,
-        disabledServers,
-        drawerTabsData,
-        effects,
-        effectsLibrary,
-        events,
-        forceClock,
-        livePrepare,
-        media,
-        os,
-        outputs,
-        overlayCategories,
-        overlays,
-        projects,
-        redoHistory,
-        scriptures,
-        selected,
-        shows,
-        showsCache,
-        slidesOptions,
-        stageShows,
-        templateCategories,
-        timers,
-        topContextActive,
-        undoHistory
-    } from "../../stores"
+    import { actions, activeEdit, activeProject, activeRecording, activeShow, categories, colorbars, dictionary, disabledServers, drawerTabsData, effects, effectsLibrary, events, forceClock, globalTags, livePrepare, media, mediaFolders, os, outputs, overlayCategories, overlays, projects, redoHistory, scriptures, selected, shows, showsCache, slidesOptions, special, stageShows, styles, templateCategories, timers, topContextActive, undoHistory } from "../../stores"
+    import { translateText } from "../../utils/language"
     import { closeContextMenu } from "../../utils/shortcuts"
     import { keysToID } from "../helpers/array"
     import Icon from "../helpers/Icon.svelte"
@@ -48,9 +17,12 @@
     export let id: string
     export let menu: ContextMenuItem = contextMenuItems[id]
     export let disabled = false
+    export let highlighted = false
+    export let group = false
 
     let hide = false
     let enabled: boolean = menu?.enabled ? true : false
+    let customTitle: string = ""
 
     const conditions = {
         // slide views
@@ -85,15 +57,37 @@
         archive: () => {
             const projectId = $selected.data?.[0]?.id
             let project = $projects[projectId]
-            enabled = !!project.archived
+            enabled = !!project?.archived
         },
         edit: () => {
             if ($selected.id !== "show_drawer" || !$shows[$selected.data[0]?.id]?.locked) return
             disabled = !!$shows[$selected.data[0].id].locked
         },
-        lock_show: () => {
-            if (!$shows[$selected.data[0]?.id]?.locked) return
-            enabled = !!$shows[$selected.data[0].id].locked
+        edit_style: () => {
+            let outputId = contextElem?.id || ""
+            const styleId = $outputs[outputId]?.style || ""
+            const stageId = $outputs[outputId]?.stageOutput || ""
+
+            if (stageId) {
+                menu.label = "stage.stage_layout"
+                menu.icon = "stage"
+                if (!$stageShows[stageId]) disabled = true
+                menu.label += `: ${stageId ? $stageShows[stageId]?.name || "error.not_found" : "main.none"}`
+                return
+            }
+
+            menu.label = "edit.style"
+            menu.icon = "styles"
+            if (!$styles[styleId]) disabled = true
+            menu.label += `: ${styleId ? $styles[styleId]?.name || "error.not_found" : "main.none"}`
+        },
+        lock_group: () => {
+            if ($selected.id !== "group") return
+
+            const slideId = $selected.data?.[0]?.id
+            const show = $showsCache[$activeShow?.id || ""]
+            const isLocked = show?.slides?.[slideId]?.locked || false
+            enabled = isLocked
         },
         disable: () => {
             let isEnabled = false
@@ -110,6 +104,10 @@
 
             enabled = isEnabled
             menu.label = isEnabled ? "actions.enable" : "actions.disable"
+        },
+        display_tags: () => {
+            enabled = $special.displayTags
+            hide = !Object.keys($globalTags).length
         },
         move_connections: () => {
             hide = $disabledServers.stage === true
@@ -135,16 +133,30 @@
             }
         },
         remove_group: () => {
-            if ($selected.id !== "slide") return
+            if ($selected.id !== "slide" || !$selected.data?.length) return
 
-            let ref = getLayoutRef()
-            const getCurrentSlide = (index) => ref.find((a) => a.layoutIndex === index)
-            let parentSlide = $selected.data.find((a) => a.index && getCurrentSlide(a.index)?.type === "parent")
+            hide = $selected.data.every(({ index }) => {
+                const ref = getLayoutRef()
+                const currentSlideId = ref[index]?.parent?.id || ref[index]?.id
+                if (!currentSlideId) return true
 
-            if (parentSlide) return
+                const show = $showsCache[$activeShow?.id || ""]
 
-            // disable when no parents are selected or just first slide
-            disabled = true
+                // if parent slide and has children, don't hide
+                const isParent = ref[index]?.type === "parent"
+                if (isParent && (show.slides[currentSlideId]?.children || []).length) {
+                    // hide if group is set to "None"
+                    return show.slides[currentSlideId].group === "."
+                }
+
+                const currentSlideInstances = Object.values(show.layouts)
+                    .map((a) => a.slides)
+                    .flat()
+                    .filter((b) => b.id === currentSlideId)
+
+                // hide if there is just one instance of the slide group across all layouts
+                return currentSlideInstances.length < 2
+            })
         },
         remove: () => {
             if ($selected.id !== "show" || _show($selected.data[0]?.id).get("private") !== true) return
@@ -156,16 +168,8 @@
         redo: () => {
             if (!$redoHistory.length) disabled = true
         },
-        addToProject: () => {
-            if ($selected.id === "media" && $selected.data.length > 1) {
-                id = "createSlideshow"
-                menu = { label: "context.create_slideshow", icon: "slide" }
-                // id = "addToShow"
-                // menu = { label: "context.add_to_show", icon: "slide" }
-                // if (!$activeShow || ($activeShow.type || "show") !== "show") disabled = true
-            } else {
-                if (!$activeProject) disabled = true
-            }
+        createSlideshow: () => {
+            hide = $selected.id !== "media" || $selected.data.length < 2
         },
         play: () => {
             if ($selected.id === "global_timer") {
@@ -297,10 +301,43 @@
             menu.icon = isPlayed ? "remove" : "check"
             menu.iconColor = isPlayed ? "var(--secondary)" : "var(--text)"
             enabled = isPlayed
-        }
+        },
         // bind_item: () => {
         //     if (item is bound) enabled = true
         // }
+
+        category_action: () => {
+            const categoryId = $selected.data[0]
+            enabled = !!$categories[categoryId]?.action
+        },
+        category_template: () => {
+            const categoryId = $selected.data[0]
+            enabled = !!$categories[categoryId]?.template
+        },
+        metadata_display: () => {
+            const categoryId = $selected.data[0]
+            enabled = !!$categories[categoryId]?.metadata
+        },
+
+        // Media type
+        type_default: () => {
+            const folderId = $selected.data[0]
+            if (!folderId) return
+            const folder = $mediaFolders[folderId]
+            enabled = !folder?.mediaType
+        },
+        type_background: () => {
+            const folderId = $selected.data[0]
+            if (!folderId) return
+            const folder = $mediaFolders[folderId]
+            enabled = folder?.mediaType === "background"
+        },
+        type_foreground: () => {
+            const folderId = $selected.data[0]
+            if (!folderId) return
+            const folder = $mediaFolders[folderId]
+            enabled = folder?.mediaType === "foreground"
+        }
     }
 
     if (conditions[id]) conditions[id]()
@@ -345,10 +382,10 @@
     $: customStyle = id === "uppercase" ? "text-transform: uppercase;" : id === "lowercase" ? "text-transform: lowercase;" : ""
 </script>
 
-<div on:click={contextItemClick} class:enabled class:disabled class:hide style="color: {menu?.color || 'unset'};font-weight: {menu?.color ? '500' : 'normal'};{menu?.style || ''}" tabindex={0} on:keydown={keydown} role="menuitem">
-    <span style="display: flex;align-items: center;gap: 15px;">
+<div on:click={contextItemClick} class:enabled class:disabled class:hide class:highlighted class:group data-title={translateText(menu?.tooltip || "")} style="color: {menu?.color || 'unset'};font-weight: {menu?.color ? '500' : 'normal'};{menu?.style || ''}" tabindex={0} on:keydown={keydown} role="menuitem">
+    <span class="item" data-title={group && !menu?.tooltip ? `${shortcut}` : customTitle || ""}>
         <!-- white={menu.icon !== "edit"} -->
-        {#if menu?.icon}<Icon style="opacity: 0.7;color: {(topBar ? '' : menu.iconColor) || 'var(--text)'};" id={menu.icon} white />{/if}
+        {#if menu?.icon}<Icon style="opacity: 0.7;color: {(topBar ? '' : menu.iconColor) || 'var(--text)'};" id={menu.icon} size={group ? 1.4 : 1} white />{/if}
         {#if enabled === true}<Icon id="check" style="fill: var(--text);" size={0.7} white />{/if}
         <p style="display: flex;align-items: center;gap: 5px;{customStyle}">
             {#if menu?.translate === false}
@@ -359,7 +396,8 @@
                 {/if}
             {:else}
                 {#key menu}
-                    <T id={menu?.label || id} />
+                    <!-- <T id={menu?.label || id} /> -->
+                    {translateText(menu?.label || id, $dictionary)}
                 {/key}
             {/if}
             {#if menu?.external}
@@ -368,7 +406,7 @@
         </p>
     </span>
 
-    {#if shortcut}
+    {#if shortcut && !group}
         <span style="opacity: 0.4;font-size: 0.8em;/*text-transform: uppercase;*/">{shortcut}</span>
     {/if}
 </div>
@@ -391,6 +429,12 @@
         cursor: default;
     }
 
+    div span.item {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+    }
+
     p {
         max-width: 300px;
     }
@@ -402,5 +446,38 @@
 
     .hide {
         display: none;
+    }
+
+    .highlighted {
+        background-color: rgb(0 0 0 / 0.2);
+        outline: 2px solid var(--secondary);
+        outline-offset: -2px;
+    }
+
+    /* Group */
+
+    div.group {
+        flex: 1;
+        font-size: 0.88em;
+        padding: 0;
+        gap: 0;
+
+        min-width: 90px;
+    }
+
+    div.group span.item {
+        flex-direction: column;
+        padding: 6px;
+        flex: 1;
+        gap: 4px;
+    }
+
+    div.group:hover:not(.disabled) {
+        background-color: initial;
+        cursor: initial;
+    }
+    div.group:not(.disabled) span.item:hover {
+        background-color: rgb(0 0 0 / 0.2);
+        cursor: pointer;
     }
 </style>

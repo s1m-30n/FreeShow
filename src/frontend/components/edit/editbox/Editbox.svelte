@@ -1,24 +1,25 @@
 <script lang="ts">
     import type { Item } from "../../../../types/Show"
-    import { activeEdit, activeShow, openToolsTab, os, outputs, showsCache, special, variables } from "../../../stores"
+    import { activeEdit, activeShow, openToolsTab, os, outputs, showsCache, special, templates, variables } from "../../../stores"
     import { translateText } from "../../../utils/language"
     import { getAccess } from "../../../utils/profile"
     import { deleteAction } from "../../helpers/clipboard"
     import { history } from "../../helpers/history"
     import { getExtension, getFileName, getMediaType } from "../../helpers/media"
-    import { getActiveOutputs, getOutputResolution, percentageStylePos } from "../../helpers/output"
+    import { getFirstActiveOutput, getOutputResolution, percentageStylePos } from "../../helpers/output"
     import { getNumberVariables } from "../../helpers/showActions"
     import MaterialButton from "../../inputs/MaterialButton.svelte"
     import SlideItems from "../../slide/SlideItems.svelte"
     import EditboxLines from "./EditboxLines.svelte"
     import EditboxPlain from "./EditboxPlain.svelte"
 
-    export let item: Item
+    export let item: Item | null
     export let filter = ""
     export let backdropFilter = ""
     export let ref: {
         type?: "show" | "overlay" | "template"
         showId?: string
+        origin?: string
         id: string
     }
     export let index: number
@@ -83,7 +84,7 @@
     }
 
     $: active = $activeShow?.id
-    $: layout = active && $showsCache[active] ? $showsCache[active].settings.activeLayout : ""
+    $: layout = active && $showsCache[active]?.settings ? $showsCache[active].settings.activeLayout : ""
     // $: slide = layout && $activeEdit.slide !== null && $activeEdit.slide !== undefined ? [$showsCache, GetLayoutRef(active, layout)[$activeEdit.slide].id][1] : null
 
     function keydown(e: KeyboardEvent) {
@@ -125,7 +126,7 @@
         })
     }
 
-    $: customOutputId = getActiveOutputs($outputs, true, true, true)[0]
+    $: customOutputId = getFirstActiveOutput($outputs)?.id || ""
     function getCustomStyle(style: string, outputId = "") {
         if (outputId) {
             let outputResolution = getOutputResolution(outputId, $outputs, true)
@@ -136,12 +137,12 @@
     }
 
     // check if media fills entire slide, if it does it might be intended as a background
-    $: if (item.type === "media") checkMedia()
+    $: if (item?.type === "media") checkMedia()
     else mediaShouldBeBackground = false
     let mediaShouldBeBackground = false
     function checkMedia() {
         // WIP return if background exists
-        if (!item.src || (ref?.type || "show") !== "show" || !item.style.includes("width:1920") || !item.style.includes("height:1080")) {
+        if (!item?.src || (ref?.type || "show") !== "show" || !item.style?.includes("width:1920") || !item.style?.includes("height:1080")) {
             mediaShouldBeBackground = false
             return
         }
@@ -149,7 +150,7 @@
         mediaShouldBeBackground = true
     }
     function convertToBackground() {
-        if (!item.src) return
+        if (!item?.src) return
 
         history({
             id: "showMedia",
@@ -160,15 +161,21 @@
         deleteAction({ id: "item", data: { layout, slideId: ref.id } })
     }
 
-    $: isDisabledVariable = item.type === "variable" && $variables[item.variable?.id]?.enabled === false
+    $: isDisabledVariable = item?.type === "variable" && $variables[item.variable?.id]?.enabled === false
     // SHOW IS LOCKED FOR EDITING
     let profile = getAccess("shows")
-    $: isLocked = (ref.type || "show") !== "show" ? false : $showsCache[active || ""]?.locked || profile.global === "read" || profile[$showsCache[active || ""]?.category || ""] === "read"
+    $: currentSlide = (ref.type || "show") === "show" ? $showsCache[active || ""]?.slides?.[ref.id] : null // WIP get group slide
+    $: isLocked = (ref.type || "show") !== "show" ? false : $showsCache[active || ""]?.locked || currentSlide?.locked || profile.global === "read" || profile[$showsCache[active || ""]?.category || ""] === "read"
 
     // give CSS access to number variable values
     $: cssVariables = getNumberVariables($variables)
 
-    $: isOptimized = $special.optimizedMode
+    const isOptimized = $special.optimizedMode
+
+    // fixed letter width
+    $: fixedWidth = item?.type === "timer" || item?.type === "clock" ? "font-feature-settings: 'tnum' 1;" : ""
+
+    $: noTextMode = ref?.type === "template" && $templates[ref?.id]?.settings?.mode === "item"
 </script>
 
 <!-- on:mouseup={() => chordUp({ showRef: ref, itemIndex: index, item })} -->
@@ -182,24 +189,20 @@ bind:offsetWidth={width} -->
     bind:this={itemElem}
     class={plain ? "editItem" : `editItem item ${isLocked ? "" : "context #edit_box"}`}
     class:selected={$activeEdit.items.includes(index)}
-    class:decoration={item.decoration}
+    class:decoration={item?.decoration}
     class:isDisabledVariable
     class:chords={chordsMode}
     class:isOptimized
-    style="{plain
-        ? 'width: 100%;'
-        : `${getCustomStyle(item.style || '', customOutputId)}; outline: ${3 / ratio}px solid rgb(255 255 255 / 0.2);z-index: ${index + 1 + ($activeEdit.items.includes(index) ? 100 : 0)};${filter ? 'filter: ' + filter + ';' : ''}${
-              backdropFilter ? 'backdrop-filter: ' + backdropFilter + ';' : ''
-          }`}{cssVariables}"
+    style="{plain ? 'width: 100%;' : `${getCustomStyle(item?.style || '', customOutputId)}; outline: ${3 / ratio}px solid rgb(255 255 255 / 0.2);z-index: ${index + 1 + ($activeEdit.items.includes(index) ? 100 : 0)};${filter ? 'filter: ' + filter + ';' : ''}${backdropFilter ? 'backdrop-filter: ' + backdropFilter + ';' : ''}`}{cssVariables}{fixedWidth}"
     data-index={index}
     on:mousedown={mousedown}
 >
     {#if !plain}
         <EditboxPlain {item} {index} {ratio} />
     {/if}
-    {#if item.lines}
+    {#if item?.lines && !noTextMode}
         <EditboxLines {item} {ref} {index} {editIndex} {plain} {chordsMode} {chordsAction} {isLocked} />
-    {:else}
+    {:else if item}
         <SlideItems {item} {ratio} {ref} {itemElem} slideIndex={$activeEdit.slide || 0} edit />
     {/if}
 
@@ -260,5 +263,8 @@ bind:offsetWidth={width} -->
         font-family: Arial, Helvetica, sans-serif;
         font-size: 0.32em;
         text-shadow: none;
+
+        /* if parent is flipped, this will apply the same flip, so it's flipped back */
+        transform: inherit;
     }
 </style>

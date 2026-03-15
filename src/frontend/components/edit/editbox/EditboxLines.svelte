@@ -3,7 +3,8 @@
     import { uid } from "uid"
     import type { Item, Line } from "../../../../types/Show"
     import { VIRTUAL_BREAK_CHAR } from "../../../show/slides"
-    import { activeEdit, activeShow, activeStage, activeTriggerFunction, overlays, redoHistory, refreshListBoxes, stageShows, templates } from "../../../stores"
+    import { activeEdit, activeShow, activeStage, activeTriggerFunction, overlays, redoHistory, refreshListBoxes, showsCache, stageShows, templates } from "../../../stores"
+    import { newToast } from "../../../utils/common"
     import T from "../../helpers/T.svelte"
     import { clone } from "../../helpers/array"
     import { history } from "../../helpers/history"
@@ -12,7 +13,7 @@
     import { _show } from "../../helpers/shows"
     import { getStyles } from "../../helpers/style"
     import autosize from "../scripts/autosize"
-    import { getLineText, getSelectionRange, setCaret } from "../scripts/textStyle"
+    import { getItemText, getLineText, getSelectionRange, setCaret } from "../scripts/textStyle"
     import EditboxChords from "./EditboxChords.svelte"
     import { EditboxHelper } from "./EditboxHelper"
 
@@ -20,6 +21,7 @@
     export let ref: {
         type?: "show" | "overlay" | "template" | "stage"
         showId?: string
+        origin?: string
         id: string
     }
     export let index: number
@@ -91,7 +93,7 @@
 
     function getStyle() {
         if (!plain && $activeEdit.slide === null) return
-        let result = EditboxHelper.getStyleHtml(item, plain, currentStyle)
+        let result = EditboxHelper.getStyleHtml(item, plain, currentStyle, ref.origin === "powerpoint")
         html = result.html
         currentStyle = result.currentStyle
         previousHTML = html
@@ -152,7 +154,7 @@
                 return
             }
 
-            cutInTwo({ e, sel, lines, currentIndex, textPos, start })
+            cutInTwo({ e, sel, lines: clone(lines), currentIndex, textPos, start })
         }
 
         storeCurrentCaretPos()
@@ -229,6 +231,7 @@
             stageShows.update((a) => {
                 if (!a[$activeStage.id!]?.items?.[ref.id]) return a
                 a[$activeStage.id!].items[ref.id].lines = newLines
+                a[$activeStage.id!].modified = Date.now()
                 return a
             })
         } else if (ref.id) {
@@ -243,10 +246,9 @@
                 if (historyText === linesText) return
             }
 
+            // only reset caret when lines are added/removed, not when line content changes
             let lastChangedLine = EditboxHelper.determineCaretLine(item?.lines || [], newLines)
-            if (lastChangedLine > -1) setCaretDelayed(lastChangedLine, 0)
-
-            // create new history store, when passing 15 steps
+            if (lastChangedLine > -1 && (item?.lines || []).length !== newLines.length) setCaretDelayed(lastChangedLine, 0) // create new history store, when passing 15 steps
             updates++
             if (updates >= 15) {
                 HISTORY_UPDATE_KEY++
@@ -270,14 +272,34 @@
 
             history({ id: "SHOW_ITEMS", newData: { key: "lines", data: clone([newLines]), slides: [ref.id], items: [index], showId: ref.showId }, location: { page: "none", override: itemRef } })
 
+            // update stored scripture custom dynamic values
+            if ($showsCache[ref.showId || ""]?.slides?.[ref.id]?.customDynamicValues) {
+                showsCache.update((a) => {
+                    if (!a[ref.showId || ""]?.slides?.[ref.id]?.customDynamicValues) return a
+                    newLines.forEach((line) => {
+                        line.text?.forEach((text) => {
+                            if (text.sourceDynamicKey?.includes("scripture_text")) {
+                                const key = text.sourceDynamicKey.split(":")[0]
+                                const index = text.sourceDynamicKey.split(":")[1] || "0"
+                                if (!a[ref.showId!].slides[ref.id].customDynamicValues![key]?.[index]?.[1]) return
+                                a[ref.showId!].slides[ref.id].customDynamicValues![key][index][1] = text.value
+                            }
+                        })
+                    })
+                    return a
+                })
+            }
+
             // refresh list view boxes
             if (plain) refreshListBoxes.set(editIndex)
         }
 
         function setNewLines(a: any) {
-            if (!a[$activeEdit.id!].items[index]) return a
+            if (!a[$activeEdit.id!]?.items?.[index]) return a
 
             a[$activeEdit.id!].items[index].lines = newLines
+
+            a[$activeEdit.id!].modified = Date.now()
             return a
         }
     }
@@ -313,18 +335,17 @@
 
     // update auto size
     let loaded = false
-    $: isAuto = item?.auto
-    $: textFit = item?.textFit
+    $: isAuto = item?.auto || (item?.textFit || "none") !== "none"
     $: textArray = Array.isArray(item?.lines?.[0]?.text) ? item.lines[0].text : []
     $: itemText = textArray.filter((a) => !a.customType?.includes("disableTemplate")) || []
     $: itemFontSize = Number(getStyles((ref.type === "stage" ? item : itemText[0])?.style, true)?.["font-size"] || "")
-    $: if (isAuto || textFit || itemFontSize || textChanged) getCustomAutoSize()
+    $: if (isAuto || itemFontSize || textChanged) getCustomAutoSize()
 
     let autoSize = 0
     let alignElem: HTMLElement | undefined
     let loopStop: NodeJS.Timeout | null = null
     function getCustomAutoSize() {
-        if (isTyping || !loaded || !alignElem || (!item.auto && !item.textFit)) return
+        if (isTyping || !loaded || !alignElem || !isAuto) return
 
         if (loopStop) return
         loopStop = setTimeout(() => (loopStop = null), 200)
@@ -370,14 +391,20 @@
 
             newLines.push(newLine)
 
-            // WIP backspace a line into a line with different styling will merge both and apply the first style to both (HTML issue)
-
             new Array(...line.childNodes).forEach((child: any, j) => {
                 if (child.nodeName === "#text") {
                     // add "floating" text to previous node (e.g. pressing backspace at the start of a line)
+                    // preserve style when merging lines with different styling (macOS issue)
                     let lastNode = newLines[pos].text.length - 1
-                    if (lastNode < 0 || !newLines[pos].text[lastNode]) return
-                    newLines[pos].text[lastNode].value += child.textContent
+                    let originalLineStyle = item.lines?.[i]?.text?.[0]?.style || ""
+                    let lastNodeStyle = lastNode >= 0 ? newLines[pos].text[lastNode]?.style || "" : ""
+
+                    // Create new segment if no previous node or styles differ
+                    if (lastNode < 0 || !newLines[pos].text[lastNode] || (originalLineStyle && originalLineStyle !== lastNodeStyle)) {
+                        newLines[pos].text.push({ style: originalLineStyle, value: child.textContent })
+                    } else {
+                        newLines[pos].text[lastNode].value += child.textContent
+                    }
 
                     updateHTML = true
                     return
@@ -393,22 +420,32 @@
                 if (lineText === "\n") lineText = ""
                 if (plain && !lineText && !style) {
                     style = item.lines?.[i - 1]?.text[0]?.style || ""
-                    newLines[pos].align = newLines[pos - 1].align || ""
+                    newLines[pos].align = newLines[pos - 1]?.align || ""
                 }
 
                 // remove custom font size
                 let customIndex = style.indexOf("--custom")
                 if (customIndex > -1) style = style.slice(0, customIndex)
 
-                newLines[pos].text.push({ style, value: lineText })
+                // GET sourceDynamicKey
+                let sourceDynamicKey = child.getAttribute("data-sourcedynamickey") || undefined
+
+                const text: any = { style, value: lineText }
+                if (sourceDynamicKey) text.sourceDynamicKey = sourceDynamicKey
+
+                newLines[pos].text.push(text)
 
                 currentStyle += style
 
                 // GET CHORDS
                 let storedChords = child.getAttribute("data-chords")
                 if (storedChords) {
-                    storedChords = JSON.parse(storedChords)
-                    lineChords.push(...storedChords)
+                    try {
+                        storedChords = JSON.parse(storedChords)
+                        lineChords.push(...storedChords)
+                    } catch (err) {
+                        return
+                    }
                 }
             })
 
@@ -530,6 +567,20 @@
                 paste(e, clipText)
             })
         }
+
+        if (e.key === "<") {
+            // Bamini font character "<" (ஈ)
+            // https://github.com/ChurchApps/FreeShow/issues/2899
+            if (item?.lines?.some((line) => line.text?.some((text) => text.style?.toLowerCase()?.includes("bamini")))) {
+                e.preventDefault()
+                document.execCommand("insertHTML", false, "ஈ")
+                return
+            }
+
+            // HTML (will be invisible in editor)
+            // &lt; is currently read and replaced as < when editing
+            newToast("Note: < is treated as HTML")
+        }
     }
 
     $: if ($activeTriggerFunction === "insert_virtual_break") paste({}, VIRTUAL_BREAK_CHAR)
@@ -555,6 +606,7 @@
         let newLines: any[] = []
         let pastingIndex = -1
         sel.forEach((lineSel, lineIndex) => {
+            if (!lines[lineIndex]) return
             if (lineSel.start === undefined && (!emptySelection || lineIndex < sel.length - 1)) {
                 newLines.push(lines[lineIndex])
                 return
@@ -573,7 +625,7 @@
             let linePos = 0
             let pasteOverflow = 0
             // move multi line select to one line
-            lines[lineIndex].text.forEach((text) => {
+            lines[lineIndex].text?.forEach((text) => {
                 let value = text.value
                 let newLinePos = linePos + value.length
                 if (newLinePos < lineSel.start || linePos > lineSel.end) {
@@ -640,7 +692,7 @@
 {#if item?.lines}
     <!-- TODO: remove align..... -->
     <div bind:this={alignElem} class="align" class:chords={chordsMode} class:plain style={plain ? null : item.align || null}>
-        {#if item.lines?.length < 2 && !item.lines?.[0]?.text?.[0]?.value?.length}
+        {#if item.lines?.length < 2 && !getItemText(item).length}
             <span class="placeholder">
                 <p>
                     {#if chordsMode}
@@ -738,6 +790,14 @@
     }
     .edit.hidden {
         visibility: hidden;
+    }
+
+    .edit :global(.break) {
+        /* balanced breaking, looks much cleaner */
+        text-wrap: balance;
+    }
+    .edit :global(.break.normalWrap) {
+        text-wrap: unset;
     }
 
     /* .edit.tallLines {

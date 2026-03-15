@@ -58,7 +58,12 @@
         const pingbackUrl = $media[path]?.pingbackUrl
         if (!pingbackUrl) return
 
-        fetch(pingbackUrl, { method: "GET", mode: "no-cors" }).catch(console.error)
+        console.log(`[Provider] Sending pingback after 30s playback:`, { url: pingbackUrl, method: "GET", path: path })
+        fetch(pingbackUrl, { method: "GET", mode: "no-cors" })
+            .then(() => console.log(`[Provider] Pingback sent successfully to: ${pingbackUrl}`))
+            .catch((error) => {
+                console.error(`[Provider] Pingback failed:`, error)
+            })
     }
 
     onDestroy(() => {
@@ -133,23 +138,7 @@
     {#if mediaStyle.fit === "blur" && !perfectFit}
         <video class="media" style={mediaStyleBlurString} src={encodeFilePath(path)} bind:playbackRate bind:this={blurVideo} bind:paused={blurPausedState} muted loop={videoData.loop || false} />
     {/if}
-    <video
-        class="media"
-        style={mediaStyleString}
-        bind:this={video}
-        on:loadedmetadata={loaded}
-        on:playing={playing}
-        on:ended
-        on:error
-        bind:playbackRate
-        bind:currentTime={videoTime}
-        bind:paused={videoData.paused}
-        bind:duration={videoData.duration}
-        muted={mirror ? true : (videoData.muted ?? true)}
-        src={encodeFilePath(path)}
-        autoplay
-        loop={videoData.loop || false}
-    >
+    <video class="media" style={mediaStyleString} bind:this={video} on:loadedmetadata={loaded} on:playing={playing} on:ended on:error bind:playbackRate bind:currentTime={videoTime} bind:paused={videoData.paused} bind:duration={videoData.duration} muted={mirror ? true : (videoData.muted ?? true)} src={encodeFilePath(path)} autoplay loop={videoData.loop || false}>
         <!-- bind:volume={audioVolume} -->
         {#each tracks as track}
             <track label={track.name} srclang={track.lang} kind="subtitles" src="data:text/vtt;charset=utf-8,{encodeURI(track.vtt)}" />

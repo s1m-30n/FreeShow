@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { activeRecording, activeShow, drawerTabsData, forceClock } from "../../../stores"
+    import { activeShow, forceClock } from "../../../stores"
     import Center from "../../system/Center.svelte"
     import Clock from "../../system/Clock.svelte"
     import Date from "../../system/Date.svelte"
@@ -7,7 +7,6 @@
     import CalendarInfo from "./CalendarInfo.svelte"
     import FunctionsInfo from "./FunctionsInfo.svelte"
     import MediaInfo from "./MediaInfo.svelte"
-    import OverlayInfo from "./OverlayInfo.svelte"
     import ScriptureInfo from "./ScriptureInfo.svelte"
     import ShowInfo from "./ShowInfo.svelte"
     import TemplateInfo from "./TemplateInfo.svelte"
@@ -15,15 +14,15 @@
     export let id: string
 </script>
 
-<div class="main {(id !== 'shows' && id !== 'media') || $activeShow !== null ? 'context #drawer_info' : ''}">
+<div class="main {id !== 'shows' || $activeShow !== null ? 'context #drawer_info' : ''}">
     {#if !$forceClock && id === "shows" && $activeShow !== null && ($activeShow.type === undefined || $activeShow.type === "show")}
         <ShowInfo />
-    {:else if !$forceClock && id === "media" && ($activeRecording || $activeShow?.type === "video" || $activeShow?.type === "image" || ["online", "screens"].includes($drawerTabsData.media?.activeSubTab || ""))}
+    {:else if !$forceClock && id === "media"}
         <MediaInfo />
     {:else if !$forceClock && id === "audio"}
         <AudioInfo />
-    {:else if !$forceClock && id === "overlays"}
-        <OverlayInfo />
+        <!-- {:else if !$forceClock && id === "overlays"}
+        <OverlayInfo /> -->
     {:else if !$forceClock && id === "templates"}
         <TemplateInfo />
     {:else if !$forceClock && id === "scripture"}

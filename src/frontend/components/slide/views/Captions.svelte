@@ -27,6 +27,8 @@
     function startRoom() {
         if (preview) return
 
+        if (captionData.roomId) roomId = captionData.roomId
+
         let language = "en-US"
         if (captionData.language) language = captionData.language
 
@@ -50,7 +52,7 @@
     let webElem: any
     $: if (webElem) webElem.addEventListener("dom-ready", overlayReady)
     function overlayReady() {
-        let customStyle = captionData.style
+        let customStyle = captionData.style || ""
 
         let background = "" // "black"
         let bgIndex = customStyle.lastIndexOf("background")

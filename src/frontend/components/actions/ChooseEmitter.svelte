@@ -1,6 +1,6 @@
 <script lang="ts">
     import { createEventDispatcher } from "svelte"
-    import { emitters } from "../../stores"
+    import { actions, activePopup, emitters, popupData } from "../../stores"
     import { translateText } from "../../utils/language"
     import { clone, keysToID, sortByName } from "../helpers/array"
     import T from "../helpers/T.svelte"
@@ -11,6 +11,8 @@
     import { API_emitter } from "./api"
     import { formatData } from "./emitters"
     import MidiValues from "./MidiValues.svelte"
+    import { uid } from "uid"
+    import MaterialButton from "../inputs/MaterialButton.svelte"
 
     export let value: API_emitter
 
@@ -84,20 +86,54 @@
     $: customTemplateInputs = (value.templateValues || []).map((a, i) => ({ ...a, id: i.toString() }))
 
     $: dataPreview = value.templateValues?.length ? formatData[emitter?.type]?.(value.templateValues, value.data) : ""
+
+    function editEmitter() {
+        const id = value.emitter
+        if (!id) return
+
+        popupData.set({ id, actionData: $popupData })
+        activePopup.set("manage_emitters")
+    }
 </script>
 
-<MaterialDropdown
-    label="emitters.emitter {emitter?.type ? `<span style='color: var(--text);opacity: 0.5;font-weight: normal;font-size: 0.8em;margin-left: 10px;'>${emitter.type.toUpperCase()}</span>` : ''}"
-    options={emittersList}
-    value={value.emitter}
-    on:change={(e) => updateValue("emitter", e.detail)}
-/>
+<InputRow>
+    <MaterialDropdown
+        label="emitters.emitter {emitter?.type ? `<span style='color: var(--text);opacity: 0.5;font-weight: normal;font-size: 0.8em;margin-left: 10px;'>${emitter.type.toUpperCase()}</span>` : ''}"
+        options={emittersList}
+        value={value.emitter}
+        on:new={(e) => {
+            const id = uid()
+            const name = e.detail
+            const actionId = $popupData?.id
+            if (!actionId) return
+
+            actions.update((a) => {
+                a[actionId].name += `: ${name}`
+                const triggerId = a[actionId].triggers?.find((a) => a.includes("emit_action"))
+                if (!triggerId) return a
+
+                if (!a[actionId].actionValues) a[actionId].actionValues = {}
+                a[actionId].actionValues[triggerId] = { emitter: id }
+
+                return a
+            })
+
+            popupData.set({ name, id, actionData: $popupData })
+            activePopup.set("manage_emitters")
+        }}
+        on:change={(e) => updateValue("emitter", e.detail)}
+        addNew="timer.create"
+    />
+    {#if value.emitter}
+        <MaterialButton title="titlebar.edit" icon="edit" on:click={editEmitter} />
+    {/if}
+</InputRow>
 
 {#if value.emitter}
     {#if emitter?.description}
-        <InputRow>
+        <InputRow style="padding: 10px;display: flex;gap: 8px;background: var(--primary-darker);font-size: 0.9em;">
             <p><T id="midi.description" /></p>
-            <p style="opacity: 0.5;overflow: hidden;" data-title={emitter.description}>{emitter.description}</p>
+            <p style="font-style: italic;opacity: 0.5;overflow: hidden;" data-title={emitter.description}>{emitter.description}</p>
         </InputRow>
     {/if}
 
@@ -105,9 +141,9 @@
 
     {#if templateInputs.length}
         {#if emitter?.templates?.[activeTemplate]?.description}
-            <InputRow>
+            <InputRow style="padding: 10px;display: flex;gap: 8px;background: var(--primary-darker);font-size: 0.9em;">
                 <p><T id="midi.description" /></p>
-                <p style="opacity: 0.5;overflow: hidden;" data-title={emitter.templates[activeTemplate].description}>{emitter.templates[activeTemplate].description}</p>
+                <p style="font-style: italic;opacity: 0.5;overflow: hidden;" data-title={emitter.templates[activeTemplate].description}>{emitter.templates[activeTemplate].description}</p>
             </InputRow>
         {/if}
 
@@ -121,15 +157,7 @@
     {:else if emitter?.type === "midi"}
         <MidiValues value={{ ...emitter.signal, values: typeof customTemplateInputs[0]?.value === "object" ? customTemplateInputs[0].value : {} }} on:change={(e) => setMidiTemplateValue(e)} type="emitter" />
     {:else}
-        <DynamicList
-            addDisabled={!!customTemplateInputs?.find((a) => !a.name && !a.value)}
-            items={customTemplateInputs}
-            let:item={input}
-            on:add={createTemplateValue}
-            on:delete={(e) => removeTemplateValue(e.detail)}
-            allowOpen={false}
-            nothingText={false}
-        >
+        <DynamicList addDisabled={!!customTemplateInputs?.find((a) => !a.name && !a.value)} items={customTemplateInputs} let:item={input} on:add={createTemplateValue} on:delete={(e) => removeTemplateValue(e.detail)} allowOpen={false} nothingText={false}>
             <div style="display: flex;width: 100%;">
                 <MaterialTextInput label="inputs.name" value={input.name} on:change={(e) => setTemplateValue(input.id, e, "name")} style="width: 50%;" />
                 <MaterialTextInput label="variables.value" value={input.value} on:change={(e) => setTemplateValue(input.id, e, "value")} style="width: 50%;" />

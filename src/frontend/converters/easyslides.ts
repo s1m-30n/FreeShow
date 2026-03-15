@@ -28,6 +28,8 @@ export function convertEasyslides(data: any) {
         data?.forEach(({ content }: any) => {
             const json = xml2json(content)
             const songs = json.Easyslides?.Item || json.EasiSlides?.Item || []
+            if (!Array.isArray(songs) || !songs.length) return
+
             songs.forEach(convertSong)
         })
 
@@ -80,8 +82,8 @@ function createSlides(song: Song) {
         const items = [
             {
                 style: DEFAULT_ITEM_STYLE,
-                lines: lines.map((text: any) => ({ align: "", text: [{ style: "", value: text.trim() }] })),
-            },
+                lines: lines.map((text: any) => ({ align: "", text: [{ style: "", value: text.trim() }] }))
+            }
         ]
 
         slides[id] = {
@@ -89,7 +91,7 @@ function createSlides(song: Song) {
             color: null,
             settings: {},
             notes: "",
-            items,
+            items
         }
 
         let globalGroup = getGlobalGroup(group)

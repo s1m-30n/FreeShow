@@ -2,12 +2,13 @@ import { get } from "svelte/store"
 import { OUTPUT, REMOTE, STAGE } from "../../types/Channels"
 import { AudioPlayer } from "../audio/audioPlayer"
 import { midiInListen } from "../components/actions/midi"
-import { getActiveOutputs } from "../components/helpers/output"
+import { getAllActiveOutputIds, getAllNormalOutputs } from "../components/helpers/output"
 import { loadShows } from "../components/helpers/setShow"
 import { getShowCacheId, updateCachedShow, updateCachedShows, updateShowsList } from "../components/helpers/show"
 import {
     $,
     actions,
+    actionTags,
     activeProject,
     activeScripture,
     activeShow,
@@ -15,6 +16,7 @@ import {
     audioChannelsData,
     audioData,
     cachedShowsData,
+    categories,
     colorbars,
     customMessageCredits,
     customMetadata,
@@ -35,29 +37,45 @@ import {
     openedFolders,
     outputs,
     outputSlideCache,
+    overlayCategories,
     overlays,
     playerVideos,
     playingAudio,
     projects,
     refreshSlideThumbnails,
+    runningActions,
     scriptures,
     shows,
     showsCache,
     special,
     stageShows,
     styles,
+    templateCategories,
     templates,
     timeFormat,
     timers,
     transitionData,
+    triggers,
     variables,
+    variableTags,
     volume
 } from "../stores"
 import { hasNewerUpdate } from "./common"
 import { driveConnect } from "./drive"
-import { convertBackgrounds } from "./remoteTalk"
+import { convertBackgrounds, getMixerPayload } from "./remoteTalk"
 import { send } from "./request"
 import { arrayToObject, eachConnection, filterObjectArray, sendData, timedout } from "./sendData"
+
+// simple debounce helper (shared for mixer pushes)
+const debounce = (fn: (...args: any[]) => void, wait: number) => {
+    let t: any
+    return (...args: any[]) => {
+        clearTimeout(t)
+        t = setTimeout(() => fn(...args), wait)
+    }
+}
+
+const sendRemoteMixer = debounce(() => send(REMOTE, ["GET_MIXER"], getMixerPayload()), 50)
 
 export function storeSubscriber() {
     shows.subscribe(async (data) => {
@@ -105,10 +123,23 @@ export function storeSubscriber() {
         if (Object.keys(data).length < 100) updateCachedShows(data)
     })
 
+    // show category metadata display
+    categories.subscribe(async (data) => {
+        if (await hasNewerUpdate("LISTENER_CATEGORIES", 50)) return
+
+        send(OUTPUT, ["CATEGORIES"], data)
+    })
+
+    groups.subscribe(async (data) => {
+        if (await hasNewerUpdate("LISTENER_GROUPS", 50)) return
+
+        send(OUTPUT, ["GROUPS"], data)
+    })
     templates.subscribe(async (data) => {
         if (await hasNewerUpdate("LISTENER_TEMPLATES", 50)) return
 
         send(OUTPUT, ["TEMPLATES"], data)
+        send(REMOTE, ["TEMPLATES"], data)
 
         // set all loaded shows to false, so show style can be updated from template again
         cachedShowsData.update((a) => {
@@ -124,11 +155,21 @@ export function storeSubscriber() {
         //     if (get(showsCache)[id]?.settings?.template === id) // set false
         // });
     })
+    templateCategories.subscribe(async (data) => {
+        if (await hasNewerUpdate("LISTENER_TEMPLATE_CATEGORIES", 50)) return
+
+        send(REMOTE, ["TEMPLATE_CATEGORIES"], data)
+    })
     overlays.subscribe(async (data) => {
         if (await hasNewerUpdate("LISTENER_OVERLAYS", 50)) return
 
         send(OUTPUT, ["OVERLAYS"], data)
         send(REMOTE, ["OVERLAYS"], data)
+    })
+    overlayCategories.subscribe(async (data) => {
+        if (await hasNewerUpdate("LISTENER_OVERLAY_CATEGORIES", 50)) return
+
+        send(REMOTE, ["OVERLAY_CATEGORIES"], data)
     })
 
     events.subscribe((data) => {
@@ -145,7 +186,7 @@ export function storeSubscriber() {
         // Debounce and filter ACTIVE_SCRIPTURE to avoid sending partial states (book-only/chapter-only)
         if (await hasNewerUpdate("LISTENER_ACTIVE_SCRIPTURE", 120)) return
 
-        const source: any = (data && (data.api || data.bible)) || data || {}
+        const source: any = (data && ((data as any).api || (data as any).bible)) || data || {}
         const hasBook = source.bookId !== undefined && source.bookId !== null
         const hasChapter = source.chapterId !== undefined && source.chapterId !== null
         const hasVerses = Array.isArray(source.activeVerses) && source.activeVerses.length > 0
@@ -159,6 +200,9 @@ export function storeSubscriber() {
         send(OUTPUT, ["OUTPUTS"], data)
         // used for stage mirror data
         send(OUTPUT, ["ALL_OUTPUTS"], data)
+
+        // REMOTE mixer updates (labels/available outputs)
+        sendRemoteMixer()
 
         // let it update properly
         setTimeout(() => {
@@ -181,7 +225,7 @@ export function storeSubscriber() {
     stageShows.subscribe(async (data) => {
         if (await hasNewerUpdate("LISTENER_STAGE", 50)) return
 
-        send(OUTPUT, ["STAGE_SHOWS"], data)
+        send(OUTPUT, ["STAGE"], data)
 
         // STAGE
         data = arrayToObject(filterObjectArray(data, ["disabled", "name", "settings", "items"]).filter((a: any) => a.disabled === false))
@@ -190,6 +234,8 @@ export function storeSubscriber() {
                 if (!connection.active) return
 
                 const currentData = data[connection.active]
+                if (!currentData) return
+
                 if (!currentData.settings.resolution?.width) currentData.settings.resolution = { width: 1920, height: 1080 }
                 return currentData
             })
@@ -199,27 +245,24 @@ export function storeSubscriber() {
     draw.subscribe((data) => {
         // if (await hasNewerUpdate("LISTENER_DRAW")) return
 
-        const allOutputs = getActiveOutputs(get(outputs), false, false, true)
-        const activeOutputs = getActiveOutputs(get(outputs), true, false, true)
-        allOutputs.forEach((id) => {
-            if (activeOutputs.includes(id)) send(OUTPUT, ["DRAW"], { id, data })
+        const activeOutputIds = getAllActiveOutputIds()
+        getAllNormalOutputs().forEach(({ id }) => {
+            if (activeOutputIds.includes(id)) send(OUTPUT, ["DRAW"], { id, data })
             else send(OUTPUT, ["DRAW"], { id, data: null })
         })
     })
     drawTool.subscribe((data) => {
         // WIP changing tool while output is not active, will not update tool in output if set to active before changing tool again
-        const allOutputs = getActiveOutputs(get(outputs), false, false, true)
-        const activeOutputs = getActiveOutputs(get(outputs), true, false, true)
-        allOutputs.forEach((id) => {
-            if (activeOutputs.includes(id)) send(OUTPUT, ["DRAW_TOOL"], { id, data })
+        const activeOutputIds = getAllActiveOutputIds()
+        getAllNormalOutputs().forEach(({ id }) => {
+            if (activeOutputIds.includes(id)) send(OUTPUT, ["DRAW_TOOL"], { id, data })
             else send(OUTPUT, ["DRAW_TOOL"], { id, data: "focus" })
         })
     })
     drawSettings.subscribe((data) => {
-        const allOutputs = getActiveOutputs(get(outputs), false, false, true)
-        const activeOutputs = getActiveOutputs(get(outputs), true, false, true)
-        allOutputs.forEach((id) => {
-            if (activeOutputs.includes(id)) send(OUTPUT, ["DRAW_SETTINGS"], data)
+        const activeOutputIds = getAllActiveOutputIds()
+        getAllNormalOutputs().forEach(({ id }) => {
+            if (activeOutputIds.includes(id)) send(OUTPUT, ["DRAW_SETTINGS"], data)
             else {
                 send(OUTPUT, ["DRAW_TOOL"], { id, data: "focus" })
                 send(OUTPUT, ["DRAW"], { id, data: null })
@@ -260,15 +303,28 @@ export function storeSubscriber() {
 
         // STAGE
         send(STAGE, ["TIMERS"], data)
+
+        // REMOTE
+        send(REMOTE, ["TIMERS"], data)
     })
     activeTimers.subscribe((data) => {
         send(OUTPUT, ["ACTIVE_TIMERS"], data)
+
+        // REMOTE
+        send(REMOTE, ["ACTIVE_TIMERS"], data)
     })
     variables.subscribe((data) => {
         send(OUTPUT, ["VARIABLES"], data)
 
         // STAGE
         send(STAGE, ["VARIABLES"], data)
+
+        // REMOTE
+        send(REMOTE, ["VARIABLES"], data)
+    })
+    variableTags.subscribe((data) => {
+        // REMOTE
+        send(REMOTE, ["VARIABLE_TAGS"], data)
     })
 
     special.subscribe((data) => {
@@ -277,15 +333,23 @@ export function storeSubscriber() {
 
     volume.subscribe((data) => {
         send(OUTPUT, ["VOLUME"], data)
+
+        // REMOTE mixer updates
+        sendRemoteMixer()
     })
     gain.subscribe((data) => {
         send(OUTPUT, ["GAIN"], data)
     })
     audioChannelsData.subscribe((data) => {
         send(OUTPUT, ["AUDIO_CHANNELS_DATA"], data)
+
+        // REMOTE mixer updates
+        sendRemoteMixer()
     })
 
-    equalizerConfig.subscribe((data) => {
+    equalizerConfig.subscribe(async (data) => {
+        if (await hasNewerUpdate("EQUALIZER_CONFIG_CACHE", 50)) return
+
         send(OUTPUT, ["EQUALIZER_CONFIG"], data)
     })
 
@@ -337,7 +401,24 @@ export function storeSubscriber() {
 
     //
 
-    actions.subscribe(midiInListen)
+    actions.subscribe((data) => {
+        midiInListen()
+
+        // REMOTE
+        send(REMOTE, ["ACTIONS"], data)
+    })
+    actionTags.subscribe((data) => {
+        // REMOTE
+        send(REMOTE, ["ACTION_TAGS"], data)
+    })
+    triggers.subscribe((data) => {
+        // REMOTE
+        send(REMOTE, ["TRIGGERS"], data)
+    })
+    runningActions.subscribe((data) => {
+        // REMOTE
+        send(REMOTE, ["RUNNING_ACTIONS"], data)
+    })
 
     activeShow.subscribe((data) => {
         if (!data?.id) return
@@ -375,10 +456,12 @@ const initalOutputData = {
     STYLES: "styles",
     TRANSITION: "transitionData",
     SHOWS: "showsCache",
+    CATEGORIES: "categories",
 
     TEMPLATES: "templates",
     OVERLAYS: "overlays",
     EVENTS: "events",
+    GROUPS: "groups",
 
     DRAW: { data: "draw" },
     DRAW_TOOL: { data: "drawTool" },
@@ -394,7 +477,7 @@ const initalOutputData = {
     SPECIAL: "special",
 
     PLAYER_VIDEOS: "playerVideos",
-    STAGE_SHOWS: "stageShows",
+    STAGE: "stageShows",
 
     // for dynamic values
     PROJECTS: "projects",
