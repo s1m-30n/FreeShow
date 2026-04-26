@@ -745,7 +745,9 @@
         if (e.key === "Enter") {
             // Enter in search to add to project or play
             if (e.target?.closest(".search")) {
-                if (e.ctrlKey || e.metaKey) {
+                const enterSwapped = $scriptureSettings.enterSwapped
+                const ctrlKey = e.ctrlKey || e.metaKey
+                if (enterSwapped ? !ctrlKey : ctrlKey) {
                     playScripture()
                     ;(document.activeElement as any)?.blur()
                 } else {
@@ -957,7 +959,7 @@
                             class="verse"
                             class:showAllText={$resized.rightPanelDrawer <= 5}
                             on:dblclick={() => {
-                                openBook(verse.book, [verse.chapter], [[verse.verse]])
+                                openBook(verse.book, [verse.chapter], [verse.verse])
                                 playWhenLoaded = true
                             }}
                             data-title={formatBibleText(verse.text)}

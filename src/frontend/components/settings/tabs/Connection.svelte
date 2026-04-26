@@ -3,14 +3,17 @@
     import type { ContentProviderId } from "../../../../electron/contentProviders/base/types"
     import { Main } from "../../../../types/IPC/Main"
     import { requestMain, sendMain } from "../../../IPC/main"
-    import { activePage, activePopup, activeShow, activeTriggerFunction, cloudSyncData, companion, connections, contentProviderData, disabledServers, maxConnections, outputs, popupData, ports, providerConnections, serverData, special } from "../../../stores"
+    import { activePage, activePopup, activeShow, activeTriggerFunction, cloudSyncData, companion, connections, contentProviderData, disabledServers, maxConnections, notFound, outputs, popupData, ports, projectTemplates, providerConnections, serverData, special } from "../../../stores"
+    import { translateText } from "../../../utils/language"
     import { contentProviderSync } from "../../../utils/startup"
+    import { keysToID, sortByName } from "../../helpers/array"
     import Icon from "../../helpers/Icon.svelte"
-    import T from "../../helpers/T.svelte"
     import { checkWindowCapture } from "../../helpers/output"
+    import T from "../../helpers/T.svelte"
     import InputRow from "../../input/InputRow.svelte"
     import Title from "../../input/Title.svelte"
     import MaterialButton from "../../inputs/MaterialButton.svelte"
+    import MaterialDropdown from "../../inputs/MaterialDropdown.svelte"
     import MaterialToggleSwitch from "../../inputs/MaterialToggleSwitch.svelte"
 
     let ip = "localhost"
@@ -121,7 +124,7 @@
             }
 
             requestMain(Main.PROVIDER_DISCONNECT, { providerId }, (a) => {
-                if (!a.success) return
+                if (!a?.success) return
                 providerConnections.update((c) => {
                     c[providerId] = false
                     return c
@@ -132,8 +135,10 @@
 
     function syncContentProvider() {
         contentProviderSync()
+
         activeShow.set(null)
         activePage.set("show")
+        notFound.set({ show: [], bible: [] })
     }
 
     function updateProvider(id: ContentProviderId, key: string, value: any) {
@@ -143,6 +148,14 @@
             return a
         })
     }
+
+    $: projectTemplateOptions = [{ value: "", label: translateText("main.none") }, ...sortByName(keysToID($projectTemplates)).map(({ id, name }) => ({ value: id, label: name }))]
+
+    $: providerOriginOptions = [
+        { value: "", label: "Ask when existing show is found" },
+        { value: "local", label: "Always use local instance" },
+        { value: "online", label: "Always use online instance" }
+    ]
 
     // TEMP solution
     let showAll = false
@@ -238,7 +251,10 @@
             <Icon id="launch" white />
         </MaterialButton>
     </InputRow>
-    <MaterialToggleSwitch label="Always use local instance of songs" checked={$contentProviderData.planningcenter?.localAlways} defaultValue={false} on:change={(e) => updateProvider("planningcenter", "localAlways", e.detail)} />
+    <MaterialDropdown label="Song origin" options={providerOriginOptions} value={$contentProviderData.planningcenter?.songOrigin || ""} on:change={(e) => updateProvider("planningcenter", "songOrigin", e.detail)} />
+    {#if Object.keys($projectTemplates).length}
+        <MaterialDropdown label="actions.project_template" options={projectTemplateOptions} value={$contentProviderData.planningcenter?.projectTemplate || ""} on:change={(e) => updateProvider("planningcenter", "projectTemplate", e.detail)} />
+    {/if}
 {:else if $providerConnections.churchApps && !cloudOnly.churchApps}
     <!-- ChurchApps connected -->
     <Title label="Content Provider: ChurchApps" icon="list" />
@@ -255,6 +271,8 @@
             <Icon id="launch" white />
         </MaterialButton>
     </InputRow>
+
+    <MaterialDropdown label="Song origin" options={providerOriginOptions} value={$contentProviderData.churchApps?.songOrigin || ""} on:change={(e) => updateProvider("churchApps", "songOrigin", e.detail)} />
 
     {#if $cloudSyncData.enabled}
         <p class="tip">Note: This is unrelated to the Cloud sync found in "Files". This is for the content manager / curriculum.</p>
