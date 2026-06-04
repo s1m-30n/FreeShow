@@ -44,6 +44,7 @@
     // { $activeTimers, $variables, $playingAudio, $playingAudioPaths, videoTime }
     let conditionsUpdater = 0
     const updaterInterval = setInterval(() => {
+        if (!Array.isArray(stageItems)) return
         if (stageItems.some((a) => a?.conditions)) conditionsUpdater++
     }, 1000)
     onDestroy(() => clearInterval(updaterInterval))
@@ -57,7 +58,7 @@
                 <Zoomed background={layout.items.length ? "black" : "transparent"} style="width: 100%;" {resolution} id={stageOutputId} isStage disableStyle center bind:ratio>
                     {#each stageItems as item}
                         {#if (item.type || item.enabled !== false) && shouldItemBeShown(stageItemToItem(item), item.type === "slide_text" ? getSlideTextItems(layout, item, $outputs || $allOutputs) : [], { type: "stage" }, conditionsUpdater)}
-                            <Stagebox id={item.id} item={clone(item)} {ratio} stageLayout={layout} />
+                            <Stagebox id={item.id} item={clone(item)} {ratio} stageLayout={layout} disableStagePreview={true} />
                         {/if}
                     {/each}
                 </Zoomed>

@@ -234,13 +234,15 @@ export function getLastLineAlign(item: Item, selection: any): string {
     return last
 }
 
-export function getTextLines(slide: Slide | { items: Item[] }) {
-    const lines: string[] = []
-    if (!slide?.items) return lines
+// normally returns array of text lines: ["Line 1", "Line 2", "", "Line 1"]
+// itemSeperated: ["Line 1<br>Line 2", "Line 1"]
+export function getTextLines(slide: Slide | { items: Item[] }, itemSeperated: boolean = false) {
+    if (!slide?.items) return []
 
-    slide.items.forEach((item, i) => {
+    const items: string[][] = []
+    slide.items.forEach((item) => {
         if (!getItemText(item)?.length) return
-        if (i > 0) lines.push("")
+        const lines: string[] = []
 
         let fullText = ""
         item.lines?.forEach((line) => {
@@ -257,9 +259,19 @@ export function getTextLines(slide: Slide | { items: Item[] }) {
         })
 
         if (!fullText.length) lines.pop()
+        if (lines.length) items.push(lines.map((a) => replaceVirtualBreaks(a)))
     })
 
-    return lines.map((a) => replaceVirtualBreaks(a))
+    if (itemSeperated) {
+        // convert [["Line 1, Line 2"], ["Line 1"]] to ["Line 1<br>Line 2", "Line 1"]
+        return items.map((a) => a.join("<br>"))
+    }
+
+    // flatten and push "" in between
+    return items.reduce((value, item) => {
+        if (value.length && item.length) value.push("")
+        return [...value, ...item]
+    }, [] as string[])
 }
 
 // get text of slides
@@ -303,7 +315,8 @@ export function getItemTextArray(item: Item): string[] {
 
 export function getLineText(line: Line): string {
     let text = ""
-    line?.text?.forEach((content) => {
+    if (!Array.isArray(line?.text)) return ""
+    line.text.forEach((content) => {
         text += content.value
     })
     return text
@@ -346,7 +359,8 @@ export function setCaret(element: any, { line = 0, pos = 0 }, toEnd = false) {
 
     // get end child elem
     const lastEndChild = lastLineElem.childNodes[lastLineElem.childNodes.length - 1]
-    let currentEndTextLength = lastEndChild?.innerText?.length ?? 0
+    if (!lastEndChild) return
+    let currentEndTextLength = lastEndChild.innerText?.length ?? 0
 
     const breakElem = lastEndChild.childNodes[0]?.nodeName === "BR"
     if (line === 0 && breakElem) return
@@ -357,16 +371,33 @@ export function setCaret(element: any, { line = 0, pos = 0 }, toEnd = false) {
     // If startElem is a BR element, set caret before it and not inside it
     if (startElem?.nodeName === "BR") {
         const parentSpan = lineElem.childNodes[childElem]
-        range.setStart(parentSpan, 0)
+        try {
+            range.setStart(parentSpan, 0)
+        } catch {
+            return
+        }
     } else if (startElem) {
         const offset = pos - currentTextLength
         const startElemLength = startElem.length ?? startElem.textContent?.length ?? 0
         const safeStartOffset = Math.max(0, Math.min(startElemLength, offset))
-        range.setStart(startElem, safeStartOffset)
+        try {
+            range.setStart(startElem, safeStartOffset)
+        } catch {
+            return
+        }
     }
     if (toEnd) {
-        const safeEndOffset = Math.max(0, Math.min(currentEndTextLength, endElem?.length ?? 0))
-        range.setEnd(endElem, safeEndOffset)
+        let safeEndOffset = 0
+        if (endElem?.nodeType === Node.TEXT_NODE) {
+            safeEndOffset = Math.max(0, Math.min(endElem.length ?? endElem.textContent?.length ?? 0, currentEndTextLength))
+        } else if (endElem?.nodeType === Node.ELEMENT_NODE) {
+            safeEndOffset = Math.max(0, Math.min(endElem.childNodes.length, currentEndTextLength))
+        }
+        try {
+            range.setEnd(endElem, safeEndOffset)
+        } catch {
+            return
+        }
     } else range.collapse(true)
 
     sel?.removeAllRanges()

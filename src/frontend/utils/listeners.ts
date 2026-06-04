@@ -1,5 +1,6 @@
 import { get } from "svelte/store"
 import { OUTPUT, REMOTE, STAGE } from "../../types/Channels"
+import { AudioAnalyser } from "../audio/audioAnalyser"
 import { AudioPlayer } from "../audio/audioPlayer"
 import { midiInListen } from "../components/actions/midi"
 import { getAllActiveOutputIds, getAllNormalOutputs } from "../components/helpers/output"
@@ -15,6 +16,7 @@ import {
     activeTimers,
     audioChannelsData,
     audioData,
+    audioEffects,
     cachedShowsData,
     categories,
     colorbars,
@@ -25,10 +27,10 @@ import {
     drawTool,
     driveKeys,
     effects,
-    equalizerConfig,
     events,
     folders,
     gain,
+    globalRegexes,
     groups,
     livePrepare,
     media,
@@ -55,8 +57,8 @@ import {
     templates,
     timeFormat,
     timers,
+    timerTags,
     transitionData,
-    triggers,
     variables,
     variableTags,
     volume
@@ -78,11 +80,52 @@ const debounce = (fn: (...args: any[]) => void, wait: number) => {
 
 const sendRemoteMixer = debounce(() => send(REMOTE, ["GET_MIXER"], getMixerPayload()), 50)
 
+// shows list has not changed when only a timestamp value changes
+function hasShowsListChanged(prevData: any, newData: any): boolean {
+    if (!prevData || !newData) return true
+    const prevKeys = Object.keys(prevData)
+    const newKeys = Object.keys(newData)
+    if (prevKeys.length !== newKeys.length) return true
+
+    for (const key of newKeys) {
+        const prevShow = prevData[key]
+        const newShow = newData[key]
+
+        if (!prevShow || newShow.name !== prevShow.name || newShow.category !== prevShow.category || newShow.private !== prevShow.private || newShow.locked !== prevShow.locked || newShow.origin !== prevShow.origin || (newShow.quickAccess ? JSON.stringify(newShow.quickAccess) : "") !== prevShow.quickAccess) {
+            return true
+        }
+    }
+    return false
+}
+
+function copyShowsMetadata(data: any): any {
+    const copy: any = {}
+    if (!data) return copy
+    for (const key of Object.keys(data)) {
+        const show = data[key]
+        if (show) {
+            copy[key] = {
+                name: show.name,
+                category: show.category,
+                private: show.private,
+                locked: show.locked,
+                origin: show.origin,
+                quickAccess: show.quickAccess ? JSON.stringify(show.quickAccess) : ""
+            }
+        }
+    }
+    return copy
+}
+
 export function storeSubscriber() {
+    let lastShowsData: any = {}
     shows.subscribe(async (data) => {
         if (await hasNewerUpdate("LISTENER_SHOWS", 200)) return
 
         // sendData(REMOTE, { channel: "SHOWS", data })
+
+        if (!hasShowsListChanged(lastShowsData, data)) return
+        lastShowsData = copyShowsMetadata(data)
 
         // temporary cache shows data
         updateShowsList(data)
@@ -329,9 +372,20 @@ export function storeSubscriber() {
         // REMOTE
         send(REMOTE, ["VARIABLE_TAGS"], data)
     })
+    timerTags.subscribe((data) => {
+        // REMOTE
+        send(REMOTE, ["TIMER_TAGS"], data)
+    })
+
+    globalRegexes.subscribe((data) => {
+        send(OUTPUT, ["GLOBAL_REGEXES"], data)
+    })
 
     special.subscribe((data) => {
         send(OUTPUT, ["SPECIAL"], data)
+
+        if (data.icecastEnabled) AudioAnalyser.recorderActivate()
+        else AudioAnalyser.recorderDeactivate()
     })
 
     slideTimelineSpeedMultiplier.subscribe((data) => {
@@ -354,10 +408,10 @@ export function storeSubscriber() {
         sendRemoteMixer()
     })
 
-    equalizerConfig.subscribe(async (data) => {
-        if (await hasNewerUpdate("EQUALIZER_CONFIG_CACHE", 50)) return
+    audioEffects.subscribe(async (data) => {
+        if (await hasNewerUpdate("AUDIO_EFFECTS_CACHE", 50)) return
 
-        send(OUTPUT, ["EQUALIZER_CONFIG"], data)
+        send(OUTPUT, ["AUDIO_EFFECTS"], data)
     })
 
     metronome.subscribe((data) => {
@@ -417,10 +471,6 @@ export function storeSubscriber() {
     actionTags.subscribe((data) => {
         // REMOTE
         send(REMOTE, ["ACTION_TAGS"], data)
-    })
-    triggers.subscribe((data) => {
-        // REMOTE
-        send(REMOTE, ["TRIGGERS"], data)
     })
     runningActions.subscribe((data) => {
         // REMOTE
